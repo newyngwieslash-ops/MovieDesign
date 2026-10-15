@@ -52,7 +52,7 @@ function harness(storageFailure = '') {
   }
   const recovery = load('features/assets/recovery.ts');
   const exportBytes = load('features/assets/exportBytes.ts', { './recovery': recovery });
-  const { AssetLibrary } = load('features/assets/AssetLibrary.tsx', { './recovery': recovery, './exportBytes': exportBytes, '../editor/ImageEditor': { ImageEditor() {} } });
+  const { AssetLibrary } = load('features/assets/AssetLibrary.tsx', { './recovery': recovery, './exportBytes': { ...exportBytes, removeExport: async () => {} }, '../editor/ImageEditor': { ImageEditor() {} } });
   const { App } = load('App.tsx', { './features/projects/ProjectPicker': { ProjectPicker }, './features/canvas/CanvasWorkspace': { CanvasWorkspace }, './features/assets/AssetLibrary': { AssetLibrary: AssetStub } });
   const render = (component, state) => { hooks = state; cursor = 0; return component === App ? App() : AssetLibrary({ projectID: 'p' }); };
   const drop = state => render(AssetLibrary, state).props.onDrop({ preventDefault() {}, dataTransfer: { files: [new File(['same bytes'], 'file.png')] } });
@@ -154,4 +154,31 @@ test('a new import cannot POST if critical intent persistence fails', async () =
   const h = harness('write'), state = []; h.drop(state);
   await until(() => find(h.render(h.AssetLibrary, state), node => node.props?.role === 'alert' && node.props.children === 'storage quota denied'));
   assert.equal(h.requests.length, 0);
+});
+
+function selectVersion(h, state, id) {
+  find(h.render(h.AssetLibrary, state), node => node.type?.name === 'VersionHistory').props.onSelect(id);
+  return h.render(h.AssetLibrary, state);
+}
+const selectedVersion = (h, state) => find(h.render(h.AssetLibrary, state), node => node.type?.name === 'VersionHistory').props.selected;
+for (const change of ['before-hash', 'during-delivery', 'away-and-back']) test(`ordinary import preserves newer selection ${change}`, async () => {
+  const h = harness(), state = []; selectVersion(h, state, 'original');
+  h.drop(state);
+  if (change === 'before-hash') selectVersion(h, state, 'other');
+  (await stageRequest(h, 0, 'upload')).resolve(); (await stageRequest(h, 1, 'commit')).resolve();
+  const delivery = await stageRequest(h, 2, 'deliver');
+  if (change !== 'before-hash') selectVersion(h, state, 'other');
+  if (change === 'away-and-back') selectVersion(h, state, 'original');
+  delivery.resolve(); await until(() => !h.storage.has(h.key)); await tick();
+  assert.equal(selectedVersion(h, state), change === 'away-and-back' ? 'original' : 'other');
+});
+for (const generatedPNG of [false, true]) for (const changeSelection of [false, true]) test(`explicit recovery generated=${generatedPNG} preserves invocation selection ownership changed=${changeSelection}`, async () => {
+  const h = harness(), initial = [], resumed = [];
+  await pauseFirst(h, 'deliver', initial);
+  const op = JSON.parse(h.storage.get(h.key));
+  if (generatedPNG) { op.generatedPNG = true; op.target.baseVersionID = 'base'; h.storage.set(h.key, JSON.stringify(op)); }
+  await retry(h, resumed, 'deliver'); const delivery = await stageRequest(h, 3, 'deliver');
+  if (changeSelection) selectVersion(h, resumed, 'other');
+  delivery.resolve(); await until(() => !h.storage.has(h.key)); await tick();
+  assert.equal(selectedVersion(h, resumed), changeSelection ? 'other' : 'v1');
 });

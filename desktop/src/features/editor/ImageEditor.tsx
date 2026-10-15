@@ -28,6 +28,7 @@ export function ImageEditor({ assetId, source, onExport, onAnnotations, ref }: {
     let disposed = false, observer: ResizeObserver | undefined, closeText: ((commit: boolean) => void) | undefined;
     const image = new Image(); image.crossOrigin = 'anonymous';
     pairs.current = []; setState(null); setError(''); setDraft(null); draftRef.current = null;
+    setSaving(false); setEditing(false); setAnnotations([]); setAnnotation(false); annotationMode.current = false;
     image.onload = () => {
       if (disposed || !host.current || !viewport.current) return;
       const width = Math.min(960, image.naturalWidth), height = Math.max(1, Math.round(width * image.naturalHeight / image.naturalWidth));

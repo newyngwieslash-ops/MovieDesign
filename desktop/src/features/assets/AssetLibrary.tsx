@@ -31,7 +31,9 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
   const [storageError] = useState(() => { try { readOperation(localStorage.getItem(storageKey(projectID)), projectID); return ''; } catch (e) { return (e as Error).message; } });
   const fileRef = useRef<File | null>(null);
   const lock = useRef(false);
-  const alive = useRef(true), selectionRef = useRef(selected); selectionRef.current = selected;
+  const alive = useRef(true);
+  const selectionRevision = useRef(0);
+  function selectVersion(id: string) { ++selectionRevision.current; setSelected(id); }
   const prepared = useRef<{ op: ImportOperation; file: File } | null>(null);
   const assets = useQuery({ queryKey: ['project', projectID, 'assets', 'all', 200], queryFn: ({ signal }) => allPages<Asset>(projectID, '/api/assets', signal) });
   const versions = useQuery({ queryKey: ['project', projectID, 'versions', 'all', 200], queryFn: ({ signal }) => allPages<Version>(projectID, '/api/versions', signal) });
@@ -59,7 +61,7 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
     setOp(value);
     return true;
   }
-  async function run(initial: ImportOperation) {
+  async function run(initial: ImportOperation, selectionOwner: number) {
     if (!owns(initial)) return;
     let current = initial;
     if (current.stage === 'upload') {
@@ -89,13 +91,14 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
     }
     if (result.delivery.status === 'blocked') throw new Error(`投递受阻：${result.delivery.problem?.message ?? '请检查输入后发起新导入'}`);
     const delivered = result.delivery.versions[0];
-    const selectDelivered = alive.current && (!current.target.baseVersionID || !selectionRef.current || selectionRef.current === current.target.baseVersionID);
+    const selectDelivered = alive.current && selectionRevision.current === selectionOwner;
     if (selectDelivered) { setSelected(delivered?.versionId ?? ''); setEditing(false); }
     setMessage(`${selectDelivered ? '导入完成，已选择新版本' : '导入完成，可在版本历史中查看。'}${cleanupWarning}`);
     await client.invalidateQueries({ queryKey: ['project', projectID] });
   }
   async function execute(current: ImportOperation) {
     if (lock.current) return;
+    const selectionOwner = selectionRevision.current;
     lock.current = true; setBusy(true); setError(''); setMessage('');
     try {
       if (prepared.current?.op === current) {
@@ -103,12 +106,13 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
         if (!save(current, null)) return;
         prepared.current = null;
       }
-      await run(current);
+      await run(current, selectionOwner);
     } catch (e) { setError((e as Error).message); }
     finally { lock.current = false; setBusy(false); }
   }
   async function choose(file: File, revision: boolean) {
     if (lock.current || storageError) return;
+    const selectionOwner = selectionRevision.current;
     lock.current = true; setBusy(true); setError('');
     try {
       if (file.size > 256 * 1024 * 1024) throw new Error('文件超过 256 MiB 上传上限');
@@ -128,7 +132,7 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
           } };
         if (!save(current, null)) return;
       }
-      fileRef.current = file; await run(current);
+      fileRef.current = file; await run(current, selectionOwner);
     } catch (e) { setError((e as Error).message); }
     finally { lock.current = false; setBusy(false); }
   }
@@ -136,11 +140,12 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
     if (lock.current || op || storageError || !version || !composition || !activeAsset) throw new Error('请先完成待确认的保存');
     lock.current = true; setBusy(true); setError('');
     const base = version.id;
+    const selectionOwner = selectionRevision.current;
     try {
       if (blob.size > 256 * 1024 * 1024) throw new Error('图像超过 256 MiB 上传上限');
       const name = `${activeAsset.name.replace(/\.[^.]+$/, '')}-编辑.png`, file = new File([blob], name, { type: 'image/png' });
       const sha256 = await fileDigest(file);
-      if (!alive.current || selectionRef.current !== base) return;
+      if (!alive.current || selectionRevision.current !== selectionOwner) return;
       const current: ImportOperation = { schema: 1, generatedPNG: true, projectID, stage: 'upload', uploadID: newRequestID(), commitID: newRequestID(), deliverID: newRequestID(),
         file: { name, size: file.size, sha256 }, target: { name, baseVersionID: base,
           composition: { name: composition.name, type: { id: composition.type_id }, placements: [{ key: 'file', role: '素材' }] } } };
@@ -148,7 +153,7 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
       await persistExport(current, file);
       if (!save(current, null)) return;
       prepared.current = null;
-      await run(current);
+      await run(current, selectionOwner);
     } catch (e) { setError((e as Error).message); throw e; }
     finally { lock.current = false; setBusy(false); }
   }
@@ -164,7 +169,7 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
     {(error || storageError || queryError) && <p className="inline-error" role="alert">{storageError || error || queryError?.message}</p>}
     {message && <p role="status">{message}</p>}
     <div className="library-columns"><section aria-label="素材列表"><h3>素材（{assets.data?.length ?? 0}）</h3><div className="asset-grid">
-      {assets.data?.map(asset => <button className="asset-card" key={asset.id} aria-pressed={activeAsset?.id === asset.id} onClick={() => { setSelected(versions.data?.find(v => v.asset_id === asset.id)?.id ?? ''); }}>
+      {assets.data?.map(asset => <button className="asset-card" key={asset.id} aria-pressed={activeAsset?.id === asset.id} onClick={() => { selectVersion(versions.data?.find(v => v.asset_id === asset.id)?.id ?? ''); }}>
         <Preview projectID={projectID} asset={asset} /><span>{asset.name}</span><small>{asset.width && asset.height ? `${asset.width} × ${asset.height} · ` : ''}{asset.status === 'active' ? '已归档' : '文件缺失'}</small>
       </button>)}
       {assets.data?.length === 0 && <p>还没有素材，导入你的第一个文件。</p>}
@@ -173,7 +178,7 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
         <label className="file-button">导入为新版本<input aria-label="导入为新版本" type="file" disabled={busy || !!op || !!storageError} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void choose(f, true); }} /></label>
         {activeAsset?.mime_type?.startsWith('image/') && activeAsset.status === 'active' && <button disabled={busy || !!op || !!storageError} onClick={() => setEditing(!editing)}>{editing ? '关闭编辑' : '编辑图像'}</button>}
       </> : <p>选择素材以查看对象及版本。</p>}
-      <VersionHistory versions={versions.data?.filter(v => v.resource_id === resource?.id) ?? []} selected={selected} onSelect={setSelected} />
+      <VersionHistory versions={versions.data?.filter(v => v.resource_id === resource?.id) ?? []} selected={selected} onSelect={selectVersion} />
     </aside></div>
     {editing && activeAsset && <ImageEditor key={activeAsset.id} assetId={activeAsset.id} source={`http://127.0.0.1:8001/api/files/content?project_id=${encodeURIComponent(projectID)}&path=${encodeURIComponent(activeAsset.path)}`} onExport={exportImage} />}
   </section>;
