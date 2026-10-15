@@ -1,5 +1,7 @@
 import { MosaicCache } from '../src/mosaic.ts';
 import { shapeFromData } from '../src/shapes.ts';
+import { Editor } from '../src/editor.ts';
+import { Tools } from '../src/tools.ts';
 import type { ShapeData, TextData, TagData } from '../src/types.ts';
 
 const checks: { name: string; passed: boolean; detail?: string }[] = [];
@@ -183,6 +185,89 @@ check('native PNG export redraws source and masked object at double resolution',
   assert(same(pixel(exported, 16, 16), outside), 'export outside mask wrong');
   assert(!same(pixel(exported, 64, 64), inside), 'export mask absent');
 });
+const frame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+async function nativeCheck(name: string, run: () => Promise<void>) {
+  try { await run(); checks.push({ name, passed: true }); }
+  catch (error) { checks.push({ name, passed: false, detail: String(error) }); }
+}
+const server = new URLSearchParams(location.search).get('imageServer');
+await nativeCheck('Renderer coalesces invalidations and drag draws only its active object after static exclusion', async () => {
+  const host = document.createElement('div'); document.body.append(host);
+  const editor = new Editor(host, { width: 200, height: 100, shapes: Array.from({ length: 50 }, (_, i) => ({ id: `drag${i}`, type: 'rectangle', x: 20, y: 20, width: 60, height: 40, style: { ...style, fill: '#fff' } })) });
+  try {
+    await frame();
+    const main = editor.renderer.main.getContext('2d')!, originalDraw = main.drawImage.bind(main); let copies = 0;
+    main.drawImage = ((...args: Parameters<CanvasRenderingContext2D['drawImage']>) => { copies++; originalDraw(...args); }) as typeof main.drawImage;
+    for (let i = 0; i < 100; i++) editor.renderer.invalidate();
+    await frame(); assert(copies === 3, `100 invalidations made ${copies / 3} composites`); main.drawImage = originalDraw;
+    const counts = new Map<string, number>();
+    for (const data of editor.getState().shapes) {
+      const shape = editor.getShape(data.id)!, draw = shape.draw.bind(shape);
+      shape.draw = (ctx, helpers) => { counts.set(shape.id, (counts.get(shape.id) ?? 0) + 1); draw(ctx, helpers); };
+    }
+    editor.select('drag49'); const tool = new Tools(editor, 'select'); tool.down({ x: 50, y: 40 }); await frame();
+    for (let i = 1; i <= 100; i++) { tool.move({ x: 50 + i / 2, y: 40 + i / 4 }); await frame(); }
+    assert(counts.get('drag0') === 1 && counts.get('drag49') === 101, `drag redrew static objects: ${JSON.stringify([...counts])}`);
+    tool.up({ x: 100, y: 65 }); await frame();
+    assert(counts.get('drag0') === 2 && counts.get('drag49') === 102, 'commit did not restore static membership once');
+    assert(same(editor.getShape('drag49')!.getBounds(), { x: 70, y: 45, width: 60, height: 40 }), 'drag accumulated deltas');
+    observations.renderer = { invalidations: 100, composites: copies / 3, dragFrames: 100, inactiveDraws: counts.get('drag0'), activeDraws: counts.get('drag49') };
+  } finally { editor.destroy(); host.remove(); }
+});
+await nativeCheck('Editor exports natural dimensions and omits selection/preview at DPR and UI tiers', async () => {
+  assert(server, 'native runner image server missing');
+  const host = document.createElement('div'); document.body.append(host);
+  const editor = new Editor(host, { width: 96, height: 96, shapes: [mosaicData] });
+  try {
+    await editor.loadImage(`${server}/checker.svg`); editor.setUiScale(2); editor.select('m');
+    editor.setPreviewShape(shapeFromData({ id: 'excluded', type: 'rectangle', x: 0, y: 0, width: 96, height: 96, style: { stroke: '#0f0', strokeWidth: 5, fill: '#0f0' } }));
+    await frame();
+    const bitmap = await createImageBitmap(await editor.toBlob());
+    assert(bitmap.width === 192 && bitmap.height === 192, `export ${bitmap.width}x${bitmap.height}`);
+    const out = canvas(192, 192); context(out).drawImage(bitmap, 0, 0); bitmap.close();
+    const original = new Image(); original.crossOrigin = 'anonymous'; original.src = `${server}/checker.svg`;
+    await original.decode();
+    const reference = canvas(192, 192), ref = context(reference); ref.drawImage(original, 0, 0); ref.scale(2, 2); shapeFromData(mosaicData).draw(ref, cache);
+    assert(same(pixel(out, 16, 16), pixel(reference, 16, 16)), `preview exported: ${pixel(out, 16, 16)} vs ${pixel(reference, 16, 16)}`);
+    assert(same(pixel(out, 64, 64), pixel(reference, 64, 64)), 'mosaic logical source was multiplied by DPR');
+    assert(same(pixel(out, 47, 47), pixel(reference, 47, 47)), 'selection exported');
+    observations.editorExport = { width: 192, height: 192, physicalWidth: editor.renderer.main.width, logicalWidth: 96, uiScale: 2 };
+    observations.editorExportPNG = out.toDataURL('image/png');
+  } finally { editor.destroy(); host.remove(); }
+});
+await nativeCheck('real image requests reject missing CORS once and ignore stale success/error responses', async () => {
+  assert(server, 'native runner image server missing');
+  const host = document.createElement('div'); document.body.append(host); const editor = new Editor(host, { width: 80, height: 80 });
+  try {
+    const stale = editor.loadImage(`${server}/slow-red.svg`), latest = editor.loadImage(`${server}/blue.svg`);
+    await Promise.all([stale, latest]);
+    assert(same(editor.getSize(), { width: 80, height: 40 }), 'logical size getter used natural or physical pixels');
+    const exported = editor.renderer.exportComposed(); assert(exported.width === 160 && exported.height === 80, 'stale image changed size');
+    assert(same(pixel(exported, 10, 10), [0, 0, 255, 255]), 'stale image overwrote latest pixels');
+    const staleError = editor.loadImage(`${server}/slow-error.svg`); await editor.loadImage(`${server}/blue.svg?revision=2`); await staleError;
+    let rejected = false; try { await editor.loadImage(`${server}/denied.svg`); } catch { rejected = true; }
+    assert(rejected, 'missing CORS was retried without anonymous mode');
+    const afterFailure = editor.renderer.exportComposed(); assert(same(pixel(afterFailure, 10, 10), [0, 0, 255, 255]), 'failed load erased existing image');
+    const stats = await (await fetch(`${server}/stats`)).json() as Record<string, number>;
+    assert(stats['/denied.svg'] === 1, 'CORS rejection was retried'); observations.imageLoads = stats;
+  } finally { editor.destroy(); host.remove(); }
+});
+await nativeCheck('destroy cancels queued frames, clears owned canvases and settles pending image loads', async () => {
+  assert(server, 'native runner image server missing');
+  const host = document.createElement('div'); document.body.append(host); const editor = new Editor(host, { width: 80, height: 80 });
+  const pending = editor.loadImage(`${server}/slow-red.svg?destroy=1`); let changes = 0; editor.on('change', () => changes++);
+  let paints = 0; const ctx = editor.renderer.main.getContext('2d')!, originalDraw = ctx.drawImage.bind(ctx);
+  ctx.drawImage = ((...args: Parameters<CanvasRenderingContext2D['drawImage']>) => { paints++; originalDraw(...args); }) as typeof ctx.drawImage;
+  editor.destroy(); await pending; await frame(); await new Promise(resolve => setTimeout(resolve, 250));
+  assert(host.childElementCount === 0 && changes === 0 && paints === 0, 'destroy left DOM, handlers or scheduled paint');
+  for (const layer of [editor.renderer.main, editor.renderer.bgLayer, editor.renderer.shapeLayer, editor.renderer.previewLayer]) assert(layer.width === 0 && layer.height === 0, 'owned buffer retained dimensions');
+  let rejected = false; try { await editor.toBlob(); } catch { rejected = true; } assert(rejected, 'destroyed export succeeded');
+  host.remove(); observations.destroy = { changes, paints, detached: true };
+});
 const result = { passed: checks.every(c => c.passed), checks, observations, userAgent: navigator.userAgent, dpr: devicePixelRatio, exportPNG: exported.toDataURL('image/png') };
 (window as unknown as { editorTestResult: typeof result }).editorTestResult = result;
 document.querySelector('#result')!.textContent = JSON.stringify({ ...result, exportPNG: '(returned to CDP runner)' }, null, 2);
+// Trusted pointer capture is exercised by the existing CDP runner after these checks.
+const inputHost = document.createElement('div'); inputHost.style.cssText = 'position:fixed;left:10px;top:10px;z-index:100;background:white'; document.body.append(inputHost);
+const inputEditor = new Editor(inputHost, { width: 200, height: 100, shapes: [{ id: 'trusted', type: 'rectangle', x: 20, y: 20, width: 60, height: 40, style: { ...style, fill: '#fff' } }] });
+(window as unknown as { editorInputFixture: { editor: Editor; host: HTMLElement } }).editorInputFixture = { editor: inputEditor, host: inputHost };
