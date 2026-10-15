@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"net/http/httptest"
 	"path/filepath"
@@ -113,6 +114,72 @@ func TestRequestRejectedRoutesDoNotWrite(t *testing.T) {
 		var n int
 		if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil || n != 0 {
 			t.Fatalf("unexpected write %s: %d %v", table, n, err)
+		}
+	}
+}
+
+func TestRequestRejectsFieldAliases(t *testing.T) {
+	for _, body := range []string{
+		`{"requestId":"a","RequestID":"b"}`,
+		`{"RequestID":"b"}`,
+		`{"requestId":"r","nested":{"Prompt":"x"}}`,
+		`{"requestId":"r","nested":{"prompt":"a","PROMPT":"b"}}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			r := httptest.NewRequest("POST", "/", strings.NewReader(body))
+			if _, err := DecodeJSON[requestFixture](httptest.NewRecorder(), r); err == nil {
+				t.Fatal("case alias accepted")
+			}
+		})
+	}
+}
+
+func TestCanonicalSurrogateEscapes(t *testing.T) {
+	for _, raw := range []string{`{"prompt":"\ud800"}`, `{"prompt":"\udfff"}`, `{"prompt":"\ud800x"}`, `{"prompt":"\ud800\u0041"}`, `{"prompt":"\ud800\ud800"}`, `{"\udfff":"x"}`} {
+		t.Run(raw, func(t *testing.T) {
+			if _, err := CanonicalJSON([]byte(raw)); err == nil {
+				t.Fatal("unpaired surrogate accepted")
+			}
+		})
+	}
+	for _, raw := range []string{`{"prompt":"\ud83d\ude00"}`, `{"prompt":"\\ud800"}`, `{"prompt":"\\\\udfff"}`, `{"prompt":"�"}`} {
+		if _, err := CanonicalJSON([]byte(raw)); err != nil {
+			t.Fatalf("valid input rejected %s: %v", raw, err)
+		}
+	}
+	a, err := CanonicalJSON([]byte(`{"prompt":"\ud83d\ude00"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := CanonicalJSON([]byte(`{"prompt":"😀"}`))
+	if err != nil || string(a) != string(b) {
+		t.Fatalf("pair changed: %s %s %v", a, b, err)
+	}
+}
+
+func TestRequestExactNestedDTOsAndRawMessage(t *testing.T) {
+	type child struct {
+		Prompt string `json:"prompt"`
+	}
+	type mutation struct {
+		Children []*child        `json:"children"`
+		Deferred json.RawMessage `json:"deferred"`
+	}
+	for _, tc := range []struct {
+		body  string
+		valid bool
+	}{
+		{`{"children":[{"prompt":"  中文"}],"deferred":{"LATER":"own schema"}}`, true},
+		{`{"children":[{"Prompt":"x"}]}`, false},
+		{`{"children":[{"prompt":"x","PROMPT":"y"}]}`, false},
+	} {
+		r := httptest.NewRequest("POST", "/", strings.NewReader(tc.body))
+		value, err := DecodeJSON[mutation](httptest.NewRecorder(), r)
+		if (err == nil) != tc.valid {
+			t.Fatalf("%s: %v", tc.body, err)
+		}
+		if tc.valid && value.Children[0].Prompt != "  中文" {
+			t.Fatal("nested prompt changed")
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strconv"
 	"unicode/utf8"
 
 	"github.com/go-playground/validator/v10"
@@ -90,6 +91,9 @@ func CanonicalJSON(raw []byte) ([]byte, error) {
 	if !utf8.Valid(raw) {
 		return nil, errors.New("invalid UTF-8")
 	}
+	if err := validSurrogateEscapes(raw); err != nil {
+		return nil, err
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	token, err := dec.Token()
@@ -154,6 +158,42 @@ func scanValue(dec *json.Decoder, depth int) error {
 		}
 		_, err = dec.Token()
 		return err
+	}
+	return nil
+}
+
+// The standard decoder replaces unpaired UTF-16 escapes with U+FFFD, which
+// would collapse distinct prompts into the same idempotency input.
+func validSurrogateEscapes(raw []byte) error {
+	for i := 0; i+1 < len(raw); i++ {
+		if raw[i] != '\\' {
+			continue
+		}
+		if raw[i+1] != 'u' {
+			i++
+			continue
+		}
+		if i+6 > len(raw) {
+			return errors.New("invalid Unicode escape")
+		}
+		unit, err := strconv.ParseUint(string(raw[i+2:i+6]), 16, 16)
+		if err != nil {
+			return err
+		}
+		if unit >= 0xdc00 && unit <= 0xdfff {
+			return errors.New("unpaired low surrogate")
+		}
+		if unit >= 0xd800 && unit <= 0xdbff {
+			if i+12 > len(raw) || raw[i+6] != '\\' || raw[i+7] != 'u' {
+				return errors.New("unpaired high surrogate")
+			}
+			low, err := strconv.ParseUint(string(raw[i+8:i+12]), 16, 16)
+			if err != nil || low < 0xdc00 || low > 0xdfff {
+				return errors.New("unpaired high surrogate")
+			}
+			i += 6
+		}
+		i += 5
 	}
 	return nil
 }
