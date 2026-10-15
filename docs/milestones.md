@@ -59,3 +59,10 @@ M2.1 提交为 `29f7b0d`，严格输入修正为 `9983337`；专项测试、Go �
 - `scripts/smoke-desktop.ps1 -Mode release -Smoke m1`：当前生产版 M1 画布/HTTP health/Origin/正常关闭回归通过；证据 `.runtime/desktop-release-da58f82adb274615964a114ff2ee2a27/`。
 - 初始旧 M1 exe 在 M2 smoke 明确报 `M2 project creation UI missing`；后续一次测试观察误选 CORS OPTIONS（无 postData），收紧为 method=POST 后通过。未调整生产逻辑绕过断言。
 - 当前每项目一个待导入；256 MiB WebCrypto 全缓冲、完整项目列表内存读取是已注明上限。开发 Origin 仍由现有 Go/M1 测试覆盖，本任务真实桌面使用生产 Origin；没有声称开发窗口或 M3–M7 新验收。
+
+### M2.5 审查修正验证（2026-10-15）
+
+- 修复旧组件迟到响应覆盖/清除新导入：所有阶段写入和终态清除同步比较完整旧记录，已推进或被替换时停止旧续链；同意图阶段也不回退。项目选择偏好读写失败独立告警并保留内存选择，gateway ready 不受影响；关键写意图仍须先持久化。
+- `node --test scripts/check-m2-ui.mjs` 修前 7 失败/1 通过；修后结合原 recovery 检查 9/9 通过。检查直接转译实际 App/AssetLibrary 源码，控制 upload/commit/deliver 迟到次序、重挂载与续投递，覆盖 A 不能改 B、同 A 不能回退/继续旧链、选择存储读写异常及关键保存失败零 POST。证据 `.runtime/m25-fix-targeted.txt`。
+- 修后 `pnpm --dir desktop desktop:build` 与最终 `scripts/check.ps1` 通过；后者含 Go 全量/vet、sidecar、9 项 Node 检查、前端、Rust 与原生 gateway M1，日志 `.runtime/m25-fix-check.txt`，生命周期证据 `.runtime/smoke-bc27920b40814a57ab6d21b02c0e8408/`。
+- 最终生产真实 M2 UI/原生重启恢复通过：`.runtime/desktop-release-7ea7d46f089c449986313120528970de/`；真实 M1 WebView/生命周期回归通过：`.runtime/desktop-release-d3085fecfdde47f7895966b5c5109019/`。均使用测试独立 profile，正常关闭无 sidecar/端口残留。并发迟到/存储拒绝使用受控实际组件源码检查，真实 WebView 仍验证现有正常导入、幂等、血缘、隔离和重启恢复；不将源码控序检查冒充真实网络故障注入。

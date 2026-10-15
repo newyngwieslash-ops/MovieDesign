@@ -219,7 +219,11 @@ POST /api/deliver?project_id=<project>
 
 首次发送前保存三个 ID、完整文件 SHA-256、原名称/大小与目标配置；修订另有 target.baseVersionID。已知上传路径后保存 stage=commit、stagedPath、commitBody；已知提交路径后保存 stage=deliver、committedPath、deliveryBody。两份 Body 都是原始 JSON 字符串，回执丢失或重启后直接重发，不重建、不调用 newRequestID。localStorage 写入失败不会发送对应请求。仅 completed/blocked 回执清除记录；格式损坏保留并阻止覆盖。字节只留内存，上传阶段重启必须重选同文件；名称、大小、完整 SHA-256 相同才沿用 uploadID，服务端仍验证真实内容。超过 256 MiB 在读取前拒绝；WebCrypto 整文件缓冲上限及未来流式升级已用 ponytail 注释标明。
 
+所有阶段写入及终态清除先同步比较 localStorage 当前记录与该续链持有的完整旧记录（包括意图 ID、stage 和 body）；初始导入只允许在当前无记录时保存。若其他重挂载实例已推进同意图或开始另一意图，旧响应立即停止续链，不回退阶段、不覆盖或删除新记录。比较与 setItem/removeItem 之间没有异步让出点。查询取消本身不作为写操作的并发保护。
+
 项目选择另存 `moviedesign.project`；不保存 blob、凭据或外部文件路径。缩略图用 `<img crossOrigin="anonymous">` 加载受 Origin 保护的真实 content，SVG 不内联、不用 object/embed。CSP 仅为 img-src/media-src 加入准确 `http://127.0.0.1:8001`，default/script/frame 维持限制，服务端 SVG attachment/sandbox 保留。浏览器不支持的格式不声称有像素预览。
+
+项目选择偏好读取/写入失败只展示独立存储告警，继续挂载工作台并允许内存中的项目选择，不改变 gateway ready 或禁用项目查询。该降级只适用于选择偏好；创建项目及导入意图仍须成功持久化才能 POST。
 
 项目创建另以应用级 `moviedesign.project-create.v1` 保存完整原始 POST JSON（requestId/action/value.name），发送前先写入；网络/5xx 等未确认结果保留，刷新/重启显示原名称及“续建项目”，重发同 body。已知 400 验证拒绝或成功回执清除，400 后可修改名称。损坏记录保留并阻止覆盖。真实 smoke 从 DOMStorage 捕获原创建 body，模拟回执丢失后刷新、点击续建，独立列表确认项目总数仍为一。
 

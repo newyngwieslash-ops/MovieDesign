@@ -6,7 +6,17 @@ import { ProjectPicker } from './features/projects/ProjectPicker';
 import { AssetLibrary } from './features/assets/AssetLibrary';
 
 export function App() {
-  const [projectID, setProjectID] = useState(() => localStorage.getItem('moviedesign.project') ?? '');
+  const [selection, setSelection] = useState(() => {
+    try { return { id: localStorage.getItem('moviedesign.project') ?? '', warning: '' }; }
+    catch { return { id: '', warning: '无法读取项目选择的本地存储，本次选择仅在当前窗口保留。' }; }
+  });
+  const projectID = selection.id;
+  function selectProject(id: string) {
+    let warning = '';
+    try { localStorage.setItem('moviedesign.project', id); }
+    catch { warning = '无法保存项目选择到本地存储，本次选择仅在当前窗口保留。'; }
+    setSelection({ id, warning });
+  }
   const connection = useQuery({ queryKey: ['gateway-connection'], queryFn: getConnection, refetchInterval: 2000 });
   const port = connection.data?.port;
   const health = useQuery({
@@ -28,13 +38,14 @@ export function App() {
     <aside className="sidebar" aria-label="工作区">
       <div className="section-label">工作区</div>
       <div className="selected-item"><span aria-hidden="true">▦</span> 创作画布</div>
-      <ProjectPicker selected={projectID} ready={ready} onSelect={id => { localStorage.setItem('moviedesign.project', id); setProjectID(id); }} />
+      <ProjectPicker selected={projectID} ready={ready} onSelect={selectProject} />
       <div className="sidebar-note">从一个想法开始，<br />让作品在这里生长。</div>
       <div className="milestone"><span>M2</span> 素材工作台</div>
     </aside>
     <main>
       <div className="canvas-header"><div><h1>创作画布</h1><p>你的图像、视频与创作依据，将在这里汇合。</p></div><span className="local-badge">LOCAL</span></div>
       {error && <div className="error-banner" role="alert"><strong>无法连接本地服务</strong><p>{error}</p><p>请检查服务日志或端口占用，然后重新启动应用。</p></div>}
+      {selection.warning && <p role="alert">{selection.warning}</p>}
       {ready && projectID ? <AssetLibrary key={projectID} projectID={projectID} /> : <CanvasWorkspace />}
       <footer><span>所有创作，从这里开始</span><span>MovieDesign · 本地优先</span></footer>
     </main>

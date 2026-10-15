@@ -37,23 +37,35 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
   const resource = resources.data?.find(r => r.id === version?.resource_id);
   const composition = compositions.data?.find(c => c.id === resource?.composition_id);
   const activeAsset = assets.data?.find(a => a.id === version?.asset_id);
-  function save(value: ImportOperation) {
+  function owns(expected: ImportOperation | null) {
+    return localStorage.getItem(storageKey(projectID)) === (expected ? JSON.stringify(expected) : null);
+  }
+  function save(value: ImportOperation, expected: ImportOperation | null) {
+    // Compare the complete prior stage synchronously: remounted retries may already have advanced or replaced it.
+    if (!owns(expected)) return false;
     localStorage.setItem(storageKey(projectID), JSON.stringify(value));
     setOp(value);
+    return true;
   }
   async function run(initial: ImportOperation) {
+    if (!owns(initial)) return;
     let current = initial;
     if (current.stage === 'upload') {
       if (!fileRef.current) throw new Error('请选择原文件；将核对完整内容并沿用上传请求号');
       const form = new FormData(); form.set('requestId', current.uploadID); form.set('file', fileRef.current);
       const uploaded = await api<{ path: string }>(projectID, '/api/upload', { method: 'POST', body: form });
-      current = advanceUpload(current, uploaded.path); save(current);
+      const next = advanceUpload(current, uploaded.path);
+      if (!save(next, current)) return;
+      current = next;
     }
     if (current.stage === 'commit') {
       const committed = await api<{ relative: string }>(projectID, '/api/upload/commit', { method: 'POST', body: current.commitBody });
-      current = advanceCommit(current, committed.relative); save(current);
+      const next = advanceCommit(current, committed.relative);
+      if (!save(next, current)) return;
+      current = next;
     }
     const result = await api<Receipt>(projectID, '/api/deliver', { method: 'POST', body: current.deliveryBody });
+    if (!owns(current)) return;
     if (result.delivery.status === 'unknown') throw new Error(result.delivery.problem?.message ?? '投递尚未确认');
     localStorage.removeItem(storageKey(projectID)); setOp(null); fileRef.current = null;
     if (result.delivery.status === 'blocked') throw new Error(`投递受阻：${result.delivery.problem?.message ?? '请检查输入后发起新导入'}`);
@@ -86,7 +98,7 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
             ...(revision ? { baseVersionID: version!.id } : {}),
             composition: { name: revision ? composition!.name : '素材作品', type: revision ? { id: composition!.type_id } : { label: '素材' }, placements: [{ key: 'file', role: '素材' }] },
           } };
-        save(current);
+        if (!save(current, null)) return;
       }
       fileRef.current = file; await run(current);
     } catch (e) { setError((e as Error).message); }
