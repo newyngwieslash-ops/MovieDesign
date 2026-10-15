@@ -208,6 +208,8 @@ test('selection finds the topmost hit and handles retain screen size at differen
   }
 });
 
-test('later media shapes fail explicitly until M3.2 supplies their behavior', () => {
-  assert.throws(() => shapeFromData({ id: 'b', type: 'brush', style, points: [] }), /not implemented/);
+test('the same factory accepts media shapes and keeps empty brush geometry finite', () => {
+  const brush = shapeFromData({ id: 'b', type: 'brush', style, points: [] });
+  assert.deepEqual(brush.getBounds(), { x: 0, y: 0, width: 0, height: 0 });
+  assert.equal(brush.hitTest({ x: 0, y: 0 }), false);
 });

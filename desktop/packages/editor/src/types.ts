@@ -38,3 +38,9 @@ export type MosaicData = ShapeBase & { type: 'mosaic'; mode: 'mosaic' | 'blur'; 
 );
 export type ShapeData = RectangleData | EllipseData | LineData | ArrowData | BrushData | TextData | TagData | MosaicData;
 export type ShapeType = ShapeData['type'];
+
+export interface DrawHelpers {
+  getProcessedSource?: (mode: 'mosaic' | 'blur', strength: number) => HTMLCanvasElement | undefined;
+  canvasWidth?: number;
+  canvasHeight?: number;
+}

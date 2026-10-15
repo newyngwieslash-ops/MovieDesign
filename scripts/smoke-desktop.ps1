@@ -1,5 +1,6 @@
-param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2')][string]$Smoke = 'm1')
+param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2', 'editor')][string]$Smoke = 'm1')
 $ErrorActionPreference = 'Stop'
+if ($Smoke -eq 'editor' -and $Mode -ne 'debug') { throw 'Editor Canvas harness requires -Mode debug and the existing Vite dev server.' }
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $binary = Join-Path $projectRoot "desktop/src-tauri/target/$Mode/moviedesign.exe"
 $runDir = Join-Path $projectRoot ('.runtime/desktop-' + $Mode + '-' + [guid]::NewGuid().ToString('N'))
@@ -28,7 +29,7 @@ function Stop-OwnedDesktop($owned) {
 }
 $process = [System.Diagnostics.Process]::Start($info)
 try {
-    $scriptName = if ($Smoke -eq 'm2') { 'smoke-m2.mjs' } else { 'smoke-desktop.mjs' }
+    $scriptName = if ($Smoke -eq 'editor') { 'smoke-editor.mjs' } elseif ($Smoke -eq 'm2') { 'smoke-m2.mjs' } else { 'smoke-desktop.mjs' }
     & node (Join-Path $PSScriptRoot $scriptName) $debugPort $runDir $origin
     if ($LASTEXITCODE -ne 0) { throw 'WebView smoke failed.' }
     $browser = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Where-Object { $_.CommandLine -like "*$profile*" }

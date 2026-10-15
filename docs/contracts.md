@@ -1,5 +1,22 @@
 # MovieDesign 契约
 
+## M3.2 媒体形状与内存缓存
+
+继续复用 `ShapeData` 的八种原始平面字段和唯一工厂 `shapeFromData`。样式留在 `style`；Tag 保留 `x/y/anchorX/anchorY/width/height/text/maxWidth`，文字变体保留 `style.textVariant=plain|filled|outlined`。实例构造与 `toData` 深拷贝；处理底图、笔刷离屏画布和文字基线缓存只在内存，不进入形状 JSON 或后续历史。
+
+笔刷与马赛克笔刷按原源码 50799、50956 使用相邻点中点和 `quadraticCurveTo`，形状可绘制单点。BrushTool 的 `points.length>1` 提交门槛属于后续工具实现，M3.2 不提前提供工具。马赛克矩形裁剪处理底图，笔刷复用离屏画布并以 `destination-in` 保留路径；resize 只缩放内部点间距，保留 brushSize。`MosaicCache` 的公开 `get/put/clear` 使用容量 8 的 LRU；`getProcessedSource(mode,strength)` 按 mode/strength 分键，`setSource(image,revision)` 在身份、revision、源尺寸变化时失效，`setSize(width,height,dpr)` 在视口尺寸/DPR 变化时失效。源图按逻辑尺寸处理；物理 DPR 缓冲和导出变换由后续 Renderer 管理。
+
+原源码 52324–52361 的 blur 复制边/角，padding 为 `2*round(radius)`，在独立输出画布设置 filter 后重置；mosaic 先高质量平滑缩小，再关闭平滑放大。有限 blur padding 的边缘 alpha 不保证 255；原生 WebView 检查使用同一有限 padding 的独立实心参考，避免将理想无限边界误作原始算法。
+
+文字使用原字号比例 padding（横向 max(4,0.45*fontSize)、纵向 max(2,0.18*fontSize)）、1.4 行高和 DOM 字体基线测量；outlined 保留原 0.5px 描边文字语义。resize 修改字号并保底 8。Tag 按字符（包括 CJK）换行，采用原二次曲线圆角、四侧指针及锚点修正；有画布尺寸的 draw helpers 会按原 `keepTagInCanvas` 优先反侧、再同侧、最后 margin=4 夹紧卡片。该算法只约束卡片；超大卡片无法完全塞入小画布，锚点修正也不额外约束在画布内，均沿用原源码 51336–51420。
+
+两项明确的原源码适配遵循用户已确认的优先级：
+
+- 原 Text 51540 和 Tag 51194 的命中 padding 为 4；这里按用户明确要求改为 `max(8,strokeWidth)`。原 Mosaic 笔刷命中仅 brushSize/2；这里保留较大实际半径，同时不低于 `max(8,strokeWidth)`。填充马赛克矩形及填充椭圆仍使用实际填充区域，不扩成描边命中。
+- 原 Text.draw 的 filled 卡片可比 getBounds 的最小字号宽度窄（例如单个句点）。为满足“filled padding 与 bounds 一致”，filled 实际绘制宽度改为 `max(fontSize,measuredWidth)+2*padX`；原生像素回归先复现该缺口，再验证整个公布 bounds 被色块覆盖。其他文字和 Tag 绘制、布局及 resize 语义遵循原源码。
+
+`scripts/smoke-desktop.ps1 -Mode debug -Smoke editor` 是开发用真实原生 WebView2 测试文档，需先启动现有 Vite dev server；它不代表 M3.4 生产编辑器 UI 已集成。沿用既有 CDP、隔离 data/profile、owned process 清理，输出实际像素、缓存、ctx 状态和 192×192 PNG 证据；测试全局仅存在于 test/render 文档，不注入生产入口。
+
 ## 已确认决定（2026-10-15，用户确认 Q1–Q4）
 
 1. 用户规格明确列出的路径、字段和行为优先；原应用源码补齐未规定的语义。与原产品不同的协议标为移植适配，不声称逐字段复刻。
