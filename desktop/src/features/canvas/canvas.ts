@@ -8,7 +8,7 @@ export type CanvasDocument = {schemaVersion:1;revision:number;nodes:Record<strin
 export type Change<T> = {id:string;before:T|null;after:T|null};
 export type Command = {type:'canvas.patch';nodes:Change<Node>[];edges:Change<Edge>[]}|{type:'canvas.batch';commands:Command[]};
 export type Receipt = {requestId:string;appliedRevision:number;document:CanvasDocument;replayed:boolean;effects:{undo:Command|null;compositionIds:string[]}};
-export type Pending = {schema:1;projectID:string;body:string};
+export type Pending = {schema:1;projectID:string;body:string;mode?:'normal'|'undo'|'redo'};
 export type Content = {compositionId:string;state:'missing'|'deleted'|'ready';revision?:number;title?:string;resources?:Record<string,{resourceId:string;name:string;kind:string;currentVersionId:string|null;availability:string;versions:{versionId:string;ordinal:number;availability:string}[]}>};
 export const CANVAS_LIMITS = {nodes:10000,edges:20000,changes:30000,batch:64,content:200,references:64} as const;
 export const emptyDocument = ():CanvasDocument => ({schemaVersion:1,revision:0,nodes:{},edges:{}});
@@ -23,6 +23,7 @@ export function readPending(raw:string|null,projectID:string):Pending|null {
  if(raw===null)return null;
  const p=JSON.parse(raw) as Pending;
  if(p.schema!==1||p.projectID!==projectID||typeof p.body!=='string')throw Error('画布待确认记录损坏，请保留记录后修复');
+ if('mode' in p&&!['normal','undo','redo'].includes(p.mode!))throw Error('画布待确认操作损坏，请保留记录后修复');
  const r=JSON.parse(p.body);if(typeof r.requestId!=='string'||!Number.isSafeInteger(r.expectedRevision)||r.expectedRevision<0||!r.command)throw Error('画布命令记录损坏');
  return p;
 }

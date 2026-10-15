@@ -24,7 +24,7 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
  useEffect(()=>{alive.current=true;try{setPending(readPending(localStorage.getItem(pendingKey(projectID)),projectID));const raw=localStorage.getItem(`moviedesign.canvas.view.${projectID}`);if(raw){const v=JSON.parse(raw);if([v.x,v.y,v.scale].every(Number.isFinite)&&v.scale>=.1&&v.scale<=4)setView(v)}}catch(e){setStorageError((e as Error).message)}void refresh().catch(e=>{if(alive.current)setError(e.message)});return()=>{alive.current=false;gesture.current=null}},[projectID,refresh]);
  useEffect(()=>{const element=surface.current;if(!element)return;const resize=new ResizeObserver(([entry])=>setExtent({width:entry.contentRect.width,height:entry.contentRect.height}));resize.observe(element);return()=>resize.disconnect()},[]);
  useEffect(()=>{try{localStorage.setItem(`moviedesign.canvas.view.${projectID}`,JSON.stringify(view))}catch(e){setError((e as Error).message)}},[projectID,view]);
- async function send(p:Pending,mode:'normal'|'undo'|'redo'='normal') {
+ async function send(p:Pending) {
   if(lock.current||storageError)return;lock.current=true;setBusy(true);setError('');
   try {
    if(localStorage.getItem(pendingKey(projectID))!==JSON.stringify(p))throw Error('画布待确认记录已变化，请刷新窗口后继续');
@@ -32,13 +32,13 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
    if(!alive.current)return;
    if(localStorage.getItem(pendingKey(projectID))!==JSON.stringify(p))throw Error('画布记录已变化，保留当前恢复记录');
    accept(receipt.document);localStorage.removeItem(pendingKey(projectID));setPending(null);
-   if(mode==='undo'){setRedo(receipt.effects.undo);setUndo(null)}else{setUndo(receipt.effects.undo);setRedo(null)}
+   if(p.mode==='undo'){setRedo(receipt.effects.undo);setUndo(null)}else{setUndo(p.mode?receipt.effects.undo:null);setRedo(null)}
   }catch(e){if(!alive.current)return;setError((e as Error).message);if(e instanceof APIError&&e.status>=400&&e.status<500){try{if(localStorage.getItem(pendingKey(projectID))===JSON.stringify(p)){localStorage.removeItem(pendingKey(projectID));setPending(null)}await refresh();setUndo(null);setRedo(null);setError(`${e.message}。命令已拒绝；已刷新，请重新编辑。`)}catch(refreshError){setError((refreshError as Error).message)}}}
   finally{lock.current=false;if(alive.current)setBusy(false)}
  }
- function commit(command:Command,mode:'normal'|'undo'|'redo'='normal') {
+ function commit(command:Command,mode:NonNullable<Pending['mode']>='normal') {
   if(!ready||pending||lock.current||storageError)return;
-  try{if(localStorage.getItem(pendingKey(projectID))!==null)throw Error('已有待确认画布命令，请刷新后继续');const p:Pending={schema:1,projectID,body:JSON.stringify({requestId:newRequestID(),expectedRevision:current.current.revision,command})};localStorage.setItem(pendingKey(projectID),JSON.stringify(p));setPending(p);void send(p,mode)}catch(e){setError((e as Error).message)}
+  try{if(localStorage.getItem(pendingKey(projectID))!==null)throw Error('已有待确认画布命令，请刷新后继续');const p:Pending={schema:1,projectID,mode,body:JSON.stringify({requestId:newRequestID(),expectedRevision:current.current.revision,command})};localStorage.setItem(pendingKey(projectID),JSON.stringify(p));setPending(p);void send(p)}catch(e){setError((e as Error).message)}
  }
  const rendered=preview?{...document,nodes:{...document.nodes,[preview.id]:preview}}:document;
  const visible=visibleNodes(rendered,view,extent.width,extent.height);

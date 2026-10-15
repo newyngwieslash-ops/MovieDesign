@@ -104,6 +104,7 @@ M3.4（2026-10-16）已提交 f9b9f8c、81385f8 并通过独立规格/质量复�
 - 生产 M2 ordinary import+restart 回归通过：`.runtime/desktop-release-1510ee2281464915a7d4132b7887eb5a`；生产 M1 WebView/Origin/关闭通过：`.runtime/desktop-release-ca9adc23eb7d4adba93129d0620d1b1d`。均验证正常关闭后 sidecar/8001 释放，无 renderer 未捕获异常。
 - 现有 M3.1–M3.4 各阶段的八类 Shape/工具/历史/透明 textarea/IME/区域标注证据仍按各自原文区分 debug fixture 和真实产品 UI；本阶段重新运行对应全部 Node 检查。最终 production Canvas-to-Editor 集成证明真实图像编辑及不可变 PNG 恢复链路，没有把 debug 的源码 import harness 标成 production。
 - 已知明确范围：仅原 canvas.patch/canvas.batch 启用；其他非 MVP content commands 返回结构化拒绝；M4 任务暂不存在；安全文档预览≤1 MiB；画布 UI undo/redo 暂一层、重启快捷按钮不恢复，服务端持久 undo 仍保留引用；没有历史截断/回收接口。当前源码适配详见 contracts 的 M3.5 段。未新增依赖、网络协议、模型/provider 或生产测试钩子。
+- 整体审查修复：待确认画布记录冻结本机 normal/undo/redo 模式，响应丢失后同会话或重载续确认保持按钮含义与原 HTTP body/requestId；旧版无模式记录保守清空快捷操作，损坏模式禁止 POST 并保留记录。`check-canvas-recovery.mjs` 执行实际组件源码，覆盖 12 项受控 React/存储/HTTP 边界检查；不作为新增原生 UI 证据。
 
 Final M3.5 canvas proof: `.runtime/desktop-release-6722d68171194ac6a8dcbd5cfeb69b97/` contains `canvas-expected.json`, `canvas-production.json`, `canvas-before-restart.png`, readable `canvas-recovered.png`, native `video-playback.json` / `audio-playback.json`, and owned `webview-profile.json`. Earlier `.runtime/desktop-release-9d0ed716731c44c98391fa9245c003ec/` also passed all functional checks. The 150 ms media sample first observed an audio clock at zero; replaced with bounded native timeupdate observation, not a product workaround. Initial sandbox-only desktop startup timed out; approved external native execution passed.
 

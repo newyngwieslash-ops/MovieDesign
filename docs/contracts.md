@@ -290,6 +290,6 @@ M3 支持 `canvas.patch` 的精确 `{type,nodes:[{id,before,after}],edges:[{id,b
 
 CanvasWorkspace 与 ImageEditor/EditorHistoryManager 独立。节点 position 相对 parent frame；显示坐标累加祖先位置（原 p3 world$1:80663），父隐藏/折叠隐藏全部后代（visible:85565）；改父保留世界位置，移动 frame 保留子局部坐标。平移缩放仅本地视图，布局与版本选择走服务器 patch。可见性线性扫描上限 10k 并裁剪 DOM；没有将节点转为图像编辑器 shapes。
 
-写前将完整 body/requestId/expectedRevision 存 localStorage `moviedesign.canvas.pending.v1.<project>`；重启只显示继续按钮，同 body/key 显式确认。未知网络/5xx 保留记录，4xx 已知拒绝刷新后要求重新编辑，不自动改 body 重试。响应接受要求组件仍属于同项目且 revision 不倒退，清理记录比较完整前驱值。普通文件/PNG 导出仍由原 AssetLibrary 处理，其 IDB 字节和用户选择 revision 保护保持。
+写前将完整 body/requestId/expectedRevision 存 localStorage `moviedesign.canvas.pending.v1.<project>`；本机记录同时冻结并校验操作 mode（normal/undo/redo），首次提交与显式续确认均按该模式归属回执 inverse，mode 不进入 HTTP body。重启只显示继续按钮，同 body/key 显式确认。旧版缺 mode 的记录仍可原样确认，但清空两种历史快捷操作；非法 mode 保留原记录并禁止提交。未知网络/5xx 保留记录，4xx 已知拒绝刷新后要求重新编辑，不自动改 body 重试。响应接受要求组件仍属于同项目且 revision 不倒退，清理记录比较完整前驱值。普通文件/PNG 导出仍由原 AssetLibrary 处理，其 IDB 字节和用户选择 revision 保护保持。
 
 图像/video/audio 均 anonymous CORS；文本/Markdown 以 `<pre>` 原样安全显示，不执行 HTML。文本预览限 1 MiB；其他文件展示元数据。视图内图片可进入既有编辑器，保存产生同 Resource 不可变新 Version。基础属性、画框折叠/颜色、局部位置/尺寸/层级、版本切换和一步画布 undo/redo可用；持久 effects 保留服务端 undo，但 UI 历史栈本次仅一层且重启后不恢复快捷按钮。
