@@ -1,8 +1,10 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 type Health struct {
@@ -23,7 +25,7 @@ func reject(w http.ResponseWriter, status int, code, message string) {
 	respond(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
 }
 
-func Handler(origin string) http.Handler {
+func New(origin string, db *sql.DB, workspaceRoot string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -35,11 +37,12 @@ func Handler(origin string) http.Handler {
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		if r.Method == http.MethodOptions {
-			if r.URL.Path != "/api/health" || r.Header.Get("Access-Control-Request-Method") != "GET" || r.Header.Get("Access-Control-Request-Headers") != "" {
+			if r.URL.Path != "/api/health" || r.Header.Get("Access-Control-Request-Method") != "GET" || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
 			}
-			w.Header().Set("Access-Control-Allow-Methods", "GET")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -54,4 +57,17 @@ func Handler(origin string) http.Handler {
 		}
 		respond(w, http.StatusOK, Ready())
 	})
+}
+
+func allowedPreflightHeaders(values []string) bool {
+	for _, value := range values {
+		for _, header := range strings.Split(value, ",") {
+			switch strings.ToLower(strings.TrimSpace(header)) {
+			case "", "content-type", "last-event-id":
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }

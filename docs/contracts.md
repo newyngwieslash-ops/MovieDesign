@@ -76,3 +76,13 @@ Origin 校验针对浏览器 CSRF；curl 或本机程序可以伪造 Origin。M1
 - 素材搜索先覆盖真实本地图片与已登记voice目录；没有远端搜索适配时如实说明范围，不生成虚假搜索结果。
 - MCP增加专用连接令牌和受管轮次绑定；所有Origin检查保留。单活跃agent轮次是MVP并发上限，不限制后台生成任务的持久恢复。
 - 原来源与移植契约冲突时以用户已确认契约为准，差异逐项登记。全部真实视频/付费/签名发布验收需要实际连接和密钥，离线fixture不替代这些验收。
+
+## M2.1 请求边界与持久幂等（移植适配）
+
+- 构造入口为 `server.New(origin, db, workspaceRoot)`；主进程传入 `<dataDir>/workspace`。此阶段公开路由仍只有 `GET /api/health`。`/api/projects`、`/api/objects` 等尚未实现，返回 404/not_found；不存在成功占位响应。
+- Origin 在所有路由之前检查，拒绝请求返回 403/invalid_input。预检仅批准已实现路由的方法；目前仅 `/api/health` 的 GET。共享 CORS 方法清单为 GET、POST、OPTIONS，允许请求头为 Content-Type、Last-Event-ID；POST 业务路由落地后才可批准其预检。其他请求头、路由、方法的预检返回 403/invalid_input。
+- `DecodeJSON[T]` 限制正文为 1 MiB、只接受单个 JSON 对象、拒绝未知字段和任意层级重复键、拒绝尾随 JSON，并以 `UseNumber` 保留数值 token。请求 DTO 通过显式 `validate` 标签声明必填等规则；解析成功后统一执行 validator v10.25.0。嵌套请求必须声明具体 DTO，不能通过 map 或 any 绕过未知字段检查。媒体 multipart 不走此 JSON 入口，后续单独限制。
+- 写操作作用域为 `(project_id, operation, requestId)`；`project_id` 来自查询参数，不能依赖全局当前项目。项目和请求标识使用 1–128 字符的 ASCII 字母、数字、下划线或连字符；不 trim，不接受路径片段。operation 由服务端选择，必填且最多 128 字符。此阶段提供作用域校验，项目是否存在及对象归属检查随 M2.2 业务路由落地。
+- 业务入口应将解析/校验错误映射为 400/invalid_input（正文超限为 413/invalid_input），`store.ErrRequestConflict` 映射为 409/invalid_input；此阶段没有写入 HTTP 路由，因此上述状态由后续业务入口接线。
+- `store.WriteRequest` 在同一 SQL 事务内登记请求、执行写入、保存完成回执；任一步失败同时回滚业务数据和请求记录。输入在存储入口统一规范化：对象键排序、数组顺序保留、数值 token 原样保留、prompt 等字符串内容不 trim。同键同输入重放持久化回执，不调用写入函数；同键不同输入返回冲突。已有未完成记录返回 `ErrRequestPending`，不重新执行；文件投递恢复由后续 journal 服务处理，此 SQL helper 不执行文件 I/O。
+- migration 000003 新增 projects、composition_types、asset_projects、write_requests、file_operations 五张支撑表，沿用计划 SQL；核心五张业务表保持不变。文件投递 journal 仅建表，M2.1 不实现文件投递。

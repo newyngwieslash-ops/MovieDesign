@@ -61,7 +61,7 @@ func run() (runErr error) {
 		return err
 	}
 	defer db.Close()
-	httpServer := &http.Server{Handler: server.Handler(*origin), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	httpServer := &http.Server{Handler: server.New(*origin, db, filepath.Join(*dataDir, "workspace")), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	errorsCh := make(chan error, 2)
 	go func() { errorsCh <- httpServer.Serve(listener) }()
 	actualPort := listener.Addr().(*net.TCPAddr).Port
