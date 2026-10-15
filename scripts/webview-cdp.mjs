@@ -1,0 +1,39 @@
+// Shared real WebView2 CDP transport; Node built-ins only.
+import assert from 'node:assert/strict';
+import { setTimeout as delay } from 'node:timers/promises';
+export async function connect(port, expectedOrigin) {
+  let target;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { const targets = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) }).then(r => r.json()); target = targets.find(t => t.type === 'page' && t.url.startsWith(expectedOrigin)); if (target) break; } catch { /* starting */ }
+    await delay(200);
+  }
+  assert(target, 'MovieDesign WebView did not start');
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
+  let sequence = 0;
+  const pending = new Map(), exceptions = [], requests = [], storageEvents = [];
+  socket.addEventListener('message', ({ data }) => {
+    const message = JSON.parse(data);
+    if (message.method === 'Runtime.exceptionThrown') exceptions.push(message.params);
+    if (message.method === 'Network.requestWillBeSent') requests.push(message.params.request);
+    if (message.method === 'DOMStorage.domStorageItemAdded' || message.method === 'DOMStorage.domStorageItemUpdated') storageEvents.push(message.params);
+    const callback = pending.get(message.id);
+    if (callback) { pending.delete(message.id); callback(message); }
+  });
+  const call = (method, params = {}) => new Promise((resolve, reject) => {
+    const id = ++sequence;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP ${method} timed out`)); }, 15000);
+    pending.set(id, response => { clearTimeout(timer); response.error ? reject(new Error(JSON.stringify(response.error))) : resolve(response.result); });
+    socket.send(JSON.stringify({ id, method, params }));
+  });
+  const evaluate = async expression => {
+    const result = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    assert(!result.exceptionDetails, JSON.stringify(result.exceptionDetails)); return result.result.value;
+  };
+  const wait = async (expression, label = expression) => {
+    for (let attempt = 0; attempt < 100; attempt++) { if (await evaluate(expression)) return; await delay(200); }
+    throw new Error(`Timed out: ${label}; ${await evaluate('document.body.innerText')}`);
+  };
+  await call('Runtime.enable'); await call('Network.enable'); await call('DOMStorage.enable');
+  return { call, evaluate, wait, exceptions, requests, storageEvents, close: () => socket.close() };
+}

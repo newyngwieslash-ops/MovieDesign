@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { advanceUpload, advanceCommit, matchesFile, readOperation, storageKey } from '../desktop/src/features/assets/recovery.ts';
+const intent = { schema: 1, projectID: 'p1', stage: 'upload', uploadID: 'upload-original', commitID: 'commit-original', deliverID: 'deliver-original', file: { name: 'a.png', size: 1, sha256: 'full-content-hash' }, target: { name: 'a.png', baseVersionID: 'base-v', composition: { name: 'work', type: { id: 'type1' }, placements: [{ key: 'file', role: '素材' }] } } };
+test('reload at every boundary retains original intent and exact request bodies', () => {
+  const upload = readOperation(JSON.stringify(intent), 'p1');
+  assert(matchesFile(upload, { name: 'a.png', size: 1 }, 'full-content-hash'));
+  assert(!matchesFile(upload, { name: 'a.png', size: 1 }, 'changed-content'));
+  assert(!matchesFile(upload, { name: 'renamed.png', size: 1 }, 'full-content-hash'));
+  const commit = readOperation(JSON.stringify(advanceUpload(upload, 'projects/p1/staging/a')), 'p1');
+  assert.equal(commit.commitID, intent.commitID);
+  assert.deepEqual(JSON.parse(commit.commitBody), { requestId: intent.commitID, path: 'projects/p1/staging/a' });
+  const delivery = advanceCommit(commit, 'projects/p1/files/a.png');
+  const restarted = readOperation(JSON.stringify(delivery), 'p1');
+  assert.equal(restarted.deliveryBody, delivery.deliveryBody);
+  const body = JSON.parse(restarted.deliveryBody);
+  assert.equal(body.requestId, intent.deliverID);
+  assert.equal(body.output.resources[0].baseVersionId, 'base-v');
+  assert.equal(body.output.resources[0].mode, 'new_version');
+  assert.equal(restarted.uploadID, intent.uploadID);
+  assert.equal(readOperation(null, 'p1'), null);
+  assert.throws(() => readOperation(JSON.stringify(delivery), 'p2'));
+  assert.throws(() => readOperation(JSON.stringify({ ...delivery, deliveryBody: null }), 'p1'));
+  assert.notEqual(storageKey('p1'), storageKey('p2'));
+});

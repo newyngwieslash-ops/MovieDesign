@@ -8,6 +8,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Go vet failed.' }
 } finally { Pop-Location }
 & (Join-Path $PSScriptRoot 'build-gateway.ps1')
+& node --test (Join-Path $PSScriptRoot 'check-m2-recovery.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'M2 import recovery checks failed.' }
 Push-Location (Join-Path $projectRoot 'desktop')
 try {
     & pnpm build

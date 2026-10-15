@@ -1,0 +1,108 @@
+import assert from 'node:assert/strict';
+import { writeFile, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { connect } from './webview-cdp.mjs';
+const [port, evidenceDir, expectedOrigin, phase = 'initial'] = process.argv.slice(2);
+assert(port && evidenceDir && expectedOrigin, 'usage: smoke-m2.mjs <port> <evidence-dir> <origin> [recovery]');
+const cdp = await connect(port, expectedOrigin);
+const { call, evaluate, wait, requests, exceptions, storageEvents } = cdp;
+const request = async (project, path) => evaluate(`fetch('http://127.0.0.1:8001${path}${project ? `${path.includes('?') ? '&' : '?'}project_id=${project}` : ''}').then(async r=>{if(!r.ok)throw new Error(await r.text());return r.json()})`);
+const click = text => evaluate(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()===${JSON.stringify(text)})?.click()`);
+const selectProject = id => evaluate(`(()=>{const el=document.querySelector('#project'); const set=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set;set.call(el,${JSON.stringify(id)});el.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+const create = async name => {
+  await evaluate(`(()=>{const el=document.querySelector('#project-name');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,${JSON.stringify(name)});el.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await evaluate(`document.querySelector('.project-picker form').requestSubmit()`);
+  await wait(`!!document.querySelector('.asset-library') && document.querySelector('#project').selectedOptions[0]?.textContent===${JSON.stringify(name)}`);
+  return evaluate(`document.querySelector('#project').value`);
+};
+async function setFile(selector, path) {
+  const { root } = await call('DOM.getDocument');
+  const { nodeId } = await call('DOM.querySelector', { nodeId: root.nodeId, selector });
+  assert(nodeId, `File input missing: ${selector}`);
+  await call('DOM.setFileInputFiles', { nodeId, files: [path] });
+}
+try {
+  await wait(`document.body.innerText.includes('本地服务已连接')`);
+  assert.equal(await evaluate('location.origin'), expectedOrigin);
+  if (phase === 'initial') {
+    assert(await evaluate(`!!document.querySelector('#project-name')`), 'M2 project creation UI missing');
+    const marker = crypto.randomUUID();
+    await evaluate(`localStorage.setItem('moviedesign.smoke.profile',${JSON.stringify(marker)})`);
+    const project = await create('真实素材验收');
+    const createKey = 'moviedesign.project-create.v1';
+    const createBody = storageEvents.find(event => event.key === createKey)?.newValue;
+    assert(createBody, 'project create intent was not persisted before POST');
+    await evaluate(`localStorage.setItem(${JSON.stringify(createKey)},${JSON.stringify(createBody)})`);
+    await call('Page.reload');
+    await wait(`document.body.innerText.includes('续建项目') && document.querySelector('#project-name').disabled`);
+    assert.equal(await evaluate(`document.querySelector('#project-name').value`), '真实素材验收');
+    await click('续建项目');
+    await wait(`!document.body.innerText.includes('续建项目') && !!document.querySelector('.asset-library')`);
+    assert.equal(requests.filter(r => r.method === 'POST' && new URL(r.url).pathname === '/api/projects').at(-1).postData, createBody);
+    assert.equal((await request(null, '/api/projects')).coverage.total, 1, 'project recovery created a duplicate');
+    const file = join(evidenceDir, 'import.png');
+    await writeFile(file, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1cAAAAASUVORK5CYII=', 'base64'));
+    await setFile('input[aria-label="导入素材"]', file);
+    await wait(`document.body.innerText.includes('导入完成')`);
+    await wait(`Array.from(document.querySelectorAll('.asset-card img')).some(i=>i.complete&&i.naturalWidth===1)`,'actual thumbnail pixels');
+    let versions = await request(project, '/api/versions');
+    assert.equal(versions.items.length, 1);
+    const first = versions.items[0];
+    const bodies = requests.filter(r => r.method === 'POST' && r.url.includes('/api/deliver?')).map(r => r.postData);
+    assert(bodies[0], 'delivery request was not observed');
+    const receipt = await evaluate(`fetch('http://127.0.0.1:8001/api/deliver?project_id=${project}',{method:'POST',headers:{'Content-Type':'application/json'},body:${JSON.stringify(bodies[0])}}).then(r=>r.json())`);
+    assert.equal(receipt.delivery.versions[0].versionId, first.id);
+    assert.equal((await request(project, '/api/versions')).items.length, 1);
+    await setFile('input[aria-label="导入为新版本"]', file);
+    await wait(`document.querySelectorAll('.version-list li').length===2`);
+    versions = await request(project, '/api/versions');
+    assert.equal(versions.items.length, 2);
+    const revision = versions.items.find(v => v.id !== first.id);
+    assert.equal(revision.resource_id, first.resource_id);
+    assert.equal(revision.source_version_id, first.id);
+    assert.equal(await evaluate(`document.querySelector('.object-details').dataset.versionId`), revision.id);
+    const deliveryBody = requests.filter(r => r.method === 'POST' && r.url.includes('/api/deliver?')).at(-1).postData;
+    const wire = JSON.parse(deliveryBody);
+    const other = await create('隔离项目');
+    assert.equal((await request(other, '/api/assets')).items.length, 0);
+    await wait(`document.querySelectorAll('.asset-card').length===0`);
+    await selectProject(project);
+    await wait(`document.querySelectorAll('.asset-card').length===2`);
+    const key = `moviedesign.import.v1.${project}`;
+    const pending = storageEvents.filter(event => event.key === key).map(event => JSON.parse(event.newValue)).find(op => op.deliveryBody === deliveryBody);
+    assert(pending, 'real frozen import operation was not observed before delivery');
+    assert.equal(pending.deliverID, wire.requestId);
+    await evaluate(`localStorage.setItem(${JSON.stringify(key)},${JSON.stringify(JSON.stringify(pending))})`);
+    await call('Page.reload');
+    await wait(`document.body.innerText.includes('结果待确认')`);
+    assert.equal(await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(key)})).deliveryBody`), deliveryBody);
+    await writeFile(join(evidenceDir, 'm2-expected.json'), JSON.stringify({ project, other, first, revision, key, pending, marker }, null, 2));
+    await writeFile(join(evidenceDir, 'm2-before-restart.png'), Buffer.from((await call('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+    console.log(`M2 UI initial passed: upload/commit/deliver, pixels, replay, lineage, isolation, reload. Evidence: ${evidenceDir}`);
+  } else {
+    const expected = JSON.parse(await readFile(join(evidenceDir, 'm2-expected.json'), 'utf8'));
+    assert.equal(await evaluate(`localStorage.getItem('moviedesign.smoke.profile')`), expected.marker, 'test profile was not retained');
+    await wait(`document.body.innerText.includes('结果待确认')`);
+    const stored = await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(expected.key)}))`);
+    assert.equal(stored.deliveryBody, expected.pending.deliveryBody);
+    assert.equal(stored.deliverID, expected.pending.deliverID);
+    assert.equal((await request(expected.project, '/api/versions')).items.length, 2);
+    await click('重新查询/续投递');
+    await wait(`document.body.innerText.includes('导入完成') && !document.body.innerText.includes('结果待确认')`);
+    assert.equal(requests.find(r => r.method === 'POST' && r.url.includes('/api/deliver?')).postData, expected.pending.deliveryBody);
+    const versions = await request(expected.project, '/api/versions');
+    assert.equal(versions.items.length, 2, 'recovery created duplicate version');
+    assert(versions.items.some(v => v.id === expected.first.id));
+    assert(versions.items.some(v => v.id === expected.revision.id && v.source_version_id === expected.first.id));
+    assert.equal((await request(expected.other, '/api/assets')).items.length, 0);
+    await wait(`Array.from(document.querySelectorAll('.asset-card img')).every(i=>i.complete&&i.naturalWidth===1)`);
+    assert.equal(await evaluate(`localStorage.getItem(${JSON.stringify(expected.key)})`), null);
+    await writeFile(join(evidenceDir, 'm2-recovered.png'), Buffer.from((await call('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+    await writeFile(join(evidenceDir, 'm2-renderer.json'), JSON.stringify({ origin: expectedOrigin, profileMarker: expected.marker, versions, requests: requests.filter(r => r.method === 'POST' && r.url.includes('/api/deliver?')), body: await evaluate('document.body.innerText'), exceptions }, null, 2));
+    console.log(`M2 recovery passed: same profile, exact body/ID, two existing versions, independent counts. Evidence: ${evidenceDir}`);
+  }
+  assert.deepEqual(exceptions, [], 'Uncaught renderer exceptions');
+} catch (error) {
+  await writeFile(join(evidenceDir, `m2-failure-${phase}.json`), JSON.stringify({ error: String(error), body: await evaluate('document.body.innerText').catch(() => ''), requests, exceptions }, null, 2));
+  throw error;
+} finally { cdp.close(); }

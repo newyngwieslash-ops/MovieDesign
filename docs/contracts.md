@@ -181,3 +181,46 @@ migration 000004 仅新增支撑表 `deliveries` 与 `delivery_sources`。delive
 M2.4 审查补充：composition.placements 必须提供 1–50 项，省略、null、[] 和超过 50 项均拒绝；每项 key 必须在 resources 中，但并不要求每个 Resource 都被放置（原 parseCompositionOutput/list2 事实）。直接服务构造的 nil/空 placements 同样拒绝。检查来源文件前先检查相交的 pending 文件意图，检查期间来源暂时缺失则重新检查 reservation；最终 prepare 事务的完整源/目标检查保留，临时 source gap 返回 unknown，文件操作完成后原键可续做。unknown 投递使用的 Composition name/type label 在共享 CRUD 更新事务中禁止实际改名；不影响同名 no-op、Composition attributes 更新或 completed 投递目标的普通改名与回执重放。
 
 M2.4 二次审查补充：placements 的 key 必须唯一，公开解码和直接调用使用同一校验；50 项有效边界须对应 50 个不同 key（这些来源可以共享同一路径）。来源检查成功也可能读到尚未提交的 content 替换文件，因此 prepare 事务先检查 source reservation，再比较已登记 Asset 的 status/identity/digest；随后仍检查最终归档目标，避免把应用内合法的替换窗口固化成 blocked。
+
+## M2.5 桌面素材工作台与恢复
+
+继续复用 TanStack Router/Query、M1 gateway metadata/health 及 `gateway.ts` 单一 HTTP 客户端。新增 `api<T>(projectID,path,init):Promise<T>`、`newRequestID()`，失败保留服务端 error 的 code/message/status。没有新增后端接口或更改 M2.1–M2.4 schema。项目列表按 coverage 加载更多；素材、Resource、Composition、Version 按 200 项逐页读至 exhausted，查询键包含 projectID、列表、分页策略，signal 传给 fetch。切换项目重建视图、清空选择并取消旧查询，旧操作只回写原项目。
+
+实际路径：创建/选择项目 → 选文件或拖入 → multipart upload → commit → deliver → 选中完成的对象版本。展示真实 asset name/MIME/dimensions；新版本沿用选中版本的 Resource 与 Composition/type，source_version_id 指向原版本。对象引用保留在 DOM data 属性，可见正文使用名称和版本时间，为 M3 留引用；没有 M3 编辑器或示例素材。
+
+桌面使用已有 API，示例：
+
+```text
+POST /api/projects
+{"requestId":"project-intent-1","action":"create","value":{"name":"宣传片"}}
+→ {"id":"<project>","name":"宣传片","created_at":1792070000000}
+
+POST /api/upload?project_id=<project>
+Content-Type: multipart/form-data; boundary=<browser-generated>
+requestId=upload-intent-1, file=<真实文件字节，原文件名 cover.png>
+→ {"path":"projects/<project>/staging/<staged>/cover.png"}
+
+POST /api/upload/commit?project_id=<project>
+{"requestId":"commit-intent-1","path":"projects/<project>/staging/<staged>/cover.png"}
+→ {"ok":true,"relative":"projects/<project>/files/<asset>/cover.png"}
+
+POST /api/deliver?project_id=<project>
+{"requestId":"deliver-intent-1","sources":[{"key":"file","path":"projects/<project>/files/<asset>/cover.png"}],"output":{"resources":[{"key":"file","mode":"create","name":"cover.png"}],"composition":{"name":"素材作品","type":{"label":"素材"},"placements":[{"key":"file","role":"素材"}]}}}
+→ {"delivery":{"status":"completed","versions":[{"key":"file","resourceId":"<resource>","versionId":"<version>","assetId":"<asset>"}]}}
+```
+
+新版本只将 Resource 输入改成 `{"key":"file","mode":"new_version","name":"cover.png","baseVersionId":"<selected-version>"}`，Composition 使用已有 name 和 type:{id}。HTTP user origin 由服务端固定，前端不添加 origin。unknown 返回 `{"delivery":{"status":"unknown","versions":[],"problem":{"code":"upstream","message":"..."}}}`；blocked 相同结构、status=blocked。unknown 展示“结果待确认”及“重新查询/续投递”，同键同 body POST。blocked 为已知终态，清除记录并展示 problem。上传/提交网络或 HTTP 失败也保留原输入，不自动生成新意图。
+
+每项目最多一条待导入；localStorage key 为 `moviedesign.import.v1.<projectID>`：
+
+```json
+{"schema":1,"projectID":"<project>","stage":"upload","uploadID":"<uuid>","commitID":"<uuid>","deliverID":"<uuid>","file":{"name":"cover.png","size":68,"sha256":"<full-sha256>"},"target":{"name":"cover.png","composition":{"name":"素材作品","type":{"label":"素材"},"placements":[{"key":"file","role":"素材"}]}}}
+```
+
+首次发送前保存三个 ID、完整文件 SHA-256、原名称/大小与目标配置；修订另有 target.baseVersionID。已知上传路径后保存 stage=commit、stagedPath、commitBody；已知提交路径后保存 stage=deliver、committedPath、deliveryBody。两份 Body 都是原始 JSON 字符串，回执丢失或重启后直接重发，不重建、不调用 newRequestID。localStorage 写入失败不会发送对应请求。仅 completed/blocked 回执清除记录；格式损坏保留并阻止覆盖。字节只留内存，上传阶段重启必须重选同文件；名称、大小、完整 SHA-256 相同才沿用 uploadID，服务端仍验证真实内容。超过 256 MiB 在读取前拒绝；WebCrypto 整文件缓冲上限及未来流式升级已用 ponytail 注释标明。
+
+项目选择另存 `moviedesign.project`；不保存 blob、凭据或外部文件路径。缩略图用 `<img crossOrigin="anonymous">` 加载受 Origin 保护的真实 content，SVG 不内联、不用 object/embed。CSP 仅为 img-src/media-src 加入准确 `http://127.0.0.1:8001`，default/script/frame 维持限制，服务端 SVG attachment/sandbox 保留。浏览器不支持的格式不声称有像素预览。
+
+项目创建另以应用级 `moviedesign.project-create.v1` 保存完整原始 POST JSON（requestId/action/value.name），发送前先写入；网络/5xx 等未确认结果保留，刷新/重启显示原名称及“续建项目”，重发同 body。已知 400 验证拒绝或成功回执清除，400 后可修改名称。损坏记录保留并阻止覆盖。真实 smoke 从 DOMStorage 捕获原创建 body，模拟回执丢失后刷新、点击续建，独立列表确认项目总数仍为一。
+
+`scripts/smoke-desktop.ps1 -Mode release -Smoke m2` 使用进程独有 data dir、CDP port、WEBVIEW2_USER_DATA_FOLDER；检查真实子浏览器 command line 的 profile，重启复用该 profile。smoke 在 DOM 表单创建项目，用 DOM.setFileInputFiles 导入 PNG，经真实 UI 完成 upload/commit/deliver/revision，验证 naturalWidth、同请求 receipt、独立版本列表计数、血缘和跨项目隔离。CDP DOMStorage 捕获实际发送前冻结的完整 operation，再播回该已完成意图模拟回执丢失；先刷新再关闭/重启，按钮必须重发相同 POST body/requestId，版本数不增加。没有生产故障注入接口。证据见 milestones.md，运行数据只留 `.runtime/`。
