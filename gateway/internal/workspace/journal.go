@@ -120,6 +120,26 @@ func (s *Service) save(ctx context.Context, p, key string, j *journal) error {
 		return e
 	}
 	defer tx.Rollback()
+	var exists int
+	if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM projects WHERE id=?", p).Scan(&exists); e != nil {
+		return e
+	}
+	if exists == 0 {
+		return missing("Project not found")
+	}
+	if j.Stage == "prepared" {
+		paths := make([]string, 0, len(j.Plan)*2)
+		for _, m := range j.Plan {
+			paths = append(paths, m.Source, m.Target)
+		}
+		rows, err := tx.QueryContext(ctx, pendingFilesQuery, p, key)
+		if err != nil {
+			return err
+		}
+		if e = checkPendingFiles(rows, paths...); e != nil {
+			return e
+		}
+	}
 	if j.Stage == "prepared" && (j.Operation == "delete" || j.Operation == "content") {
 		for _, m := range j.Plan {
 			if !strings.HasPrefix(m.Source, prefix(p)+"files/") {
@@ -181,21 +201,27 @@ func (s *Service) finish(ctx context.Context, p, key string, j *journal, receipt
 	j.Receipt = b
 	return b, nil
 }
+
+const pendingFilesQuery = "SELECT request_id,source FROM file_operations WHERE project_id=? AND request_id<>? AND stage='prepared'"
+
 func (s *Service) busy(ctx context.Context, p, key string, paths ...string) error {
-	rows, e := s.DB.QueryContext(ctx, "SELECT request_id,source FROM file_operations WHERE project_id=? AND request_id<>? AND stage='prepared'", p, key)
+	rows, e := s.DB.QueryContext(ctx, pendingFilesQuery, p, key)
 	if e != nil {
 		return e
 	}
+	return checkPendingFiles(rows, paths...)
+}
+func checkPendingFiles(rows *sql.Rows, paths ...string) error {
 	defer rows.Close()
 	for rows.Next() {
 		var id string
 		var raw sql.NullString
-		if e = rows.Scan(&id, &raw); e != nil {
+		if e := rows.Scan(&id, &raw); e != nil {
 			return e
 		}
 		var moves []move
 		if raw.Valid {
-			if e = json.Unmarshal([]byte(raw.String), &moves); e != nil {
+			if e := json.Unmarshal([]byte(raw.String), &moves); e != nil {
 				return e
 			}
 		}
@@ -634,9 +660,11 @@ func (s *Service) Mutate(ctx context.Context, p, op string, in Input) (json.RawM
 			j.Plan = append(j.Plan, move{Source: tmp, Target: in.Path, Asset: &store.Asset{ID: id}})
 		}
 		j.Stage = "prepared"
-		if e = s.save(ctx, p, in.RequestID, j); e != nil {
-			return nil, e
-		}
+	}
+	// Publish the complete plan and revalidate reservations on recovery before
+	// any filesystem change. Suffix candidates pass through save as well.
+	if e = s.save(ctx, p, in.RequestID, j); e != nil {
+		return nil, e
 	}
 	switch op {
 	case "mkdir":

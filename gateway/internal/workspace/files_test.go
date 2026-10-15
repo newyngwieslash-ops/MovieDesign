@@ -2,8 +2,10 @@ package workspace
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -503,4 +505,101 @@ func TestFilesConcurrentReadHandles(t *testing.T) {
 		t.Fatal("parallel readers must share", e)
 	}
 	defer second.Close()
+}
+
+func TestFilesRenameRespectsPreparedDestinations(t *testing.T) {
+	for _, suffix := range []bool{false, true} {
+		t.Run(fmt.Sprintf("suffix_%v", suffix), func(t *testing.T) {
+			s, p := setup(t)
+			ctx := context.Background()
+			a := put(t, s, p, "source", "a.txt", "source")
+			name := "reserved.txt"
+			target := path.Join(path.Dir(a.Path), name)
+			if suffix {
+				if _, e := s.Mutate(ctx, p, "content", Input{RequestID: "existing", Path: target, Content: "existing"}); e != nil {
+					t.Fatal(e)
+				}
+				target = path.Join(path.Dir(a.Path), "reserved (1).txt")
+			}
+			in := Input{RequestID: "original", Path: target, Content: "original"}
+			j, e := s.load(ctx, p, in.RequestID, "content", in)
+			if e != nil {
+				t.Fatal(e)
+			}
+			j.Stage = "prepared"
+			j.Plan = []move{{Source: prefix(p) + "staging/original/reserved.txt", Target: target, Asset: &store.Asset{ID: uuid.NewString()}}}
+			if e = s.save(ctx, p, in.RequestID, j); e != nil {
+				t.Fatal(e)
+			}
+			_, e = s.Mutate(ctx, p, "rename", Input{RequestID: "rename", Path: a.Path, NewName: name})
+			if !errors.Is(e, store.ErrRequestPending) {
+				t.Errorf("rename must respect reserved destination: %v", e)
+			}
+			f, e := s.Workspace.OpenRegular(p, a.Path)
+			if e != nil {
+				t.Errorf("source moved despite reservation: %v", e)
+			} else {
+				f.Close()
+			}
+			// A rejected suffix must not replace the rename's previously published plan.
+			var plans string
+			e = s.DB.QueryRowContext(ctx, "SELECT source FROM file_operations WHERE project_id=? AND request_id='rename'", p).Scan(&plans)
+			if suffix {
+				if e != nil {
+					t.Fatal(e)
+				}
+				var moves []move
+				if e = json.Unmarshal([]byte(plans), &moves); e != nil {
+					t.Fatal(e)
+				}
+				if moves[0].Target == target {
+					t.Error("reserved suffix was published")
+				}
+			} else if !errors.Is(e, sql.ErrNoRows) {
+				t.Errorf("reserved initial plan published: %v", e)
+			}
+			if _, e = NewService(s.DB, s.Workspace).Mutate(ctx, p, "content", in); e != nil {
+				t.Fatalf("original operation no longer recoverable: %v", e)
+			}
+			f, e = s.Workspace.OpenRegular(p, target)
+			if e != nil {
+				t.Fatal(e)
+			}
+			b, e := io.ReadAll(f)
+			f.Close()
+			if e != nil || string(b) != "original" {
+				t.Fatalf("original bytes %q %v", b, e)
+			}
+		})
+	}
+}
+func TestFilesFirstIntentProjectDeletionInterleaving(t *testing.T) {
+	s, p := setup(t)
+	ctx := context.Background()
+	in := Input{RequestID: "first", Path: prefix(p) + "files/new"}
+	// Pause exactly after initial scope/load, before the first journal transaction.
+	j, e := s.load(ctx, p, in.RequestID, "mkdir", in)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = (store.Objects{DB: s.DB}).Mutate(ctx, p, "projects", store.Mutation{RequestID: "delete", Action: "delete", ID: p}); e != nil {
+		t.Fatal(e)
+	}
+	j.Stage = "prepared"
+	j.Plan = []move{{Target: in.Path, Directory: true}}
+	e = s.save(ctx, p, in.RequestID, j)
+	var domain *store.DomainError
+	if !errors.As(e, &domain) || domain.Code != "not_found" {
+		t.Errorf("first save after project deletion: %v", e)
+	}
+	var count int
+	if e = s.DB.QueryRowContext(ctx, "SELECT count(*) FROM file_operations WHERE project_id=?", p).Scan(&count); e != nil {
+		t.Fatal(e)
+	}
+	if count != 0 {
+		t.Fatalf("dangling journal count %d", count)
+	}
+	if _, e = os.Stat(filepath.Join(s.Workspace.root.Name(), "projects", p)); !errors.Is(e, os.ErrNotExist) {
+		t.Fatalf("filesystem published after deletion: %v", e)
+	}
 }
