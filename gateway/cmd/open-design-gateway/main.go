@@ -75,13 +75,14 @@ func run() (runErr error) {
 	go func() { errorsCh <- httpServer.Serve(listener) }()
 	actualPort := listener.Addr().(*net.TCPAddr).Port
 	slog.Info("gateway_ready", "port", actualPort)
-	go func() { errorsCh <- control.Serve(os.Stdin, os.Stdout, actualPort) }()
+	go func() { errorsCh <- control.Serve(os.Stdin, os.Stdout, actualPort, handler.Health) }()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	select {
 	case err = <-errorsCh:
 	case <-ctx.Done():
 	}
+	handler.BeginShutdown()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if shutdownErr := httpServer.Shutdown(shutdownCtx); shutdownErr != nil {

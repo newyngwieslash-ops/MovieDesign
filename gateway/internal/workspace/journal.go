@@ -145,6 +145,9 @@ func (s *Service) save(ctx context.Context, p, key string, j *journal) error {
 	}
 	if j.Stage == "prepared" && (j.Operation == "delete" || j.Operation == "content") {
 		for _, m := range j.Plan {
+			if e = store.CheckTaskAssetPath(ctx, tx, p, m.Source); e != nil {
+				return e
+			}
 			if !strings.HasPrefix(m.Source, prefix(p)+"files/") {
 				continue
 			}

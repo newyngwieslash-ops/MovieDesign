@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"github.com/google/uuid"
 	"strings"
 )
 
@@ -79,6 +81,9 @@ func checkDeliveryReference(ctx context.Context, tx *sql.Tx, kind, id string) er
 // checkDeliveryRename protects only effective target name changes while an
 // unknown delivery depends on them. Attributes and completed targets stay editable.
 func checkDeliveryRename(ctx context.Context, tx *sql.Tx, kind, id, next string) error {
+	if e := checkTaskRename(ctx, tx, kind, id, next); e != nil {
+		return e
+	}
 	exists, e := deliveryTables(ctx, tx)
 	if e != nil || !exists {
 		return e
@@ -106,4 +111,65 @@ func checkDeliveryRename(ctx context.Context, tx *sql.Tx, kind, id, next string)
 		return ErrRequestPending
 	}
 	return nil
+}
+
+// DeliveryTarget is the stable reservation shared by task admission and delivery.
+// New identities are allocated but not fabricated as rows.
+type DeliveryTarget struct {
+	CompositionID  string `json:"composition_id"`
+	TypeID         string `json:"type_id"`
+	TypeLabel      string `json:"type_label"`
+	Name           string `json:"name"`
+	NewType        bool   `json:"new_type"`
+	NewComposition bool   `json:"new_composition"`
+}
+
+func ResolveDeliveryTarget(ctx context.Context, tx *sql.Tx, p, typeID, label, name string) (target DeliveryTarget, e error) {
+	if e = CheckTaskTargetReservation(ctx, tx, p, typeID, label, name); e != nil {
+		return
+	}
+	target.Name = name
+	if typeID != "" {
+		e = tx.QueryRowContext(ctx, "SELECT id,label FROM composition_types WHERE id=? AND project_id=?", typeID, p).Scan(&target.TypeID, &target.TypeLabel)
+		if e != nil {
+			return
+		}
+		if label != "" && label != target.TypeLabel {
+			return target, invalid("Composition type id and label disagree")
+		}
+	} else {
+		e = tx.QueryRowContext(ctx, "SELECT id,label FROM composition_types WHERE project_id=? AND label=?", p, label).Scan(&target.TypeID, &target.TypeLabel)
+		if errors.Is(e, sql.ErrNoRows) {
+			target.TypeID = uuid.NewString()
+			target.TypeLabel = label
+			target.NewType = true
+			e = nil
+		} else if e != nil {
+			return
+		}
+	}
+	rows, e := tx.QueryContext(ctx, "SELECT id FROM compositions WHERE project_id=? AND type_id=? AND name=?", p, target.TypeID, name)
+	if e != nil {
+		return
+	}
+	for rows.Next() {
+		if target.CompositionID != "" {
+			rows.Close()
+			return target, invalid("Ambiguous composition target")
+		}
+		if e = rows.Scan(&target.CompositionID); e != nil {
+			rows.Close()
+			return
+		}
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return
+	}
+	if target.CompositionID == "" {
+		target.CompositionID = uuid.NewString()
+		target.NewComposition = true
+	}
+	return
 }

@@ -317,51 +317,12 @@ func (s *Service) prepare(ctx context.Context, p string, in Request, j *journal)
 	if n == 0 {
 		return missing("Project not found")
 	}
-	typ := in.Output.Composition.Type
-	if typ.ID != "" {
-		e = tx.QueryRowContext(ctx, "SELECT id,label FROM composition_types WHERE id=? AND project_id=?", typ.ID, p).Scan(&pl.TypeID, &pl.TypeLabel)
-		if errors.Is(e, sql.ErrNoRows) {
-			return missing("Composition type not found")
-		}
-		if e != nil {
-			return e
-		}
-		if typ.Label != "" && typ.Label != pl.TypeLabel {
-			return invalid("Composition type id and label disagree")
-		}
-	} else {
-		e = tx.QueryRowContext(ctx, "SELECT id,label FROM composition_types WHERE project_id=? AND label=?", p, typ.Label).Scan(&pl.TypeID, &pl.TypeLabel)
-		if errors.Is(e, sql.ErrNoRows) {
-			pl.TypeID = uuid.NewString()
-			pl.TypeLabel = typ.Label
-			pl.NewType = true
-		} else if e != nil {
-			return e
-		}
-	}
-	rows, e := tx.QueryContext(ctx, "SELECT id FROM compositions WHERE project_id=? AND type_id=? AND name=?", p, pl.TypeID, pl.Name)
+	target, e := store.ResolveDeliveryTarget(ctx, tx, p, in.Output.Composition.Type.ID, in.Output.Composition.Type.Label, pl.Name)
 	if e != nil {
 		return e
 	}
-	for rows.Next() {
-		if pl.CompositionID != "" {
-			rows.Close()
-			return invalid("Ambiguous composition target")
-		}
-		if e = rows.Scan(&pl.CompositionID); e != nil {
-			rows.Close()
-			return e
-		}
-	}
-	e = rows.Err()
-	rows.Close()
-	if e != nil {
-		return e
-	}
-	if pl.CompositionID == "" {
-		pl.CompositionID = uuid.NewString()
-		pl.NewComposition = true
-	}
+	pl.TypeID, pl.TypeLabel, pl.CompositionID = target.TypeID, target.TypeLabel, target.CompositionID
+	pl.NewType, pl.NewComposition = target.NewType, target.NewComposition
 	allocated := map[string]plannedSource{}
 	for _, src := range in.Sources {
 		ps, ok := allocated[src.Path]

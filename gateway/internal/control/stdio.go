@@ -29,7 +29,11 @@ type response struct {
 }
 
 // EOF also shuts down the gateway: the owning shell has gone away.
-func Serve(in io.Reader, out io.Writer, port int) error {
+func Serve(in io.Reader, out io.Writer, port int, snapshots ...func() server.Health) error {
+	health := server.Ready
+	if len(snapshots) > 0 {
+		health = snapshots[0]
+	}
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 4096), 64*1024)
 	enc := json.NewEncoder(out)
@@ -52,7 +56,7 @@ func Serve(in io.Reader, out io.Writer, port int) error {
 				case "gateway.info":
 					resp.Result = map[string]int{"port": port}
 				case "gateway.health":
-					resp.Result = server.Ready()
+					resp.Result = health()
 				case "gateway.shutdown":
 					resp.Result = map[string]bool{"ok": true}
 					stop = true

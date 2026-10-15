@@ -297,3 +297,50 @@ func TestCanvasExactEnumAdmission(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskReferencesAndCanvasOutputs(t *testing.T) {
+	s, p, q := objectFixture(t)
+	ctx := context.Background()
+	typ := objectID(t, mutateObject(t, s, p, "composition_types", "type", "create", "", `{"label":"Shots"}`))
+	cid := objectID(t, mutateObject(t, s, p, "compositions", "comp", "create", "", `{"type_id":"`+typ+`","name":"Shot"}`))
+	rid := objectID(t, mutateObject(t, s, p, "resources", "res", "create", "", `{"composition_id":"`+cid+`"}`))
+	vid := objectID(t, mutateObject(t, s, p, "versions", "ver", "create", "", `{"resource_id":"`+rid+`"}`))
+	_, e := s.DB.Exec(`INSERT INTO tasks(id,project_id,request_id,status,frozen_input_json,provider_json,view_json,created_at,updated_at,current_attempt)VALUES('task',?,'task','waiting_user','{}','{}','{}',1,1,1)`, p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = s.DB.Exec("INSERT INTO task_attempts(task_id,attempt,state,created_at)VALUES('task',1,'billing',1)")
+	if e != nil {
+		t.Fatal(e)
+	}
+	source := `{"composition_id":"` + cid + `","type_id":"` + typ + `","ordinal":1}`
+	_, e = s.DB.Exec("INSERT INTO task_outputs(task_output_key,task_id,attempt,output_key,role,state,version_id,source_json)VALUES('opaque','task',1,'image','image','declared',?,?)", vid, source)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Mutate(ctx, p, "versions", Mutation{RequestID: "delete", Action: "delete", ID: vid}); e == nil {
+		t.Fatal("task output version deleted")
+	}
+	n := canvasFrame("n", 0)
+	delete(n, "title")
+	delete(n, "collapsed")
+	n["kind"] = "composition"
+	n["compositionId"] = cid
+	n["draft"] = nil
+	n["activeItem"] = map[string]any{"type": "task-output", "taskId": "task", "outputKey": "image"}
+	c := Canvas{DB: s.DB}
+	if _, e = c.Execute(ctx, p, canvasInput("taskref", 0, nil, n)); e != nil {
+		t.Fatal("durable task output unavailable", e)
+	}
+	if _, e = c.Execute(ctx, q, canvasInput("foreign", 0, nil, n)); e == nil {
+		t.Fatal("cross project task ref accepted")
+	}
+	out, e := c.Content(ctx, p, []byte(`{"compositionIds":["`+cid+`"]}`))
+	if e != nil {
+		t.Fatal(e)
+	}
+	outputs := out["items"].([]any)[0].(map[string]any)["taskOutputs"].([]any)
+	if len(outputs) != 1 {
+		t.Fatalf("missing task output projection: %v", outputs)
+	}
+}

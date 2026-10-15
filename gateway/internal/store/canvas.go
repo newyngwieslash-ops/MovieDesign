@@ -717,12 +717,22 @@ func checkCanvasReferences(ctx context.Context, tx *sql.Tx, p string, d CanvasDo
 	if e := checkCanvasPairs(ctx, tx, v); e != nil {
 		return nil, e
 	}
+	if e := checkTaskOutputPairs(ctx, tx, p, v); e != nil {
+		return nil, e
+	}
+	if e := checkTaskOutputPairs(ctx, tx, p, undo); e != nil {
+		return nil, e
+	}
 	refs := references(v)
 	canvasRefs(undo, refs)
 	for kind, ids := range refs {
 		for id := range ids {
 			if kind == "tasks" {
-				return nil, canvasError(400, "CANVAS_V3_ITEM_UNAVAILABLE", "Task does not exist; task storage arrives in M4")
+				var exists string
+				if e := tx.QueryRowContext(ctx, "SELECT id FROM tasks WHERE id=? AND project_id=?", id, p).Scan(&exists); e != nil {
+					return nil, canvasError(400, "CANVAS_V3_ITEM_UNAVAILABLE", "Task not found in this project")
+				}
+				continue
 			}
 			if _, e := getObject(ctx, tx, p, kind, id); e != nil {
 				return nil, canvasError(400, "CANVAS_V3_ITEM_UNAVAILABLE", "Reference not found in this project")
@@ -740,6 +750,17 @@ func checkCanvasReferences(ctx context.Context, tx *sql.Tx, p string, d CanvasDo
 			}
 			r := v.(map[string]any)
 			if r["type"] == "generation-request" {
+				return nil
+			}
+			if r["type"] == "task-output" {
+				var n int
+				e := tx.QueryRowContext(ctx, "SELECT count(*) FROM task_outputs o JOIN tasks t ON t.id=o.task_id LEFT JOIN versions v ON v.id=o.version_id WHERE t.id=? AND t.project_id=? AND o.attempt=t.current_attempt AND o.output_key=? AND json_extract(o.source_json,'$.composition_id')=? AND (?='' OR json_extract(o.source_json,'$.resource_id')=?)", r["taskId"], p, r["outputKey"], cid, member, member).Scan(&n)
+				if e != nil {
+					return e
+				}
+				if n != 1 {
+					return canvasInvalid("Task output does not belong to selected composition/member")
+				}
 				return nil
 			}
 			if r["type"] != "version" {
@@ -1028,7 +1049,17 @@ func compositionContent(ctx context.Context, tx *sql.Tx, p, id string) (any, err
 		}
 		resources[rid] = r
 	}
-	return map[string]any{"compositionId": id, "state": "ready", "revision": revision, "title": name, "typeId": typ, "typeLabel": label, "members": members, "taskOutputs": []any{}, "protected": false, "resources": resources}, nil
+	outputs, e := taskOutputContent(ctx, tx, p, id)
+	if e != nil {
+		return nil, e
+	}
+	var protected bool
+	if len(outputs) > 0 {
+		if e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tasks t JOIN task_outputs o ON o.task_id=t.id WHERE t.project_id=? AND t.status IN ('accepted','running','waiting_user','unknown') AND json_extract(o.source_json,'$.composition_id')=?)`, p, id).Scan(&protected); e != nil {
+			return nil, e
+		}
+	}
+	return map[string]any{"compositionId": id, "state": "ready", "revision": revision, "title": name, "typeId": typ, "typeLabel": label, "members": members, "taskOutputs": outputs, "protected": protected, "resources": resources}, nil
 }
 func resourceContent(ctx context.Context, tx *sql.Tx, p, id string) (any, error) {
 	r := map[string]any{"resourceId": id, "name": "", "kind": "file", "currentVersionId": nil, "availability": "missing", "versions": []any{}}

@@ -331,6 +331,9 @@ func createObject(ctx context.Context, tx *sql.Tx, p, kind string, raw json.RawM
 		if e != nil {
 			return nil, invalid(e.Error())
 		}
+		if e = CheckTaskTargetReservation(ctx, tx, p, "", v.Label, ""); e != nil {
+			return nil, e
+		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO composition_types(id,project_id,label) VALUES(?,?,?) ON CONFLICT(project_id,label) DO NOTHING`, id, p, v.Label)
 		if err == nil {
 			err = tx.QueryRowContext(ctx, `SELECT id FROM composition_types WHERE project_id=? AND label=?`, p, v.Label).Scan(&id)
@@ -339,6 +342,9 @@ func createObject(ctx context.Context, tx *sql.Tx, p, kind string, raw json.RawM
 		v, e := DecodeValue[compositionValue](raw)
 		if e != nil {
 			return nil, invalid(e.Error())
+		}
+		if e = CheckTaskTargetReservation(ctx, tx, p, v.TypeID, "", v.Name); e != nil {
+			return nil, e
 		}
 		if e = jsonText(v.Attributes); e != nil {
 			return nil, e
@@ -510,6 +516,9 @@ func updateObject(ctx context.Context, tx *sql.Tx, p, kind, id string, raw json.
 }
 
 func deleteObject(ctx context.Context, tx *sql.Tx, kind, id string) (json.RawMessage, error) {
+	if e := checkTaskReference(ctx, tx, kind, id); e != nil {
+		return nil, e
+	}
 	if e := checkCanvasReference(ctx, tx, kind, id); e != nil {
 		return nil, e
 	}
