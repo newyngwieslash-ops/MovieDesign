@@ -79,7 +79,7 @@ func TestRequestPreflight(t *testing.T) {
 		r.Header.Set("Access-Control-Request-Method", tc.method)
 		r.Header.Set("Access-Control-Request-Headers", tc.headers)
 		w := httptest.NewRecorder()
-		New("http://tauri.localhost", nil, t.TempDir()).ServeHTTP(w, r)
+		newTestServer(t, "http://tauri.localhost", nil, t.TempDir()).ServeHTTP(w, r)
 		if w.Code != tc.want {
 			t.Fatalf("%s %s: %d", tc.method, tc.headers, w.Code)
 		}
@@ -92,7 +92,7 @@ func TestRequestRejectedRoutesDoNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	handler := New("http://tauri.localhost", db, t.TempDir())
+	handler := newTestServer(t, "http://tauri.localhost", db, t.TempDir())
 	for _, tc := range []struct {
 		method, path, origin, preflight string
 		status                          int

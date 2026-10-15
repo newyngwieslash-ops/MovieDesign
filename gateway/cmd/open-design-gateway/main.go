@@ -61,7 +61,16 @@ func run() (runErr error) {
 		return err
 	}
 	defer db.Close()
-	httpServer := &http.Server{Handler: server.New(*origin, db, filepath.Join(*dataDir, "workspace")), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	workspacePath := filepath.Join(*dataDir, "workspace")
+	if err = os.MkdirAll(workspacePath, 0700); err != nil {
+		return err
+	}
+	handler, err := server.New(*origin, db, workspacePath)
+	if err != nil {
+		return err
+	}
+	defer handler.Close()
+	httpServer := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	errorsCh := make(chan error, 2)
 	go func() { errorsCh <- httpServer.Serve(listener) }()
 	actualPort := listener.Addr().(*net.TCPAddr).Port

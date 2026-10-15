@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
 )
 
 type Health struct {
@@ -27,7 +28,22 @@ func reject(w http.ResponseWriter, status int, code, message string) {
 	respond(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
 }
 
-func New(origin string, db *sql.DB, workspaceRoot string) http.Handler {
+type Server struct {
+	http.Handler
+	workspace *workspace.Workspace
+}
+
+func (s *Server) Close() error { return s.workspace.Close() }
+func New(origin string, db *sql.DB, workspaceRoot string) (*Server, error) {
+	ws, err := workspace.Open(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	srv := &Server{workspace: ws}
+	srv.Handler = newHandler(origin, db, workspace.NewService(db, ws))
+	return srv, nil
+}
+func newHandler(origin string, db *sql.DB, files *workspace.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -41,18 +57,22 @@ func New(origin string, db *sql.DB, workspaceRoot string) http.Handler {
 		kind := objectKind(r.URL.Path)
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := (r.URL.Path == "/api/health" && method == "GET") || (kind != "" && (method == "GET" || method == "POST"))
+			allowed := (r.URL.Path == "/api/health" && method == "GET") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID, Range")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		if fileRoute(r.URL.Path) {
+			serveFiles(w, r, files)
+			return
+		}
 		if kind != "" {
-			serveObjects(w, r, store.Objects{DB: db}, kind)
+			serveObjects(w, r, store.Objects{DB: db}, kind, files)
 			return
 		}
 		if r.URL.Path != "/api/health" {
@@ -72,7 +92,7 @@ func allowedPreflightHeaders(values []string) bool {
 	for _, value := range values {
 		for _, header := range strings.Split(value, ",") {
 			switch strings.ToLower(strings.TrimSpace(header)) {
-			case "", "content-type", "last-event-id":
+			case "", "content-type", "last-event-id", "range":
 			default:
 				return false
 			}

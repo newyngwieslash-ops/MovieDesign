@@ -17,7 +17,7 @@ func TestObjectsHTTPReplayAndBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	h := New("http://tauri.localhost", db, t.TempDir())
+	h := newTestServer(t, "http://tauri.localhost", db, t.TempDir())
 	call := func(method, path, body, origin string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -127,7 +127,7 @@ func TestObjectsHTTPEmptyProjectScopeAndVersionOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	h := New("http://tauri.localhost", db, t.TempDir())
+	h := newTestServer(t, "http://tauri.localhost", db, t.TempDir())
 	call := func(method, path, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.Header.Set("Origin", "http://tauri.localhost")

@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
 )
 
 func objectKind(path string) string {
@@ -42,7 +43,7 @@ func objectError(w http.ResponseWriter, err error) {
 		reject(w, 502, "upstream", "Database operation failed")
 	}
 }
-func serveObjects(w http.ResponseWriter, r *http.Request, s store.Objects, kind string) {
+func serveObjects(w http.ResponseWriter, r *http.Request, s store.Objects, kind string, files *workspace.Service) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		w.Header().Set("Allow", "GET, POST")
 		reject(w, 405, "invalid_input", "Method not allowed")
@@ -93,6 +94,30 @@ func serveObjects(w http.ResponseWriter, r *http.Request, s store.Objects, kind 
 			p = "_app"
 		} else if p == "" {
 			reject(w, 400, "invalid_input", "project_id is required")
+			return
+		}
+		if kind == "assets" && input.Action == "create" {
+			if input.ID != "" {
+				reject(w, 400, "invalid_input", "create does not accept id")
+				return
+			}
+			value, e := store.DecodeValue[struct {
+				Path string `json:"path" validate:"required"`
+			}](input.Value)
+			if e != nil {
+				reject(w, 400, "invalid_input", e.Error())
+				return
+			}
+			if files == nil {
+				reject(w, 503, "upstream", "Workspace unavailable")
+				return
+			}
+			out, e := files.Register(r.Context(), p, input.RequestID, value.Path)
+			if e != nil {
+				fileError(w, e)
+				return
+			}
+			respond(w, 200, out)
 			return
 		}
 		out, e := s.Mutate(r.Context(), p, kind, input)

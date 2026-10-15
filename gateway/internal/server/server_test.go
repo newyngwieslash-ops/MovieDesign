@@ -26,7 +26,7 @@ func TestOriginAndHealthContract(t *testing.T) {
 				r.Header.Set("Origin", tc.origin)
 			}
 			w := httptest.NewRecorder()
-			New("http://tauri.localhost", nil, t.TempDir()).ServeHTTP(w, r)
+			newTestServer(t, "http://tauri.localhost", nil, t.TempDir()).ServeHTTP(w, r)
 			if w.Code != tc.status {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
@@ -51,7 +51,7 @@ func TestOriginAndHealthContract(t *testing.T) {
 		r.Header.Set("Origin", origin)
 		r.Header.Set("Access-Control-Request-Method", "GET")
 		w := httptest.NewRecorder()
-		New("http://tauri.localhost", nil, t.TempDir()).ServeHTTP(w, r)
+		newTestServer(t, "http://tauri.localhost", nil, t.TempDir()).ServeHTTP(w, r)
 		want := 403
 		if origin == "http://tauri.localhost" {
 			want = 204
@@ -64,7 +64,7 @@ func TestOriginAndHealthContract(t *testing.T) {
 	r.Header.Add("Origin", "http://tauri.localhost")
 	r.Header.Add("Origin", "https://evil.example")
 	w := httptest.NewRecorder()
-	New("http://tauri.localhost", nil, t.TempDir()).ServeHTTP(w, r)
+	newTestServer(t, "http://tauri.localhost", nil, t.TempDir()).ServeHTTP(w, r)
 	if w.Code != 403 {
 		t.Fatal("duplicate Origin accepted")
 	}

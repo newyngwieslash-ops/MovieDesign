@@ -125,3 +125,35 @@ Origin 校验针对浏览器 CSRF；curl 或本机程序可以伪造 Origin。M1
 M2.2 **未完成文件登记**：`POST /api/assets` create 返回明确错误，须经 M2.3 `/api/upload` 与 `/api/upload/commit` 实际验证受管普通文件并采集指纹；不接受客户端伪造的 active 资产、路径或哈希。M2.2 asset delete 只标 missing，不移动或物理删除文件。
 
 后续新增引用必须在相应事务服务增加删除保护：M2.4 delivery journal 已预分配/记录的对象引用；M3 canvas 当前版本选择；M4 task 输出/版本引用；M6 pipeline 血缘。当前这些表尚未创建，M2.2 不冒称已实现它们的引用检查，也不修改核心五表。
+
+## M2.3 工作区文件、登记与恢复
+
+已将用户允许的 Go 升级提前到此任务：`go 1.25.0 / toolchain go1.25.8`，CGO 仍为 0。Windows 是本阶段受测平台。`server.New(origin,db,workspaceRoot) (*Server,error)` 现在实际打开工作区；目录不存在、不是目录或不安全时失败。`Server` 实现 http.Handler 与 Close；主程序创建可信工作区目录，HTTP drain 后关闭工作区，再关闭 DB。
+
+所有文件接口要求 `project_id`，所有写入要求 `requestId`；严格检查每个接口自己的字段、重复查询、Origin。新增 Range 预检允许头。错误保持统一五种 code；Range 错误也返回结构化 JSON。路径统一是 workspace 相对、正斜线格式 `projects/<project>/files/...`，staging 返回的路径仅供 commit。公开 list/content/rename/delete/copy/mkdir 不访问 staging/recycle。
+
+| 接口 | 输入 | 成功输出 |
+| --- | --- | --- |
+| POST /api/upload | multipart 单 file 与 requestId，任意顺序，默认上限 256 MiB | `{path}` |
+| POST /api/upload/commit | `{requestId,path}` | `{ok:true,relative}` |
+| GET /api/files/list | type、sort、offset、limit；type=all/image/video/audio/document，sort=time/name | `{files,folders,coverage:{total,next_offset,exhausted}}` |
+| GET /api/files/content | path；支持 Range | 流式文件内容，HTML/SVG attachment + sandbox |
+| POST /api/files/content | `{requestId,path,content,unique?}`；content 必填但可空 | `{ok:true}` |
+| POST /api/files/mkdir | `{requestId,path}` | `{ok:true}` |
+| POST /api/files/rename | `{requestId,path,new_name}` | `{ok:true,new_path,new_name}` |
+| POST /api/files/copy | `{requestId,paths,target}`，target 是现有目录 | `{ok:true}` |
+| POST /api/files/delete | `{requestId,paths}` | `{ok:true}` |
+
+list offset 默认0、limit默认50且1–200，文件按mtime降序或name排序；folders返回已观察到的目录。文件条目是name/path/type/folder/size/url/mtime。content POST 是用户明确的原 PUT 适配：只支持 .txt/.md/.json/.csv/.yaml/.yml 文档。unique=true 遇到已有文件拒绝；省略/false 允许替换无版本引用的文件。任何 Version 引用的路径拒绝覆盖并指向 deliver/document_write。替换先创建新物理文件和资产 ID，旧文件移动到 recycle 并标 missing；不会就地 truncate。delete 同样先检查全部路径和引用，再移动至私有回收目录，标 missing；不物理删除历史。rename 支持目录、保留文件 identity 和所有后代 asset ID，SQL 原子更新所有后代路径；目标冲突使用 `name (n).ext`，原生无覆盖发布。copy 仅支持普通文件；目标冲突拒绝，不覆盖；目录 copy 明确拒绝。
+
+`POST /api/assets` create 已从 M2.2 的拒绝升级为 `{requestId,action:"create",value:{path}}`。共享 `workspace.Service.Register` 检查已发布的同项目普通文件，采集真实 metadata/fingerprint，再在事务中登记 assets+asset_projects；已登记同path、identity和完整内容相同才返回既有asset，不按相似内容合并独立身份。size/inode/hash/MIME 等客户端字段被拒绝。asset update/delete 继续走 Objects；待完成文件操作保护同样在其 SQL 事务内执行。新建 Version 的同事务保护避免与删除/替换竞争。
+
+文件层 `workspace.Open(root)(*Workspace,error)`、`Close`、`OpenRegular(projectID,relative)`；业务层 `NewService(db,workspace)`、`Stage(ctx,projectID,requestID,name,reader)`、`Commit(ctx,projectID,requestID,stagedPath)(store.Asset,error)`、`Register`、`Mutate`、`List`、`OpenContent`。M2.4 可复用 Stage/Commit 的受管归档原语和 OpenRegular/Fingerprint，不能让 agent 暴露任意外部文件写入口。
+
+`Fingerprint(file,full)` 返回真实 size/mtime_ms、Windows VolumeSerialNumber + FileIndexHigh/Low 的64位组合（inode以int64保存相同位模式；不是128位FILE_ID_INFO），quick_hash 是首4MiB的XXH3-64固定16位hex，full=true时计算全文件同算法。公开asset的full_hash按需登记，不因每次读取预览而写入；journal也使用完整XXH3-64 digest。仅同size/mtime绝不代表相同内容。MIME来自字节探测，PNG/JPEG/GIF尺寸来自图片header；未实现格式的尺寸/时长为null。
+
+现有 file_operations 表不改：主键(project_id,request_id)，operation+canonical input_json必须一致，source是typed move数组（source/target/dev/inode/digest/asset/directory及temporary identity），target是目标路径JSON数组，receipt是精确响应。阶段 uploading→uploaded→completed，其他操作 prepared→completed；multipart内部spool完成清理后retired。每次文件动作前保存计划，完成后的资产SQL与receipt同事务；文件I/O不在SQL事务中。中断的同请求恢复原预分配identity/目标；completed先重放旧receipt，不重查已迁走的源。失败的私有临时文件仅用记录identity的句柄删除；创建后但identity落库前崩溃的未知临时文件留待人工/未来GC，绝不按路径误删。
+
+Windows安全边界：持有os.Root打开可信根，逐级相对句柄打开项目/父目录；拒绝reparse/junction、hardlink、非disk/非普通文件，拒绝绝对路径、UNC、ADS、设备名、尾点/空格及大小写/8.3别名。持有父目录链直到创建/移动完成且禁止外部delete-sharing；待改源有DELETE权限并在同句柄重新检查identity。NtSetInformationFile(FileRenameInformation) ReplaceIfExists=false确保原子无覆盖。测试实证外部重命名被拒绝、自有句柄重命名成功。具有相同OS权限的外部进程仍可在请求之间改内容；操作会按identity/digest拒绝异常恢复，应用不把该类篡改默认为新合法资产。
+
+并发上限：单服务互斥串行文件意图；单gateway实例持有该服务。批量在动作前验证所有输入；中途外部故障时journal保留已完成部分、同键续做，不宣称跨文件系统原子回滚。M2.4仍须在delivery_sources创建时加双向pending保护：文件rename/delete/content拒绝破坏recoverable source/archive路径，delivery登记拒绝与prepared file操作相交；同时保护pending delivery对象引用。此任务没有提前创建delivery表。

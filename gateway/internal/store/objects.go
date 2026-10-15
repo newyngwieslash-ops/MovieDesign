@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -378,6 +379,9 @@ func createObject(ctx context.Context, tx *sql.Tx, p, kind string, raw json.RawM
 			}
 		}
 		if v.AssetID != nil {
+			if e = CheckAssetFilePending(ctx, tx, *v.AssetID); e != nil {
+				return nil, e
+			}
 			var status string
 			if e = tx.QueryRowContext(ctx, `SELECT status FROM assets WHERE id=?`, *v.AssetID).Scan(&status); e != nil {
 				return nil, e
@@ -459,6 +463,9 @@ func updateObject(ctx context.Context, tx *sql.Tx, p, kind, id string, raw json.
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE resources SET description=? WHERE id=?`, v.Description, id)
 	case "assets":
+		if e := CheckAssetFilePending(ctx, tx, id); e != nil {
+			return nil, e
+		}
 		v, e := DecodeValue[assetUpdate](raw)
 		if e != nil {
 			return nil, invalid(e.Error())
@@ -514,6 +521,9 @@ func deleteObject(ctx context.Context, tx *sql.Tx, kind, id string) (json.RawMes
 		args = []any{id}
 		statement = `DELETE FROM versions WHERE id=?`
 	case "assets":
+		if e := CheckAssetFilePending(ctx, tx, id); e != nil {
+			return nil, e
+		}
 		query = `SELECT count(*) FROM versions WHERE asset_id=?`
 		args = []any{id}
 		statement = `UPDATE assets SET status='missing',updated_at=? WHERE id=?`
@@ -535,4 +545,43 @@ func deleteObject(ctx context.Context, tx *sql.Tx, kind, id string) (json.RawMes
 		return nil, err
 	}
 	return json.RawMessage(fmt.Sprintf(`{"id":%q,"deleted":true}`, id)), nil
+}
+
+// CheckAssetFilePending is SQL-only and must run inside the same transaction as
+// creation of a Version or an asset metadata/delete mutation.
+func CheckAssetFilePending(ctx context.Context, tx *sql.Tx, id string) error {
+	var p, v string
+	if e := tx.QueryRowContext(ctx, "SELECT ap.project_id,a.path FROM assets a JOIN asset_projects ap ON ap.asset_id=a.id WHERE a.id=?", id).Scan(&p, &v); e != nil {
+		return e
+	}
+	rows, e := tx.QueryContext(ctx, "SELECT source FROM file_operations WHERE project_id=? AND stage='prepared'", p)
+	if e != nil {
+		return e
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw sql.NullString
+		if e = rows.Scan(&raw); e != nil {
+			return e
+		}
+		if !raw.Valid {
+			continue
+		}
+		var plans []struct {
+			Source string `json:"source"`
+			Target string `json:"target"`
+		}
+		if e = json.Unmarshal([]byte(raw.String), &plans); e != nil {
+			return e
+		}
+		for _, m := range plans {
+			for _, x := range []string{m.Source, m.Target} {
+				a, b := strings.ToLower(v), strings.ToLower(x)
+				if b != "" && (a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")) {
+					return ErrRequestPending
+				}
+			}
+		}
+	}
+	return rows.Err()
 }
