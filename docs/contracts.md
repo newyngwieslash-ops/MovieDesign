@@ -293,3 +293,33 @@ CanvasWorkspace 与 ImageEditor/EditorHistoryManager 独立。节点 position �
 写前将完整 body/requestId/expectedRevision 存 localStorage `moviedesign.canvas.pending.v1.<project>`；本机记录同时冻结并校验操作 mode（normal/undo/redo），首次提交与显式续确认均按该模式归属回执 inverse，mode 不进入 HTTP body。重启只显示继续按钮，同 body/key 显式确认。旧版缺 mode 的记录仍可原样确认，但清空两种历史快捷操作；非法 mode 保留原记录并禁止提交。未知网络/5xx 保留记录，4xx 已知拒绝刷新后要求重新编辑，不自动改 body 重试。响应接受要求组件仍属于同项目且 revision 不倒退，清理记录比较完整前驱值。普通文件/PNG 导出仍由原 AssetLibrary 处理，其 IDB 字节和用户选择 revision 保护保持。
 
 图像/video/audio 均 anonymous CORS；文本/Markdown 以 `<pre>` 原样安全显示，不执行 HTML。文本预览限 1 MiB；其他文件展示元数据。视图内图片可进入既有编辑器，保存产生同 Resource 不可变新 Version。基础属性、画框折叠/颜色、局部位置/尺寸/层级、版本切换和一步画布 undo/redo可用；持久 effects 保留服务端 undo，但 UI 历史栈本次仅一层且重启后不恢复快捷按钮。
+
+## M4.1 自定义供应商设置（2026-10-16）
+
+本节为用户确认的 BYOK 移植新增面，不冒称原产品账户/钱包 API。原恢复资料 `analysis-docs/01-架构与技术栈.md:286` 记录云端 token 注入，`06-复现差距分析.md:81` 记录 provider 云配置；本实现使用用户自行配置的本地/云端已知协议模板，不读取原应用凭据。
+
+`GET /api/providers` 返回 `{items:[{config,has_key,default_for}]}`。`POST /api/providers` 使用应用级 `_app/providers/requestId`，不接受 project_id 或其他 query。必须精确 Origin；全部响应 no-store。仅有以下显式 action：
+
+| action | body（除 action 外） | 行为 |
+|---|---|---|
+| create/update | requestId, config, 可选 key/remove_key | 创建/完整替换配置；update 不能改变 kind/protocol |
+| select | requestId, id | 将 enabled 配置设为其 image/video 用途的唯一默认 |
+| disable | requestId, id | 停用并撤销默认选择 |
+| delete | requestId, id | 软删除、隐藏、停用、撤销默认，保留冻结版本 |
+| probe | requestId, id | 显式免费模型列表探测或仅本地校验；原回执重放不再次联网 |
+
+返回 `{provider?:{config,has_key,default_for},probe?:{local_valid,remote_tested,models_listed,model_found,http_status?,message},deleted?:true}`。顶层错误仍为五类；非法 schema/配置400、冲突409 invalid_input、缺配置404 not_found、存储失败502 upstream。响应不回显远端错误体、密钥或原请求。未知键、大小写变体、重复 JSON key、action 无关字段均拒绝，body 上限1MiB。
+
+Config 精确字段：`id,name,kind,protocol,base_url,model_id,enabled,headers,capability,pricing`。支持 image/openai-images、video/ark-video；LLM 沿用 opencode 自身配置，媒体设置不另造 LLM adapter。headers 仅 `OpenAI-Organization`、`OpenAI-Project` 两个非凭据字段，限定 printable ASCII、200字符；不支持任意 header 或 Authorization 覆盖，CR/LF、Host、Origin、Content-Length、Connection 等均拒绝。凭据只能走 write-only `key`。省略 key 保留，空字符串拒绝；`remove_key:true` 移除当前绑定，不能同时给新 key。UI 从不回填占位符，保存成功清空密钥框。
+
+capability 是声明，不是已验证事实：`max_prompt_bytes(1..65536),max_count(1..10；video=1),max_references(0..16),sizes(string[]),edit(bool),duration_seconds(int[] 1..60),audio(bool)`。image 不接受时长/audio，video 不接受 edit。此阶段不接受 paramSchema；M4.3 落地受限 schema 及模型字段白名单后再扩展，当前不会接受任意透传 JSON。价格为 null 表示未知；明确免费需要配置0。pricing 字段为 `currency(3位大写),unit(image|second),unit_amount(整数最小货币单位),minor_unit_scale(0..6),credit_numerator,credit_denominator,source,version,effective_at(Unix秒)`，无浮点金额或钱包。来源/版本必填；分母≥1；UI 同时显示单位与声明属性。
+
+HTTP 本地连接只允许显式 localhost 或 loopback/private IP；云端 HTTPS。端口8001/4096全部阻止，metadata/link-local/unspecified/multicast、IPv4映射绕过、metadata别名、userinfo/query/fragment、点路径、编码路径等拒绝。`Endpoint(base,knownOperation)` 保留 base path。`NewClient(base,download)` 是后续 adapter 共用边界：禁代理、所有重定向、keep-alive复用导致的隐式重试；DNS全地址检查后直接 dial 数字地址，无二次解析；只有显式配置的本地主机/端口可以访问 private/loopback。download 模式允许 HTTPS 公网签名 query，禁止 API auth/组织/project/Cookie；后续下载必须使用无凭据请求。没有承诺任意内网 DNS 名或未知 wire 自动兼容。
+
+Windows DPAPI 使用当前用户保护，`credentials/<UUID>.dpapi` 是不可变版本文件：先加密临时文件、Sync、关闭、MoveFileEx WRITE_THROUGH 原子发布，再在同一 SQLite 写事务更新 config 指针和 receipt。磁盘失败不更新SQL；SQL失败/进程在发布后中断只留下无引用密文孤儿，旧配置和旧凭据仍可用。旧版本不自动回收，未来需从真实任务引用证明无引用后才能删。`SecretStore.Put/Get/Delete` 的 Delete 不被设置删除调用。保留所有版本的磁盘增长是当前明确上限。
+
+`Resolve(id)`/`ResolveDefault(kind)` 返回 `FrozenProvider{config,credential_version}`；`Credential(frozen)` 只在调用前解密相应版本。冻结JSON中不含明文key，配置编辑、停用、默认切换和轮换不改变已取得快照。M4.2 必须将整个FrozenProvider持久化到tasks.provider_json，不得运行时重新Resolve默认配置。000006提供tasks/attempts/outputs/generation_inputs/events；events.project_id可NULL供应用级事件，项目订阅只读指定project_id，任务事件必须有项目，由服务执行边界检查。000007提供provider_configs/provider_defaults/capabilities/price_quotes/questions/question_receipts。此阶段不创建假任务/批准/报价记录。
+
+幂等存储复用 WriteRequest，输入是严格完整原JSON canonical后SHA-256摘要（保留遗漏/显式值/数组顺序差异），不把任何key写入SQLite。相同 requestId 改key也冲突。设置UI禁重复提交，未知响应保留完整原请求**仅在组件内存**，切换页不卸载设置；“确认原请求”显式原样重放，无自动重试。刷新/关闭会丢弃这份含密钥的内存请求，重启只GET现有配置，必须先检查配置再发起新操作；不会持久化密钥来换取跨重启重发。
+
+核实的官方协议来源（2026-10-16）：[OpenAI list models](https://developers.openai.com/api/reference/resources/models/methods/list) 定义 GET `/v1/models` 和 list/data/id 响应；本实现只在自定义 API prefix 后追加 models，Bearer key及允许的组织/project头由网关发送，成功不代表生成权限。没有调用生成接口。兼容服务是否为列表请求收费取决于服务自身约定，此按钮只使用不执行推理的模型列表协议。Ark [创建视频生成任务](https://docs.volcengine.com/docs/ark/create-video-generation-task-api?lang=zh) 本次只核实官方协议入口，未找到本任务已实现的免费探测，因此 ark-video 明示“配置校验通过，远端未测试”。[Microsoft CryptProtectData](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata) 当前用户保护；不设置 LOCAL_MACHINE、不使用CGO或新依赖。

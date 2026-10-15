@@ -107,3 +107,17 @@ h3 { font-size: 14px; font-weight: 550; }
 .canvas-properties p { font-size: 12px; line-height: 1.7; }
 .object-surface:focus-visible,.object-node:focus-visible { outline: 2px solid #d5ed9d; }
 @media(max-width:1000px) { .canvas-layout {grid-template-columns:minmax(0,1fr)} .canvas-properties {max-width:350px} }
+.provider-settings { max-width: 1100px; margin: 0 auto; padding: 24px; }
+.provider-settings p { line-height: 1.6; overflow-wrap: anywhere; }
+.provider-layout { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(280px, 2fr); gap: 24px; align-items: start; }
+.provider-settings fieldset { display: grid; gap: 14px; border: 1px solid #b6b4a7; border-radius: 12px; padding: 20px; }
+.provider-settings label { display: grid; gap: 6px; font-size: 14px; }
+.provider-settings input:not([type=checkbox]), .provider-settings select { width: 100%; min-height: 36px; background: #fff; border: 1px solid #aaa99b; border-radius: 5px; padding: 6px; color: #222; }
+.provider-settings input[type=checkbox] { width: 18px; height: 18px; }
+.provider-settings button { padding: 8px 12px; margin: 3px; border: 1px solid #9b9f8d; border-radius: 6px; background: #e6ecd9; color: #202817; cursor: pointer; }
+.provider-settings button:disabled { opacity: .55; cursor: default; }
+.provider-settings h2 { font-size: 17px; margin: 12px 0 4px; }
+.provider-list article { border-bottom: 1px solid #c7c6b9; padding: 12px 0; }
+.provider-message { padding: 12px; background: #edf0e3; border: 1px solid #a9b594; }
+.provider-settings :focus-visible { outline: 3px solid #3f6f24; outline-offset: 2px; }
+@media (max-width: 900px) { .provider-layout { grid-template-columns: 1fr; } }
