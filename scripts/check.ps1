@@ -12,8 +12,8 @@ try {
 if ($LASTEXITCODE -ne 0) { throw 'M2 import recovery checks failed.' }
 Push-Location (Join-Path $projectRoot 'desktop')
 try {
-    & node --experimental-strip-types --test packages/editor/test/*.test.ts src/features/editor/annotations.test.ts src/features/canvas/canvas.test.ts
-    if ($LASTEXITCODE -ne 0) { throw 'Editor/canvas checks failed.' }
+    & node --experimental-strip-types --test packages/editor/test/*.test.ts src/features/editor/annotations.test.ts src/features/canvas/canvas.test.ts src/features/providers/recovery.test.ts
+    if ($LASTEXITCODE -ne 0) { throw 'Editor/canvas/provider recovery checks failed.' }
     & pnpm build
     if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
     & cargo test --manifest-path src-tauri/Cargo.toml

@@ -118,6 +118,6 @@ h3 { font-size: 14px; font-weight: 550; }
 .provider-settings button:disabled { opacity: .55; cursor: default; }
 .provider-settings h2 { font-size: 17px; margin: 12px 0 4px; }
 .provider-list article { border-bottom: 1px solid #c7c6b9; padding: 12px 0; }
-.provider-message { padding: 12px; background: #edf0e3; border: 1px solid #a9b594; }
+.provider-message { padding: 12px; color: #202817; background: #edf0e3; border: 1px solid #a9b594; }
 .provider-settings :focus-visible { outline: 3px solid #3f6f24; outline-offset: 2px; }
 @media (max-width: 900px) { .provider-layout { grid-template-columns: 1fr; } }
