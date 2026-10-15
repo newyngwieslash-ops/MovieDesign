@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 )
 
 type Health struct {
@@ -36,14 +38,21 @@ func New(origin string, db *sql.DB, workspaceRoot string) http.Handler {
 			return
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
+		kind := objectKind(r.URL.Path)
 		if r.Method == http.MethodOptions {
-			if r.URL.Path != "/api/health" || r.Header.Get("Access-Control-Request-Method") != "GET" || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
+			method := r.Header.Get("Access-Control-Request-Method")
+			allowed := (r.URL.Path == "/api/health" && method == "GET") || (kind != "" && (method == "GET" || method == "POST"))
+			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID")
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if kind != "" {
+			serveObjects(w, r, store.Objects{DB: db}, kind)
 			return
 		}
 		if r.URL.Path != "/api/health" {

@@ -33,7 +33,7 @@
 - 每请求在路由之前校验 Origin。生产仅接受 `http://tauri.localhost`；开发仅接受 `http://localhost:1420`。两者不会同时开放。缺失、null、多 Origin、非匹配来源返回 HTTP 403。
 - HTTP 错误格式 `{error:{code,message}}`，Origin 拒绝用 `invalid_input`；不存在路由为 404/not_found；不支持方法为 405/invalid_input。
 - OPTIONS 只批准当前支持的方法和路由；不得因为启用 CORS 而跳过请求授权校验。
-- M1 无业务写入 HTTP 路由。后续写入必须统一实现 requestId 幂等，不以 M1 缺省行为代替。
+- M1 无业务写入 HTTP 路由；M2.2 已实现下述对象写入，统一执行 requestId 幂等。
 - 五张业务表保持用户 SQL 的字段、约束和默认值。golang-migrate 自动维护 schema_migrations；SQLite 自行维护 AUTOINCREMENT 的 sqlite_sequence。
 - 所有 SQLite 连接启用 foreign_keys 和 5 秒 busy_timeout。当前单连接处理本地数据库；关闭前完成正在执行的 HTTP 请求。
 - 日志本地存储，不向原厂或其他第三方发送遥测。
@@ -79,10 +79,49 @@ Origin 校验针对浏览器 CSRF；curl 或本机程序可以伪造 Origin。M1
 
 ## M2.1 请求边界与持久幂等（移植适配）
 
-- 构造入口为 `server.New(origin, db, workspaceRoot)`；主进程传入 `<dataDir>/workspace`。此阶段公开路由仍只有 `GET /api/health`。`/api/projects`、`/api/objects` 等尚未实现，返回 404/not_found；不存在成功占位响应。
-- Origin 在所有路由之前检查，拒绝请求返回 403/invalid_input。预检仅批准已实现路由的方法；目前仅 `/api/health` 的 GET。共享 CORS 方法清单为 GET、POST、OPTIONS，允许请求头为 Content-Type、Last-Event-ID；POST 业务路由落地后才可批准其预检。其他请求头、路由、方法的预检返回 403/invalid_input。
+- 构造入口为 `server.New(origin, db, workspaceRoot)`；主进程传入 `<dataDir>/workspace`。M2.1 当时仅公开 `GET /api/health`；M2.2 已增加下述对象路由。未实现的 `/api/objects` 等仍返回 404/not_found，不存在成功占位响应。
+- Origin 在所有路由之前检查，拒绝请求返回 403/invalid_input。预检仅批准已实现路由的方法；`/api/health` 仅 GET，下述对象路由允许 GET、POST。共享 CORS 方法清单为 GET、POST、OPTIONS，允许请求头为 Content-Type、Last-Event-ID。其他请求头、路由、方法的预检返回 403/invalid_input。
 - `DecodeJSON[T]` 限制正文为 1 MiB、只接受单个 JSON 对象、拒绝未知字段和任意层级重复键、拒绝尾随 JSON，并以 `UseNumber` 保留数值 token。请求 DTO 通过显式 `validate` 标签声明必填等规则；解析成功后统一执行 validator v10.25.0。嵌套请求必须声明具体 DTO，不能通过 map 或 any 绕过未知字段检查。媒体 multipart 不走此 JSON 入口，后续单独限制。
 - 写操作作用域为 `(project_id, operation, requestId)`；`project_id` 来自查询参数，不能依赖全局当前项目。项目和请求标识使用 1–128 字符的 ASCII 字母、数字、下划线或连字符；不 trim，不接受路径片段。operation 由服务端选择，必填且最多 128 字符。此阶段提供作用域校验，项目是否存在及对象归属检查随 M2.2 业务路由落地。
 - 业务入口应将解析/校验错误映射为 400/invalid_input（正文超限为 413/invalid_input），`store.ErrRequestConflict` 映射为 409/invalid_input；此阶段没有写入 HTTP 路由，因此上述状态由后续业务入口接线。
 - `store.WriteRequest` 在同一 SQL 事务内登记请求、执行写入、保存完成回执；任一步失败同时回滚业务数据和请求记录。输入在存储入口统一规范化：对象键排序、数组顺序保留、数值 token 原样保留、prompt 等字符串内容不 trim。同键同输入重放持久化回执，不调用写入函数；同键不同输入返回冲突。已有未完成记录返回 `ErrRequestPending`，不重新执行；文件投递恢复由后续 journal 服务处理，此 SQL helper 不执行文件 I/O。
 - migration 000003 新增 projects、composition_types、asset_projects、write_requests、file_operations 五张支撑表，沿用计划 SQL；核心五张业务表保持不变。文件投递 journal 仅建表，M2.1 不实现文件投递。
+
+## M2.2 项目、类型、对象 CRUD（移植适配）
+
+`GET/POST /api/projects`、`/api/assets` 为新增路径，`/api/composition-types` 为新增项目内类型管理路径。`/api/compositions`、`/api/resources`、`/api/versions` 沿用规格路径。以下请求/响应字段是本移植明确约定的 schema；全部由同一个 `store.Objects` 服务执行，直接服务调用也校验对象归属。
+
+- 项目 GET 列表和 POST create 不需要 `project_id`，项目创建使用固定 `_app` 幂等作用域。项目 update/delete 使用 `project_id` 并要求 `id` 等于该项目；项目 GET 单项可用 `?id=...`。其他路径必须提供 `project_id`，无当前项目全局变量。重复、未知、空或畸形查询字段返回 400。
+- GET 无 `id` 时返回 `{items:[...],coverage:{total,next_offset,exhausted}}`；offset 默认 0、不得为负；limit 默认 50、显式值 1–200。total 与行数据在同一读事务读取，按 id 稳定排序。GET `?project_id=...&id=...` 返回单个对象，不得与分页参数组合。对象不在该项目时返回 404/not_found。
+- POST 统一为 `{requestId,action,id?,value?}`，action 仅 create/update/delete。create 不得带 id，update/delete 必须带 id；update 必须提供至少一个允许字段。delete 的 value 可省略或为空对象，两者各自保留幂等输入身份。显式空/null id、null value 被拒绝，避免重编码合并不同有效请求。
+- 每个 value 按动作和对象种类严格解析；重复键、未知字段、错误大小写、无效 Unicode、尾随内容均拒绝。attributes/metadata 是领域数据袋，API 表示为 **nullable JSON-object string**，例如 `"attributes":"{\"色调\":\"蓝色\"}"`；字符串必须包含合法 JSON 对象，不接受数组、普通文本或直接嵌套对象。合法原字符串原样保存，空对象用 `"{}"`，清除用 `null`。领域袋内部键不受固定属性白名单限制。
+- 成功 POST 返回创建/更新后的对象；delete 返回 `{id,deleted:true}`。所有服务生成的实体 id 使用 UUID。创建版本的 resource_id 明确指向既有 Resource；修订创建新 Version、继续使用该 Resource，独立内容先创建新 Resource。source_version_id 允许同项目其他 Resource 的版本作为派生血缘。
+
+| 对象 | create value | update value | delete 保护 |
+| --- | --- | --- | --- |
+| projects | `{name}` | `{name}` | 有类型、对象、资产登记或文件 journal 时拒绝 |
+| composition-types | `{label}` | `{label}` | 有引用它的 Composition 时拒绝；同项目 create 相同 label 原子复用既有 id，rename 与其他 label 冲突为 409 |
+| compositions | `{type_id,name,attributes?}` | `{name?,attributes?}` | 有自有 Resource 或成员放置时拒绝 |
+| resources | `{composition_id,description?}` | `{description}` | 有 Version 或成员放置时拒绝；description 可为 null |
+| versions | `{resource_id,asset_id?,source_version_id?,origin?}` | 始终 409，版本不可变 | 被其他版本血缘引用时拒绝；当前没有其他依赖的叶版本可删除 |
+| assets | 拒绝直接创建；真实文件登记由 M2.3 接入 | `{name?,metadata?}` | 被版本引用时拒绝，否则仅 status=missing，不删除文件或登记行 |
+
+版本 origin 可为 agent/user，省略为 agent；asset_id/source_version_id 可省略或 null，提供时必须属于同项目，asset 必须 active。项目/类型/对象 name 或 label 为 1–256 字符；resource description 可空或 null。返回字段与对应表的 snake_case 字段一致；SQL NULL 返回 JSON null，列表始终为数组。
+
+项目 bootstrap 示例：
+
+```json
+{"requestId":"project-create-1","action":"create","value":{"name":"宣传片"}}
+```
+
+同 Resource 新版本示例（POST `/api/versions?project_id=<project UUID>`）：
+
+```json
+{"requestId":"revision-2","action":"create","value":{"resource_id":"<existing Resource UUID>","source_version_id":"<previous Version UUID>","asset_id":"<registered Asset UUID>","origin":"user"}}
+```
+
+所有成功业务变化与 completed receipt 同一 SQL 事务提交；同键同输入精确重放回执，同键不同输入 409/invalid_input，未完成 receipt 返回 409/waiting_user。正文超限 413/invalid_input；其他验证错误 400/invalid_input；不存在或跨项目 404/not_found；引用保护与不可变版本 409/invalid_input；数据库不可用 502/upstream。共享 `DomainError{Status,Code,Message}` 供 HTTP 与未来服务调用映射，不增加五种错误码之外的新 code（capacity 供后续 429 使用）。
+
+M2.2 **未完成文件登记**：`POST /api/assets` create 返回明确错误，须经 M2.3 `/api/upload` 与 `/api/upload/commit` 实际验证受管普通文件并采集指纹；不接受客户端伪造的 active 资产、路径或哈希。M2.2 asset delete 只标 missing，不移动或物理删除文件。
+
+后续新增引用必须在相应事务服务增加删除保护：M2.4 delivery journal 已预分配/记录的对象引用；M3 canvas 当前版本选择；M4 task 输出/版本引用；M6 pipeline 血缘。当前这些表尚未创建，M2.2 不冒称已实现它们的引用检查，也不修改核心五表。

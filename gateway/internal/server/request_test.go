@@ -98,8 +98,8 @@ func TestRequestRejectedRoutesDoNotWrite(t *testing.T) {
 		status                          int
 	}{
 		{"POST", "/api/projects?project_id=p", "https://evil.example", "", 403},
-		{"OPTIONS", "/api/projects?project_id=p", "http://tauri.localhost", "POST", 403},
-		{"POST", "/api/projects?project_id=../p", "http://tauri.localhost", "", 404},
+		{"OPTIONS", "/api/projects?project_id=p", "http://tauri.localhost", "POST", 204},
+		{"POST", "/api/projects?project_id=../p", "http://tauri.localhost", "", 400},
 	} {
 		r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{"requestId":"r"}`))
 		r.Header.Set("Origin", tc.origin)
