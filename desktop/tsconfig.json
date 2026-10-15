@@ -12,5 +12,5 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "packages/editor/src", "vite.config.ts"]
 }
