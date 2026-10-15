@@ -38,7 +38,13 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
   const composition = compositions.data?.find(c => c.id === resource?.composition_id);
   const activeAsset = assets.data?.find(a => a.id === version?.asset_id);
   function owns(expected: ImportOperation | null) {
-    return localStorage.getItem(storageKey(projectID)) === (expected ? JSON.stringify(expected) : null);
+    const raw = localStorage.getItem(storageKey(projectID));
+    if (raw === (expected ? JSON.stringify(expected) : null)) return true;
+    const current = readOperation(raw, projectID);
+    setOp(current);
+    fileRef.current = null;
+    setMessage(current ? '导入记录已更新，请按当前阶段继续。' : '导入记录已同步，当前没有待处理导入。');
+    return false;
   }
   function save(value: ImportOperation, expected: ImportOperation | null) {
     // Compare the complete prior stage synchronously: remounted retries may already have advanced or replaced it.

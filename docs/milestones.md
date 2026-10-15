@@ -66,3 +66,10 @@ M2.1 提交为 `29f7b0d`，严格输入修正为 `9983337`；专项测试、Go �
 - `node --test scripts/check-m2-ui.mjs` 修前 7 失败/1 通过；修后结合原 recovery 检查 9/9 通过。检查直接转译实际 App/AssetLibrary 源码，控制 upload/commit/deliver 迟到次序、重挂载与续投递，覆盖 A 不能改 B、同 A 不能回退/继续旧链、选择存储读写异常及关键保存失败零 POST。证据 `.runtime/m25-fix-targeted.txt`。
 - 修后 `pnpm --dir desktop desktop:build` 与最终 `scripts/check.ps1` 通过；后者含 Go 全量/vet、sidecar、9 项 Node 检查、前端、Rust 与原生 gateway M1，日志 `.runtime/m25-fix-check.txt`，生命周期证据 `.runtime/smoke-bc27920b40814a57ab6d21b02c0e8408/`。
 - 最终生产真实 M2 UI/原生重启恢复通过：`.runtime/desktop-release-7ea7d46f089c449986313120528970de/`；真实 M1 WebView/生命周期回归通过：`.runtime/desktop-release-d3085fecfdde47f7895966b5c5109019/`。均使用测试独立 profile，正常关闭无 sidecar/端口残留。并发迟到/存储拒绝使用受控实际组件源码检查，真实 WebView 仍验证现有正常导入、幂等、血缘、隔离和重启恢复；不将源码控序检查冒充真实网络故障注入。
+
+### M2.5 恢复视图再审修正（2026-10-15）
+
+- 修复原请求先完成/推进后重挂载视图仍保留旧 pending 的问题：所有所有权不匹配出口均验证当前持久记录并同步视图（包括空记录），丢弃旧内存文件并给出状态提示；旧链不再 POST，也不改写当前存储。空记录解除导入禁用，推进记录允许用户下一次按当前阶段续做。
+- 新增 4 项实际组件源码控序回归，修前 `node --test scripts/check-m2-ui.mjs` 为 4 失败/8 通过（`.runtime/m25-stale-ui-red.txt`）；修后连原恢复检查 13/13 通过（`.runtime/m25-stale-ui-green.txt`）。覆盖原响应先完成→旧视图续做同步 null→可新导入，原上传/提交先推进→首次只同步、再次发当前 body，以及空视图发现新待处理记录；原 P1/P2 覆盖保留。
+- 最终 `pnpm --dir desktop desktop:build`、`scripts/check.ps1` 均通过；完整检查日志 `.runtime/m25-resync-final-check.txt`，原生 gateway 生命周期证据 `.runtime/smoke-71561b74beb04b2dbaa1d95e34871163/`。
+- 最终生产 M2 真实 UI/重启恢复通过，证据 `.runtime/desktop-release-01d7a08ed2eb45598e5aa81947a5a37c/`；M1 真实 WebView/生命周期回归通过，证据 `.runtime/desktop-release-d0bc793522904eef81ba126bf3f3d16f/`。均正常关闭、无 sidecar/端口残留；控序竞态仍明确属于真实组件源码检查，未冒充 WebView 故障注入。

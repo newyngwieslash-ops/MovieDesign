@@ -95,6 +95,49 @@ for (const stage of ['upload', 'commit']) test(`late ${stage} cannot regress the
   assert.equal(h.storage.get(h.key), newer, 'same intent stage regressed');
   assert.equal(h.requests.length, count, 'obsolete stage continued its send chain');
 });
+test('idle remounted view reconciles completed original and allows the next import', async () => {
+  const h = harness(), first = [], second = [];
+  const { request: original } = await pauseFirst(h, 'deliver', first);
+  const intentA = JSON.parse(h.storage.get(h.key));
+  h.render(h.AssetLibrary, second);
+  original.resolve(); await until(() => !h.storage.has(h.key));
+  const count = h.requests.length;
+  await retry(h, second, 'deliver'); await tick();
+  const tree = h.render(h.AssetLibrary, second);
+  assert.equal(h.requests.length, count, 'stale continuation sent another POST');
+  assert(!h.storage.has(h.key));
+  assert(!find(tree, node => node.props?.className === 'pending-import'));
+  assert.equal(find(tree, node => node.type === 'input' && node.props['aria-label'] === '导入素材').props.disabled, false);
+  assert(find(tree, node => node.props?.role === 'status'), 'reconciliation needs useful feedback');
+  h.drop(second); await stageRequest(h, count, 'upload');
+  assert.notEqual(JSON.parse(h.storage.get(h.key)).deliverID, intentA.deliverID);
+});
+for (const stage of ['upload', 'commit']) test(`idle remounted view resyncs advanced ${stage} without POST, then resumes the current body`, async () => {
+  const h = harness(), first = [], second = [];
+  const { request: original, next } = await pauseFirst(h, stage, first);
+  h.render(h.AssetLibrary, second);
+  original.resolve(); await stageRequest(h, next, stage === 'upload' ? 'commit' : 'deliver');
+  const advanced = h.storage.get(h.key), current = JSON.parse(advanced), count = h.requests.length;
+  await retry(h, second, 'deliver'); await tick();
+  assert.equal(h.requests.length, count, 'resync must not send the old stage');
+  assert.equal(h.storage.get(h.key), advanced, 'resync must not mutate current storage');
+  const viewOperation = second.find(value => value?.schema === 1);
+  assert.equal(JSON.stringify(viewOperation), advanced, 'live view did not adopt validated current stage');
+  await retry(h, second, 'deliver');
+  const resumed = await stageRequest(h, count, current.stage);
+  assert.equal(resumed.body, current.stage === 'commit' ? current.commitBody : current.deliveryBody);
+});
+test('a newly occupied slot resyncs the idle view instead of silently discarding its file action', async () => {
+  const h = harness(), first = [], second = [];
+  h.render(h.AssetLibrary, second);
+  h.drop(first); await stageRequest(h, 0, 'upload');
+  const current = h.storage.get(h.key);
+  h.drop(second);
+  await until(() => second.some(value => value?.schema === 1));
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.storage.get(h.key), current);
+  assert.equal(JSON.stringify(second.find(value => value?.schema === 1)), current);
+});
 for (const failure of ['read', 'write']) test(`selection works in memory when storage ${failure} fails`, () => {
   const h = harness(failure), state = [];
   let tree = h.render(h.App, state);
