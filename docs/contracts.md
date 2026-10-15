@@ -157,3 +157,23 @@ list offset 默认0、limit默认50且1–200，文件按mtime降序或name排�
 Windows安全边界：持有os.Root打开可信根，逐级相对句柄打开项目/父目录；拒绝reparse/junction、hardlink、非disk/非普通文件，拒绝绝对路径、UNC、ADS、设备名、尾点/空格及大小写/8.3别名。持有父目录链直到创建/移动完成且禁止外部delete-sharing；待改源有DELETE权限并在同句柄重新检查identity。NtSetInformationFile(FileRenameInformation) ReplaceIfExists=false确保原子无覆盖。测试实证外部重命名被拒绝、自有句柄重命名成功。具有相同OS权限的外部进程仍可在请求之间改内容；操作会按identity/digest拒绝异常恢复，应用不把该类篡改默认为新合法资产。
 
 并发上限：单服务互斥串行文件意图；单gateway实例持有该服务。批量在动作前验证所有输入；中途外部故障时journal保留已完成部分、同键续做，不宣称跨文件系统原子回滚。M2.4仍须在delivery_sources创建时加双向pending保护：文件rename/delete/content拒绝破坏recoverable source/archive路径，delivery登记拒绝与prepared file操作相交；同时保护pending delivery对象引用。此任务没有提前创建delivery表。
+
+## M2.4 幂等投递与事务恢复
+
+`POST /api/deliver?project_id=<id>` 严格接受用户 §7 正文：
+
+```json
+{"requestId":"import-1","sources":[{"key":"image","path":"projects/<id>/files/image.png"}],"output":{"resources":[{"key":"image","mode":"create","name":"主画面"}],"composition":{"name":"作品","type":{"label":"视频"},"placements":[{"key":"image","role":"主画面"}]}}}
+```
+
+来源为 `path` 或 `taskOutputKey` 二选一，1–100 个且 key 必填、唯一；资源 key 集合与来源相同，placement 只能引用这些 key。原解析器允许不同 key 指向同一路径，移植保留该行为：共享一个 Asset/归档文件、create 仍分配独立 Resource。不同路径即使字节相同也不合并。`path` 仅允许同项目 files/staging 内的受管普通文件，沿用 Windows 原生句柄检查。已登记且 identity/full digest 一致的 active 文件复用 Asset；未登记文件按预分配 Asset UUID 移至 `projects/<id>/files/<assetId><extension>`，无覆盖。
+
+`composition.type` 为 `{id?,label?}`，至少一个非空字符串；id 必须属于同项目，同时提供时 label 必须匹配。Composition 使用同项目 name+type 精确匹配，零个则分配创建，一个则复用，多个则 blocked。沿用既有 Composition 名称/类型标签 1–256 字符限制；Resource name 为 1–512 字符，create 映射至现有 `resources.description`，不新增核心列。new_version 不修改共享 description。`mode=create` 禁止 baseVersionId；`mode=new_version` 必须提供同项目既有 baseVersionId，延续其 Resource 并写入 source_version_id，目标 Composition 必须兼容。允许从非最新版本分支；Resource+Composition+role 不重复放置。跨 Resource 派生仍由既有 CRUD source_version_id 支持，delivery create 不承载该关系，M6 补充独立生成依赖。
+
+成功处理的业务回执为 `{delivery:{status,versions,problem?}}`，HTTP 200；状态仅 completed/unknown/blocked。versions 项明确采用移植字段 `{key,resourceId,versionId,assetId}`，按 sources 顺序；未完成和 blocked 均返回空数组，不声称部分对象成功。problem 为 `{code,message}`，code 沿用五种错误码。不可修正的输入/归档 identity 或 hash 不符返回持久 blocked，修正使用新 requestId；暂时冲突、I/O/SQL 失败返回 unknown，同键同输入重试或调用 Recover，不重新生成。JSON 解析、项目/requestId 作用域错误通过 HTTP 400；未知项目 404；同键不同完整 canonical input 返回 409/invalid_input（优先于 terminal 回执处理）。未知字段、重复字段、大小写错误和 null/空可选字符串拒绝。完整 wire input 保留可选字段 presence；解码后再修改导出字段的直接调用会被拒绝，调用方应构造新 Request。
+
+migration 000004 仅新增支撑表 `deliveries` 与 `delivery_sources`。deliveries 保存 input_json、stage/status、receipt、首次可信 origin、plan_json（预分配 Composition/type、placements、来源完整指纹等）；delivery_sources 保存 source_key/source_path/archive_path、asset/resource/version/base_version IDs、stage 和 source_json。prepare 在一个事务冻结所有 ID，文件阶段每源归档后持久标记，最后一个事务提交全部新增 Asset+project membership、Composition/type、Resource、Version、成员与 completed receipt。任一 SQL 失败整批回滚。重启从已确定的 identity/path 续做；completed 重放先返回旧 receipt，不再检查已改名的文件。journal/receipt 引用的项目、类型、Composition、Resource、Version、baseVersion 和 Asset 均受直接 CRUD 删除保护；unknown 期间资产 metadata 变更及相交路径的文件操作被拒绝。文件 journal 的源与目标检查、delivery prepare/commit 检查均在相应 SQL 事务中，保护双向竞态和改名碰撞后生成的新目标。
+
+内部接口为 `delivery.NewService(db,*workspace.Workspace,origin) *Service`、`Deliver(ctx,projectID,Request)(Receipt,error)`、`Recover(ctx,projectID,requestID)(Receipt,error)`。origin 只接受可信内部 user/agent，HTTP 构造为 user；首次 intent 保存后，不随重放入口改变（包括 UI 继续 agent 的 unknown）。多个服务实例共享进程级互斥锁，以支持 HTTP 与未来 MCP 实例交错；目前单 gateway 进程，多进程共享同工作区需增加数据库 lease。测试故障注入仅未导出字段，HTTP 不暴露。
+
+新增最小 workspace 原语 `InspectDelivery`、`ArchiveDelivery`、`VerifyDelivery` 不提交 SQL；`InsertDeliveryAsset(ctx,tx,projectID,asset)` 参与调用方事务。共享 `store.CheckFilePending` 与 `CheckDeliveryPaths` 供事务内 reservation 检查。taskOutputKey 在 M4 实际 task/output 表接入前明确返回 blocked/not_found，未创建伪任务或产物。M4 须以唯一 opaque key 查真实同项目任务归属和输出，M5 通过可信 agent 实例调用同一服务；M2.5 负责工作台 UI 与完整里程碑验收。

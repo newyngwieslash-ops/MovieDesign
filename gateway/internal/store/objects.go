@@ -466,6 +466,13 @@ func updateObject(ctx context.Context, tx *sql.Tx, p, kind, id string, raw json.
 		if e := CheckAssetFilePending(ctx, tx, id); e != nil {
 			return nil, e
 		}
+		var p, path string
+		if e := tx.QueryRowContext(ctx, "SELECT ap.project_id,a.path FROM assets a JOIN asset_projects ap ON ap.asset_id=a.id WHERE a.id=?", id).Scan(&p, &path); e != nil {
+			return nil, e
+		}
+		if e := CheckDeliveryPaths(ctx, tx, p, "", path); e != nil {
+			return nil, e
+		}
 		v, e := DecodeValue[assetUpdate](raw)
 		if e != nil {
 			return nil, invalid(e.Error())
@@ -497,6 +504,9 @@ func updateObject(ctx context.Context, tx *sql.Tx, p, kind, id string, raw json.
 }
 
 func deleteObject(ctx context.Context, tx *sql.Tx, kind, id string) (json.RawMessage, error) {
+	if e := checkDeliveryReference(ctx, tx, kind, id); e != nil {
+		return nil, e
+	}
 	var query, statement string
 	var args []any
 	switch kind {
@@ -554,6 +564,11 @@ func CheckAssetFilePending(ctx context.Context, tx *sql.Tx, id string) error {
 	if e := tx.QueryRowContext(ctx, "SELECT ap.project_id,a.path FROM assets a JOIN asset_projects ap ON ap.asset_id=a.id WHERE a.id=?", id).Scan(&p, &v); e != nil {
 		return e
 	}
+	return CheckFilePending(ctx, tx, p, v)
+}
+
+// CheckFilePending protects all source and destination paths in the caller's transaction.
+func CheckFilePending(ctx context.Context, tx *sql.Tx, p string, paths ...string) error {
 	rows, e := tx.QueryContext(ctx, "SELECT source FROM file_operations WHERE project_id=? AND stage='prepared'", p)
 	if e != nil {
 		return e
@@ -575,10 +590,12 @@ func CheckAssetFilePending(ctx context.Context, tx *sql.Tx, id string) error {
 			return e
 		}
 		for _, m := range plans {
-			for _, x := range []string{m.Source, m.Target} {
-				a, b := strings.ToLower(v), strings.ToLower(x)
-				if b != "" && (a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")) {
-					return ErrRequestPending
+			for _, v := range paths {
+				for _, x := range []string{m.Source, m.Target} {
+					a, b := strings.ToLower(v), strings.ToLower(x)
+					if b != "" && (a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")) {
+						return ErrRequestPending
+					}
 				}
 			}
 		}

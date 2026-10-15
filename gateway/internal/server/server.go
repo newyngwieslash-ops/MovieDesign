@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"net/http"
 	"strings"
 
@@ -44,6 +45,10 @@ func New(origin string, db *sql.DB, workspaceRoot string) (*Server, error) {
 	return srv, nil
 }
 func newHandler(origin string, db *sql.DB, files *workspace.Service) http.Handler {
+	var deliveries *delivery.Service
+	if files != nil {
+		deliveries = delivery.NewService(db, files.Workspace, "user")
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -57,7 +62,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service) http.Handle
 		kind := objectKind(r.URL.Path)
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := (r.URL.Path == "/api/health" && method == "GET") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method))
+			allowed := (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
@@ -65,6 +70,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service) http.Handle
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID, Range")
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == "/api/deliver" {
+			serveDelivery(w, r, deliveries)
 			return
 		}
 		if fileRoute(r.URL.Path) {

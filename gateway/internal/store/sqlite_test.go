@@ -37,7 +37,7 @@ func TestMigrationsAndPersistence(t *testing.T) {
 	}
 	var version int
 	var dirty bool
-	if err = db.QueryRow("SELECT version,dirty FROM schema_migrations").Scan(&version, &dirty); err != nil || version != 3 || dirty {
+	if err = db.QueryRow("SELECT version,dirty FROM schema_migrations").Scan(&version, &dirty); err != nil || version != 4 || dirty {
 		t.Fatalf("migration state %d/%v: %v", version, dirty, err)
 	}
 }

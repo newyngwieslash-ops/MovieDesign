@@ -139,6 +139,9 @@ func (s *Service) save(ctx context.Context, p, key string, j *journal) error {
 		if e = checkPendingFiles(rows, paths...); e != nil {
 			return e
 		}
+		if e = store.CheckDeliveryPaths(ctx, tx, p, "", paths...); e != nil {
+			return e
+		}
 	}
 	if j.Stage == "prepared" && (j.Operation == "delete" || j.Operation == "content") {
 		for _, m := range j.Plan {

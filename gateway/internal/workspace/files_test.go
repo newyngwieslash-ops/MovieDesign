@@ -603,3 +603,50 @@ func TestFilesFirstIntentProjectDeletionInterleaving(t *testing.T) {
 		t.Fatalf("filesystem published after deletion: %v", e)
 	}
 }
+
+func TestDeliveryArchiveAndSaveReservation(t *testing.T) {
+	s, p := setup(t)
+	ctx := context.Background()
+	staged, e := s.Stage(ctx, p, "stage-delivery", "archive.txt", strings.NewReader("archive"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	a, e := s.Workspace.InspectDelivery(p, staged, uuid.NewString())
+	if e != nil {
+		t.Fatal(e)
+	}
+	target := prefix(p) + "files/" + a.ID + ".txt"
+	if e = s.Workspace.ArchiveDelivery(p, staged, target, a); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Workspace.ArchiveDelivery(p, staged, target, a); e != nil {
+		t.Fatal("archive replay", e)
+	}
+	if e = s.Workspace.VerifyDelivery(p, target, a); e != nil {
+		t.Fatal(e)
+	}
+	// Interleave a delivery reservation after file load but before save, checking
+	// the SQL preparation boundary (including a computed destination).
+	in := Input{RequestID: "file-plan", Path: target, NewName: "reserved.txt"}
+	j, e := s.load(ctx, p, in.RequestID, "rename", in)
+	if e != nil {
+		t.Fatal(e)
+	}
+	reserved := prefix(p) + "files/reserved.txt"
+	_, e = s.DB.Exec("INSERT INTO deliveries(project_id,request_id,input_json,stage,status,origin) VALUES(?,'delivery','{}','prepared','unknown','user')", p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = s.DB.Exec(`INSERT INTO delivery_sources(project_id,request_id,source_key,source_path,archive_path,asset_id,resource_id,version_id,stage,source_json) VALUES(?,'delivery','one',?,?,'a','r','v','prepared','{}')`, p, reserved, reserved)
+	if e != nil {
+		t.Fatal(e)
+	}
+	j.Stage = "prepared"
+	j.Plan = []move{{Source: target, Target: reserved}}
+	if e = s.save(ctx, p, in.RequestID, j); !errors.Is(e, store.ErrRequestPending) {
+		t.Fatalf("save bypassed delivery reservation %v", e)
+	}
+	if _, e = s.Workspace.OpenRegular("other", target); e == nil {
+		t.Fatal("cross project archive read")
+	}
+}
