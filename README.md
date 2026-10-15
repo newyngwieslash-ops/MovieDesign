@@ -54,6 +54,7 @@ Invoke-RestMethod http://127.0.0.1:8001/api/health -Headers @{Origin='http://tau
 
 ## 规格与进度
 
+- [完整实施计划：M2–M7](docs/superpowers/plans/2026-10-15-moviedesign-complete.md)（自定义本地/云端供应商、30项任务与验收门槛）
 - [原始实现规格](docs/spec.md)
 - [已确认契约与待决项](docs/contracts.md)
 - [里程碑验收记录](docs/milestones.md)
