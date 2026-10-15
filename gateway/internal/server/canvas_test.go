@@ -61,3 +61,34 @@ func TestCanvasHTTPAdmission(t *testing.T) {
 		t.Fatal("document unavailable")
 	}
 }
+
+func TestCanvasHTTPRejectsNonEnumWithoutReceipt(t *testing.T) {
+	db, e := store.Open(filepath.Join(t.TempDir(), "enum.db"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close()
+	p, e := (store.Objects{DB: db}).CreateProject(context.Background(), "Canvas", "p")
+	if e != nil {
+		t.Fatal(e)
+	}
+	h := newTestServer(t, "http://tauri.localhost", db, t.TempDir())
+	for _, value := range []string{"red orange", " red", "red ", "", "re"} {
+		body := fmt.Sprintf(`{"requestId":"invalid","expectedRevision":0,"command":{"type":"canvas.patch","nodes":[{"id":"n","before":null,"after":{"id":"n","kind":"frame","parentId":null,"position":{"x":0,"y":0},"size":{"width":350,"height":250},"zIndex":0,"hidden":false,"title":"Frame","collapsed":false,"backgroundColor":%q}}],"edges":[]}}`, value)
+		r := httptest.NewRequest("POST", "/api/canvas/commands?project_id="+p.ID, strings.NewReader(body))
+		r.Header.Set("Origin", "http://tauri.localhost")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "CANVAS_V3_INVALID_COMMAND") {
+			t.Fatalf("%q: %d %s", value, w.Code, w.Body.String())
+		}
+		d, e := (store.Canvas{DB: db}).Document(context.Background(), p.ID)
+		if e != nil || d.Revision != 0 || len(d.Nodes) != 0 {
+			t.Fatal("rejection mutated document", d, e)
+		}
+		var count int
+		if e = db.QueryRow("SELECT count(*) FROM canvas_commands WHERE project_id=?", p.ID).Scan(&count); e != nil || count != 0 {
+			t.Fatal("rejection created receipt", count, e)
+		}
+	}
+}

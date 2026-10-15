@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/migrations"
 	"path/filepath"
 	"strings"
@@ -222,5 +223,77 @@ func TestCanvasGraphAndBoundaries(t *testing.T) {
 	replay, e := (Canvas{DB: db}).Execute(ctx, p, raw)
 	if e != nil || !replay.Replayed || replay.Document.Revision != 2 {
 		t.Fatal(replay, e)
+	}
+}
+
+func TestCanvasExactEnumAdmission(t *testing.T) {
+	for _, tc := range []struct{ field, tokens string }{{"backgroundColor", "red orange yellow green cyan blue purple"}, {"expectedKind", "image video audio text file table subject"}, {"preset", "gallery board"}, {"region", "visual details"}} {
+		t.Run(tc.field, func(t *testing.T) {
+			s, p, _ := objectFixture(t)
+			ctx := context.Background()
+			c := Canvas{DB: s.DB}
+			typ := objectID(t, mutateObject(t, s, p, "composition_types", "type", "create", "", `{"label":"Type"}`))
+			composition := objectID(t, mutateObject(t, s, p, "compositions", "composition", "create", "", `{"type_id":"`+typ+`","name":"Subject"}`))
+			makeNode := func(value string) map[string]any {
+				n := canvasFrame("n", 0)
+				if tc.field == "backgroundColor" {
+					n[tc.field] = value
+					return n
+				}
+				delete(n, "title")
+				delete(n, "collapsed")
+				n["draft"] = nil
+				if tc.field == "expectedKind" {
+					n["kind"] = "placeholder"
+					n[tc.field] = value
+					return n
+				}
+				n["kind"] = "composition"
+				n["compositionId"] = composition
+				n["activeItem"] = nil
+				layout := map[string]any{"preset": "gallery", "columns": 1, "sections": []any{map[string]any{"id": "default", "title": "", "resources": []any{}}}, "spans": []any{}, "rows": []any{map[string]any{"sectionId": "default", "region": "visual", "resources": []any{}}}}
+				if tc.field == "preset" {
+					layout[tc.field] = value
+				} else {
+					layout["rows"].([]any)[0].(map[string]any)[tc.field] = value
+				}
+				n["subjectLayout"] = layout
+				return n
+			}
+			tokens := strings.Fields(tc.tokens)
+			var before any
+			revision := 0
+			for _, value := range tokens {
+				after := makeNode(value)
+				r, e := c.Execute(ctx, p, canvasInput("valid-"+value, revision, before, after))
+				if e != nil {
+					t.Fatalf("valid %q: %v", value, e)
+				}
+				revision++
+				before = r.Document.Nodes["n"]
+			}
+			original, e := c.Document(ctx, p)
+			if e != nil {
+				t.Fatal(e)
+			}
+			originalJSON, _ := json.Marshal(original)
+			for i, value := range []string{tokens[0] + " " + tokens[1], "", " ", "\t", " " + tokens[0], tokens[0] + " ", tokens[0][:len(tokens[0])-1], tokens[0] + "x"} {
+				if _, e := c.Execute(ctx, p, canvasInput(fmt.Sprint("invalid-", i), revision, before, makeNode(value))); e == nil {
+					t.Errorf("accepted %s=%q", tc.field, value)
+				}
+				current, e := c.Document(ctx, p)
+				if e != nil {
+					t.Fatal(e)
+				}
+				currentJSON, _ := json.Marshal(current)
+				if string(currentJSON) != string(originalJSON) {
+					t.Fatalf("rejected enum changed document: %q", value)
+				}
+				var receipts int
+				if e = s.DB.QueryRow("SELECT count(*) FROM canvas_commands WHERE project_id=?", p).Scan(&receipts); e != nil || receipts != revision {
+					t.Fatalf("rejected enum changed receipts: %d %v", receipts, e)
+				}
+			}
+		})
 	}
 }

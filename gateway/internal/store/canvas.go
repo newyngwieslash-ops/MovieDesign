@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf16"
@@ -359,7 +360,7 @@ func canvasNode(v any) (map[string]any, error) {
 }
 func contains(values string, v any) bool {
 	s, ok := v.(string)
-	return ok && strings.Contains(" "+values+" ", " "+s+" ")
+	return ok && slices.Contains(strings.Fields(values), s)
 }
 func subjectLayout(v any) error {
 	if e := generic(v, 0, 10000); e != nil {
