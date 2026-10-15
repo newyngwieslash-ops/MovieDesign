@@ -92,3 +92,17 @@ M3.3 已提交 bf071b3、b505a5b 并通过独立规格/质量复审：双栈 50 
 M3.4（2026-10-16）已提交 f9b9f8c、81385f8 并通过独立规格/质量复审：React 编辑器、透明 textarea/中文输入、标注配对与单次撤销恢复、源图坐标收集、PNG 新版本保存及原生 IndexedDB 精确字节恢复完成。61 项相关检查和前端生产构建通过；真实 debug WebView 产品编辑及原生重启恢复证据 .runtime/desktop-debug-0875fe532ede40759bffb3b133a41002/，核心19项与普通 M2 原生回归分别在 .runtime/desktop-debug-0c63159f6b1b4fa09d729dfe79f63bbc/、.runtime/desktop-debug-dbffb95d11af4aebbdb2e8c937fd456a/。
 
 审查复现并修正普通导入迟到结果覆盖新选择、源图切换期间旧保存状态锁住新编辑器两项问题；实际 TSX 先6项失败，修后22/22相关检查及前端构建/类型检查通过。选择归属按调用前捕获的用户选择 revision 判定，切换离开再返回也不被旧结果接管；版本标签改为创建时间。未重复与该状态修正无关的原生/后端全套。原生 IME 覆盖真实 Chromium composition/input 与明确标注的合成按键分支，不声称物理输入法候选窗口已验收；当前原生证据为 debug exe+Vite，M3 最终生产 exe 与完整回归由 M3.5 完成。最终产物仍是不可变 PNG 新版本，标注聊天消费待 M5，未声称已接入 agent 或模型生成。
+
+### M3.5 持久画布与最终 M3 验收（2026-10-16）
+
+- 实现原 V3 map document、before/after patch、非嵌套 batch、CAS 与当前最新 document 重放；SQL 原子写 doc/effects/receipt，引用索引延伸共享删除保护。000005 支持原核心缺少的 Composition revision、Resource current head、持久 Version ordinal；五核心表与 000001/000002 未变。
+- 创作画布独立于图像编辑器，支持本地平移/缩放、可见节点裁剪、选择、拖动/调整尺寸、嵌套画框/折叠/属性、版本选择、图片/视频/音频/安全文本阅读，并进入既有图像编辑与 PNG IDB 恢复路径。原命令先持久化；未知显式同 body/key 继续，已知冲突刷新并要求重新编辑。
+- TDD 红灯：`go -C gateway test ./internal/store -run TestCanvas -v` 缺 Canvas；Node canvas test 缺 canvas.ts。绿灯含当前状态/旧 revision/原 appliedRevision+最新 document 重放、同键异输入、before/父环/重复/悬空/noop/空 batch、UTF-16 边界、跨项目/成员/持久 undo 删除保护、真实 schema4→5 升级/重开/ordinal不复用、跨 Composition 资源变化 revision。
+- 实际 HTTP >1 MiB 的 10,000 节点 command 成功提交并读取，>16 MiB 返回结构化 413；content 精确批次、Origin 和未知字段/重复 JSON key 拒绝。Node 验证 activeItem 排除 generation-request、10k 可见节点裁剪、局部父坐标及折叠。
+- `scripts/check.ps1` 全量通过，日志 `.runtime/m35-final-check.txt`：Go 全包+vet、sidecar、22 项 M2恢复/编辑器生命周期检查、51 项 editor/annotations/canvas Node检查、TS/Vite、Rust、M1 gateway。最后 M1 gateway 证据 `.runtime/smoke-a9f904065e974acd9bb500dea7860cc8`。
+- `pnpm --dir desktop desktop:build` 当前生产 exe 构建通过。真实 release WebView `-Smoke canvas` 的生产 Origin/CSP、实际媒体与 Markdown 导入、节点/嵌套画框移动和尺寸、折叠、内容和版本选择、PNG CORS未污染/Range、图像编辑绘制/撤销/重做、原生 IDB PNG 字节重启恢复、same Resource/source Version 不变、未知画布完整 body 重放、CAS 冲突无自动重提均通过。视频为本机原生 MediaRecorder VP8 WebM fixture，音频为短 WAV fixture，均真实 HTML player 解码播放；不是 AI/provider/M7 生成验收。
+- 生产 M2 ordinary import+restart 回归通过：`.runtime/desktop-release-1510ee2281464915a7d4132b7887eb5a`；生产 M1 WebView/Origin/关闭通过：`.runtime/desktop-release-ca9adc23eb7d4adba93129d0620d1b1d`。均验证正常关闭后 sidecar/8001 释放，无 renderer 未捕获异常。
+- 现有 M3.1–M3.4 各阶段的八类 Shape/工具/历史/透明 textarea/IME/区域标注证据仍按各自原文区分 debug fixture 和真实产品 UI；本阶段重新运行对应全部 Node 检查。最终 production Canvas-to-Editor 集成证明真实图像编辑及不可变 PNG 恢复链路，没有把 debug 的源码 import harness 标成 production。
+- 已知明确范围：仅原 canvas.patch/canvas.batch 启用；其他非 MVP content commands 返回结构化拒绝；M4 任务暂不存在；安全文档预览≤1 MiB；画布 UI undo/redo 暂一层、重启快捷按钮不恢复，服务端持久 undo 仍保留引用；没有历史截断/回收接口。当前源码适配详见 contracts 的 M3.5 段。未新增依赖、网络协议、模型/provider 或生产测试钩子。
+
+Final M3.5 canvas proof: `.runtime/desktop-release-6722d68171194ac6a8dcbd5cfeb69b97/` contains `canvas-expected.json`, `canvas-production.json`, `canvas-before-restart.png`, readable `canvas-recovered.png`, native `video-playback.json` / `audio-playback.json`, and owned `webview-profile.json`. Earlier `.runtime/desktop-release-9d0ed716731c44c98391fa9245c003ec/` also passed all functional checks. The 150 ms media sample first observed an audio clock at zero; replaced with bounded native timeupdate observation, not a product workaround. Initial sandbox-only desktop startup timed out; approved external native execution passed.

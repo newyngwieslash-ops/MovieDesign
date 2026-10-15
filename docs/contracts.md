@@ -261,3 +261,35 @@ EditorOptions 的三个局部策略入口：`onShapeCreate(data):boolean` 返回
 重启仅显示待确认操作，用户点击后才恢复原字节和相同 ID/body。并发响应继续使用完整前驱记录的同步 ownership 比较。completed/blocked 后只删除该 uploadID 的临时 Blob；清理失败不把已知保存结果变成未知，已完成版本仍刷新/选中并提示本机清理失败。切换项目销毁编辑器；切换版本关闭编辑器，旧结果不选入另一已选对象。未选对象的重启恢复会选择实际完成版本。
 
 `scripts/smoke-desktop.ps1 -Mode debug -Smoke editor-product` 运行真实产品 UI、原生 textarea/IME、图形像素、标注和 IDB/版本血缘检查，并正常关闭及重启同 profile。`-Smoke editor` 保留现有核心 Canvas fixture，`-Smoke m2` 保留普通导入回归。无新增网络协议、依赖、后端修改或 LLM 调用。
+
+## M3.5 持久创作画布（2026-10-16）
+
+### HTTP 与原协议映射
+
+所有路由仍要求精确 Origin，含匿名 CORS 媒体；无豁免。`GET /api/canvas/nodes?project_id=…` 对应原 `/api/v3/canvas` document GET，返回 `{schemaVersion:1,revision,nodes,edges}`，nodes/edges 是 ID-keyed maps。此路径没有另造 POST CRUD。`POST /api/canvas/commands` 接受 `{requestId,expectedRevision,command}`；requestId 是原 commandId 的明确命名适配，原节点、补丁和回执语义保留。命令体上限 16 MiB，其他 JSON 路由仍 1 MiB。
+
+M3 支持 `canvas.patch` 的精确 `{type,nodes:[{id,before,after}],edges:[{id,before,after}]}` 及非嵌套、非空、最多 64 子命令的 `canvas.batch`。每个 patch 最多 30,000 项，节点最多 10,000、边最多 20,000；缺字段、未知字段、重复 JSON key、危险对象 key、重复修改 ID、noop、空 patch、父环、缺失端点/非 frame 父、ID 冲突均拒绝。标题/ID/prompt 长度按 UTF-16 计算。后端完整检查 project、对象、Resource/Version 对应关系与 composition 成员关系。task-output/hidden task 引用在 M3 因实际任务不存在而拒绝，M4 必须接入真实 task lookup。pendingGeneration 与 memberSelections 的 generation-request 是客户端待处理意图，可存储；activeItem 只允许 version/task-output。
+
+`composition`、`placeholder`、`frame` 保留原字段和旧 presentation=subject 正规化，媒体类型来自对象内容；没有 image/video/document 节点类型。其他原 content commands 在本阶段明确返回 invalid_input，未改造为替代协议。素材创建与编辑继续走 M2 upload/commit/deliver 恢复流程；用户单独选择已交付版本添加画布，因此不会引入一次 UI 操作跨对象创建/画布写入的无日志半完成事务。
+
+`POST /api/canvas/content` 是只读批量查询，精确输入 `{compositionIds:string[]}`（最多 200，不能重复），精确顶层返回 `{items:[CompositionContent]}`。保留 ready/missing 投影、members/resources/version ordinals/currentVersionId、真实变化 revision；无任务时 taskOutputs=[]、protected=false。不是 offset 分页；对象发现仍使用既有 offset/limit+coverage API。三个 canvas 路由均 no-store。
+
+### 事务、重放与引用
+
+一个 SQLite writer transaction 读取当前文档、先查相同 requestId，再验证 revision/before/全图/对象引用，写 doc、effects 与 receipt。相同键输入不同返回 409 `details.kind=CANVAS_V3_COMMAND_ID_REUSED`；revision 冲突为 `CANVAS_V3_REVISION_CONFLICT`，before mismatch 为 `CANVAS_V3_BEFORE_MISMATCH`。沿用五种 error.code；canvas 子类型在 details.kind 中。命令只含 SQL，无文件 I/O/网络。
+
+回执 `{requestId,appliedRevision,document,replayed,effects:{undo,compositionIds}}` 中重放保留原 appliedRevision/effects，但 document 是当前最新文档。不能用 M2 冻结完整 HTTP 回执代替。batch 最终只增加一次修订，undo 反向排列；patch 的 compositionIds=[] 与原 layout 效果一致。canvas_references 为当前图和每条持久 undo 保存索引，既有共享 deleteObject 检查它；移除节点仍保留可撤销对象引用，不能先删 Version 使 undo 悬空。当前 MVP 未提供清理持久命令历史 API，项目含画布日志时不允许删除；未来需要显式历史截断策略后才能回收这些引用。
+
+### 000005 支持状态适配
+
+000001/000002 与五张核心表保持不变。000005 新建 canvas_documents、canvas_commands、canvas_references、canvas_composition_state、canvas_resource_state、canvas_version_state。后者补齐原 Resource 当前版本、稳定 ordinal 和 Composition revision；触发器覆盖现有 CRUD/delivery，版本/素材/资源变化同步增加拥有或放置该资源的 Composition revision。Version 删除不复用已分配 ordinal；current head 指向最新持久 ordinal，画布 activeItem 不改 Resource head。
+
+从 M2 升级时 ordinal 按 created_at,id 确定性回填（相同时间的历史真实先后无法从旧核心恢复）；后续分配持久 next_ordinal。core Resource 可直接创建而尚无 composition_members 行；content 为它投影稳定 `memberId=owned:<resourceId>`、空 role，不制造新 Resource/Version，显式视为该 Composition 拥有成员。真实 placement 仍使用 composition_members.id 字符串和 role。M3 没有 soft-delete composition lifecycle，因此缺失返回 missing；没有伪造 deleted、task、生成模型或 provider。
+
+### 前端与恢复边界
+
+CanvasWorkspace 与 ImageEditor/EditorHistoryManager 独立。节点 position 相对 parent frame；显示坐标累加祖先位置（原 p3 world$1:80663），父隐藏/折叠隐藏全部后代（visible:85565）；改父保留世界位置，移动 frame 保留子局部坐标。平移缩放仅本地视图，布局与版本选择走服务器 patch。可见性线性扫描上限 10k 并裁剪 DOM；没有将节点转为图像编辑器 shapes。
+
+写前将完整 body/requestId/expectedRevision 存 localStorage `moviedesign.canvas.pending.v1.<project>`；重启只显示继续按钮，同 body/key 显式确认。未知网络/5xx 保留记录，4xx 已知拒绝刷新后要求重新编辑，不自动改 body 重试。响应接受要求组件仍属于同项目且 revision 不倒退，清理记录比较完整前驱值。普通文件/PNG 导出仍由原 AssetLibrary 处理，其 IDB 字节和用户选择 revision 保护保持。
+
+图像/video/audio 均 anonymous CORS；文本/Markdown 以 `<pre>` 原样安全显示，不执行 HTML。文本预览限 1 MiB；其他文件展示元数据。视图内图片可进入既有编辑器，保存产生同 Resource 不可变新 Version。基础属性、画框折叠/颜色、局部位置/尺寸/层级、版本切换和一步画布 undo/redo可用；持久 effects 保留服务端 undo，但 UI 历史栈本次仅一层且重启后不恢复快捷按钮。

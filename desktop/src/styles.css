@@ -83,3 +83,27 @@ h3 { font-size: 14px; font-weight: 550; }
 .canvas-text-input { position: absolute; padding: 0; margin: 0; border: 0; outline: 1px dashed #3370ff; resize: none; background: transparent; color: transparent; overflow: hidden; border-radius: 0; box-sizing: content-box; }
 .annotation-comment { display: flex; align-items: end; gap: 8px; margin-top: 12px; }
 .annotation-comment textarea { display: block; min-width: 240px; }
+.persistent-canvas { margin: 16px 0; color: #dce4d6; }
+.canvas-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 0; }
+.canvas-toolbar h2 { font-size: 18px; margin-right: 10px; }
+.canvas-toolbar button, .canvas-properties button, .object-node button { padding: 6px 10px; color: inherit; background: #34432f; border: 1px solid #63745a; border-radius: 5px; }
+.canvas-layout { display: grid; grid-template-columns: minmax(0,1fr) 190px; gap: 12px; }
+.object-surface { position: relative; height: 600px; overflow: hidden; background: radial-gradient(#516149 1px,transparent 1px) 0 0/20px 20px #182116; touch-action: none; overscroll-behavior: contain; border: 1px solid #526349; border-radius: 8px; }
+.object-world { position: absolute; transform-origin: 0 0; }
+.object-node { position: absolute; display: flex; flex-direction: column; background: #263021; border: 2px solid #53654a; border-radius: 6px; box-sizing: border-box; }
+.object-node.selected { outline: 2px solid #d5ed9d; outline-offset: 2px; }
+.object-node.frame { background: #59734a22; }
+.object-node p { padding: 8px; }
+.object-node .node-handle { flex-shrink: 0; min-height: 34px; cursor: move; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.node-content img, .node-content video { width: 100%; flex: 1; min-height: 0; object-fit: contain; }
+.node-content audio { width: 100%; margin: auto 0; }
+.node-content pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; margin: 0; user-select: text; }
+.object-node .node-resize { position: absolute; right: -5px; bottom: -5px; padding: 0; width: 24px; height: 24px; cursor: nwse-resize; }
+.canvas-count { position: absolute; bottom: 8px; left: 8px; pointer-events: none; font-size: 11px; background: #182116e0; padding: 4px; }
+.canvas-properties fieldset { border: 1px solid #526349; padding: 10px; min-width: 0; }
+.canvas-properties label { display: block; margin: 10px 0; font-size: 12px; }
+.canvas-properties input:not([type=checkbox]), .canvas-properties select { display: block; width: 100%; box-sizing: border-box; }
+.canvas-properties p { font-size: 12px; line-height: 1.7; }
+.object-surface:focus-visible,.object-node:focus-visible { outline: 2px solid #d5ed9d; }
+@media(max-width:1000px) { .canvas-layout {grid-template-columns:minmax(0,1fr)} .canvas-properties {max-width:350px} }

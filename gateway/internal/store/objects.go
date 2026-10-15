@@ -510,6 +510,9 @@ func updateObject(ctx context.Context, tx *sql.Tx, p, kind, id string, raw json.
 }
 
 func deleteObject(ctx context.Context, tx *sql.Tx, kind, id string) (json.RawMessage, error) {
+	if e := checkCanvasReference(ctx, tx, kind, id); e != nil {
+		return nil, e
+	}
 	if e := checkDeliveryReference(ctx, tx, kind, id); e != nil {
 		return nil, e
 	}

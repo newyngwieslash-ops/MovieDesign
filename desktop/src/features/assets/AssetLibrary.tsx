@@ -17,7 +17,7 @@ function Preview({ projectID, asset }: { projectID: string; asset: Asset }) {
   const path = `http://127.0.0.1:8001/api/files/content?project_id=${encodeURIComponent(projectID)}&path=${encodeURIComponent(asset.path)}`;
   return <img crossOrigin="anonymous" src={path} alt={asset.name} loading="lazy" />;
 }
-export function AssetLibrary({ projectID }: { projectID: string }) {
+export function AssetLibrary({ projectID, editRequest }: { projectID: string; editRequest?: {id: string; nonce: number} }) {
   const client = useQueryClient();
   const [selected, setSelected] = useState('');
   const [editing, setEditing] = useState(false);
@@ -33,14 +33,14 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
   const lock = useRef(false);
   const alive = useRef(true);
   const selectionRevision = useRef(0);
-  function selectVersion(id: string) { ++selectionRevision.current; setSelected(id); }
+  function selectVersion(id: string) { ++selectionRevision.current; setSelected(id); setEditing(false); }
   const prepared = useRef<{ op: ImportOperation; file: File } | null>(null);
   const assets = useQuery({ queryKey: ['project', projectID, 'assets', 'all', 200], queryFn: ({ signal }) => allPages<Asset>(projectID, '/api/assets', signal) });
   const versions = useQuery({ queryKey: ['project', projectID, 'versions', 'all', 200], queryFn: ({ signal }) => allPages<Version>(projectID, '/api/versions', signal) });
   const resources = useQuery({ queryKey: ['project', projectID, 'resources', 'all', 200], queryFn: ({ signal }) => allPages<Resource>(projectID, '/api/resources', signal) });
   const compositions = useQuery({ queryKey: ['project', projectID, 'compositions', 'all', 200], queryFn: ({ signal }) => allPages<Composition>(projectID, '/api/compositions', signal) });
   useEffect(() => { alive.current = true; return () => { alive.current = false; void client.cancelQueries({ queryKey: ['project', projectID] }); }; }, [client, projectID]);
-  useEffect(() => { setEditing(false); }, [selected]);
+  useEffect(() => { if (editRequest) { selectVersion(editRequest.id); setEditing(true); } }, [editRequest]);
   const version = versions.data?.find(v => v.id === selected);
   const resource = resources.data?.find(r => r.id === version?.resource_id);
   const composition = compositions.data?.find(c => c.id === resource?.composition_id);
