@@ -120,3 +120,73 @@ func TestObjectsHTTPReplayAndBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestObjectsHTTPEmptyProjectScopeAndVersionOrigin(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "presence.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := New("http://tauri.localhost", db, t.TempDir())
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Origin", "http://tauri.localhost")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	for _, method := range []string{"GET", "POST"} {
+		w := call(method, "/api/projects?project_id=", `{"requestId":"empty-scope","action":"create","value":{"name":"invalid"}}`)
+		if w.Code != 400 {
+			t.Errorf("explicit empty scope %s: %d %s", method, w.Code, w.Body.String())
+		}
+	}
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM projects`).Scan(&count); err != nil || count != 0 {
+		t.Errorf("empty scope created projects: %d %v", count, err)
+	}
+	w := call("POST", "/api/projects", `{"requestId":"valid","action":"create","value":{"name":"valid"}}`)
+	if w.Code != 200 {
+		t.Fatalf("omitted scope: %d %s", w.Code, w.Body.String())
+	}
+	var p store.Project
+	json.Unmarshal(w.Body.Bytes(), &p)
+	if w := call("GET", "/api/projects", ""); w.Code != 200 {
+		t.Fatalf("omitted list scope: %d", w.Code)
+	}
+	// Real parent objects make the origin check independent of reference errors.
+	w = call("POST", "/api/composition-types?project_id="+p.ID, `{"requestId":"type","action":"create","value":{"label":"video"}}`)
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	var typ store.CompositionType
+	json.Unmarshal(w.Body.Bytes(), &typ)
+	w = call("POST", "/api/compositions?project_id="+p.ID, `{"requestId":"c","action":"create","value":{"type_id":"`+typ.ID+`","name":"c"}}`)
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	var c store.Composition
+	json.Unmarshal(w.Body.Bytes(), &c)
+	w = call("POST", "/api/resources?project_id="+p.ID, `{"requestId":"r","action":"create","value":{"composition_id":"`+c.ID+`"}}`)
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	var resource store.Resource
+	json.Unmarshal(w.Body.Bytes(), &resource)
+	path := "/api/versions?project_id=" + p.ID
+	w = call("POST", path, `{"requestId":"omitted","action":"create","value":{"resource_id":"`+resource.ID+`"}}`)
+	var v store.Version
+	json.Unmarshal(w.Body.Bytes(), &v)
+	if w.Code != 200 || v.Origin != "agent" {
+		t.Fatalf("omitted origin: %d %s", w.Code, w.Body.String())
+	}
+	for key, origin := range map[string]string{"explicit-null": `null`, "explicit-empty": `""`} {
+		w = call("POST", path, `{"requestId":"`+key+`","action":"create","value":{"resource_id":"`+resource.ID+`","origin":`+origin+`}}`)
+		if w.Code != 400 {
+			t.Errorf("origin %s: %d %s", origin, w.Code, w.Body.String())
+		}
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM versions`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("invalid origin created version: %d %v", count, err)
+	}
+}

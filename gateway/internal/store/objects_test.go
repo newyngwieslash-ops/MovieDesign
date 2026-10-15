@@ -275,3 +275,33 @@ func TestObjectsProjectTypeCrudAndPageCoverage(t *testing.T) {
 		t.Fatal("project delete failed")
 	}
 }
+
+func TestObjectsVersionOriginPresence(t *testing.T) {
+	ctx := context.Background()
+	s, p, _ := objectFixture(t)
+	typ := objectID(t, mutateObject(t, s, p, "composition_types", "t", "create", "", `{"label":"video"}`))
+	c := objectID(t, mutateObject(t, s, p, "compositions", "c", "create", "", `{"type_id":"`+typ+`","name":"c"}`))
+	r := objectID(t, mutateObject(t, s, p, "resources", "r", "create", "", `{"composition_id":"`+c+`"}`))
+	raw := mutateObject(t, s, p, "versions", "omitted", "create", "", `{"resource_id":"`+r+`"}`)
+	var v Version
+	if err := json.Unmarshal(raw, &v); err != nil || v.Origin != "agent" {
+		t.Fatalf("omitted origin: %s %v", raw, err)
+	}
+	for key, origin := range map[string]string{"explicit-null": `null`, "explicit-empty": `""`} {
+		_, err := s.Mutate(ctx, p, "versions", Mutation{RequestID: key, Action: "create", Value: json.RawMessage(`{"resource_id":"` + r + `","origin":` + origin + `}`)})
+		var d *DomainError
+		if !errors.As(err, &d) || d.Status != 400 {
+			t.Errorf("origin %s accepted: %v", origin, err)
+		}
+	}
+	var versions, receipts int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM versions`).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow(`SELECT count(*) FROM write_requests WHERE request_id IN ('explicit-null','explicit-empty')`).Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 1 || receipts != 0 {
+		t.Fatalf("invalid origins mutated state: versions=%d receipts=%d", versions, receipts)
+	}
+}

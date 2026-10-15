@@ -360,6 +360,13 @@ func createObject(ctx context.Context, tx *sql.Tx, p, kind string, raw json.RawM
 		if e != nil {
 			return nil, invalid(e.Error())
 		}
+		if v.Origin == "" {
+			var fields map[string]json.RawMessage
+			json.Unmarshal(raw, &fields)
+			if _, present := fields["origin"]; present {
+				return nil, invalid("origin must be agent or user when present")
+			}
+		}
 		if _, e = getObject(ctx, tx, p, "resources", v.ResourceID); e != nil {
 			return nil, e
 		}

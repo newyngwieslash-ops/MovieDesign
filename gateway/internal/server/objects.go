@@ -68,7 +68,7 @@ func serveObjects(w http.ResponseWriter, r *http.Request, s store.Objects, kind 
 		return
 	}
 	p := query.Get("project_id")
-	if kind != "projects" || p != "" {
+	if kind != "projects" || query.Has("project_id") {
 		if err = (store.Scope{ProjectID: p, RequestID: "query", Operation: kind}).Validate(); err != nil || p == "_app" {
 			reject(w, 400, "invalid_input", "Invalid project_id")
 			return
