@@ -260,6 +260,9 @@ func validate(in Request) error {
 		}
 	}
 	c := in.Output.Composition
+	if len(c.Placements) < 1 || len(c.Placements) > 50 {
+		return invalid("Composition requires 1–50 placements")
+	}
 	if c.Name == "" || utf8.RuneCountInString(c.Name) > 256 || (c.Type.ID == "" && c.Type.Label == "") || utf8.RuneCountInString(c.Type.Label) > 256 {
 		return invalid("Composition requires name and type id or label (names/labels up to 256 characters)")
 	}
@@ -282,8 +285,21 @@ func (s *Service) prepare(ctx context.Context, p string, in Request, j *journal)
 			return missing("taskOutputKey not found; task output storage is introduced in M4")
 		}
 		if _, ok := snapshots[src.Path]; !ok {
+			if e := s.checkSourcePending(ctx, p, in.RequestID, src.Path); e != nil {
+				return e
+			}
+			if s.fault != nil {
+				if e := s.fault("before_inspect"); e != nil {
+					return e
+				}
+			}
 			a, e := s.workspace.InspectDelivery(p, src.Path, uuid.NewString())
 			if e != nil {
+				// A file intent may start after the early check and temporarily
+				// remove or replace the source. That gap is retryable, not blocked.
+				if pending := s.checkSourcePending(ctx, p, in.RequestID, src.Path); pending != nil {
+					return pending
+				}
 				return e
 			}
 			snapshots[src.Path] = a
@@ -430,6 +446,18 @@ func (s *Service) prepare(ctx context.Context, p string, in Request, j *journal)
 	}
 	j.Plan = pl
 	return nil
+}
+
+func (s *Service) checkSourcePending(ctx context.Context, p, key, source string) error {
+	tx, e := s.db.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	if e = store.CheckFilePending(ctx, tx, p, source); e != nil {
+		return e
+	}
+	return store.CheckDeliveryPaths(ctx, tx, p, key, source)
 }
 func nullable(s string) any {
 	if s == "" {

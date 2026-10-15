@@ -44,6 +44,20 @@ type Composition struct {
 	Type       CompositionType `json:"type"`
 	Placements []Placement     `json:"placements"`
 }
+
+func (c *Composition) UnmarshalJSON(b []byte) error {
+	type plain Composition
+	v, e := store.DecodeValue[plain](b)
+	if e != nil {
+		return e
+	}
+	if len(v.Placements) < 1 || len(v.Placements) > 50 {
+		return invalid("Composition requires 1–50 placements")
+	}
+	*c = Composition(v)
+	return nil
+}
+
 type CompositionType struct {
 	ID    string `json:"id,omitempty"`
 	Label string `json:"label,omitempty"`

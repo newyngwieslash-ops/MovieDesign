@@ -436,6 +436,9 @@ func updateObject(ctx context.Context, tx *sql.Tx, p, kind, id string, raw json.
 		if !errors.Is(e, sql.ErrNoRows) {
 			return nil, e
 		}
+		if e = checkDeliveryRename(ctx, tx, kind, id, v.Label); e != nil {
+			return nil, e
+		}
 		_, err = tx.ExecContext(ctx, `UPDATE composition_types SET label=? WHERE id=?`, v.Label, id)
 	case "compositions":
 		v, e := DecodeValue[compositionUpdate](raw)
@@ -448,6 +451,9 @@ func updateObject(ctx context.Context, tx *sql.Tx, p, kind, id string, raw json.
 		if _, ok := fields["name"]; ok {
 			if v.Name == nil || len(*v.Name) == 0 || len([]rune(*v.Name)) > 256 {
 				return nil, invalid("name must contain 1–256 characters")
+			}
+			if e = checkDeliveryRename(ctx, tx, kind, id, *v.Name); e != nil {
+				return nil, e
 			}
 			if _, err = tx.ExecContext(ctx, `UPDATE compositions SET name=? WHERE id=?`, v.Name, id); err != nil {
 				return nil, err

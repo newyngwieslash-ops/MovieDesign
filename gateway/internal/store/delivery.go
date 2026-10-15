@@ -75,3 +75,35 @@ func checkDeliveryReference(ctx context.Context, tx *sql.Tx, kind, id string) er
 	}
 	return nil
 }
+
+// checkDeliveryRename protects only effective target name changes while an
+// unknown delivery depends on them. Attributes and completed targets stay editable.
+func checkDeliveryRename(ctx context.Context, tx *sql.Tx, kind, id, next string) error {
+	exists, e := deliveryTables(ctx, tx)
+	if e != nil || !exists {
+		return e
+	}
+	var current, field string
+	switch kind {
+	case "composition_types":
+		field = "TypeID"
+		e = tx.QueryRowContext(ctx, "SELECT label FROM composition_types WHERE id=?", id).Scan(&current)
+	case "compositions":
+		field = "CompositionID"
+		e = tx.QueryRowContext(ctx, "SELECT name FROM compositions WHERE id=?", id).Scan(&current)
+	default:
+		return nil
+	}
+	if e != nil || current == next {
+		return e
+	}
+	var n int
+	e = tx.QueryRowContext(ctx, "SELECT count(*) FROM deliveries WHERE status='unknown' AND json_extract(plan_json,?)=?", "$."+field, id).Scan(&n)
+	if e != nil {
+		return e
+	}
+	if n > 0 {
+		return ErrRequestPending
+	}
+	return nil
+}

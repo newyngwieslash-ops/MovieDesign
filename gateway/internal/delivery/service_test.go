@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -501,5 +502,153 @@ func TestTypeIDAndPendingBase(t *testing.T) {
 	r, e = f.s.Deliver(ctx, f.p, in)
 	if e != nil || r.Delivery.Status != "blocked" {
 		t.Fatal(r, e)
+	}
+}
+
+func TestPendingSourceGapRecovery(t *testing.T) {
+	for _, afterCheck := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after_early_check_%v", afterCheck), func(t *testing.T) {
+			f := setup(t)
+			ctx := context.Background()
+			in := f.input(t, "source-gap")
+			source := in.Sources[0].Path
+			disk := filepath.Join(f.root, filepath.FromSlash(source))
+			away := disk + ".away"
+			prepareGap := func() {
+				t.Helper()
+				raw, _ := json.Marshal([]map[string]string{{"source": source, "target": source + ".away"}})
+				if _, e := f.db.Exec("INSERT INTO file_operations(project_id,request_id,operation,input_json,stage,source) VALUES(?,'gap','content','{}','prepared',?)", f.p, string(raw)); e != nil {
+					t.Fatal(e)
+				}
+				if e := os.Rename(disk, away); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if afterCheck {
+				f.s.fault = func(point string) error {
+					if point == "before_inspect" {
+						prepareGap()
+					}
+					return nil
+				}
+			} else {
+				prepareGap()
+			}
+			r, e := f.s.Deliver(ctx, f.p, in)
+			if e != nil || r.Delivery.Status != "unknown" {
+				t.Fatalf("gap must be recoverable: %+v %v", r, e)
+			}
+			if count(t, f.db, "SELECT count(*) FROM delivery_sources") != 0 {
+				t.Fatal("source gap allocated a plan")
+			}
+			if e = os.Rename(away, disk); e != nil {
+				t.Fatal(e)
+			}
+			if _, e = f.db.Exec("UPDATE file_operations SET stage='completed' WHERE request_id='gap'"); e != nil {
+				t.Fatal(e)
+			}
+			f.s.fault = nil
+			r, e = f.s.Deliver(ctx, f.p, in)
+			if e != nil || r.Delivery.Status != "completed" || count(t, f.db, "SELECT count(*) FROM versions") != 1 {
+				t.Fatalf("same key recovery: %+v %v", r, e)
+			}
+		})
+	}
+}
+func TestPendingTargetRenameProtection(t *testing.T) {
+	for _, kind := range []string{"compositions", "composition_types"} {
+		t.Run(kind, func(t *testing.T) {
+			f := setup(t)
+			ctx := context.Background()
+			in := f.input(t, "first")
+			first, e := f.s.Deliver(ctx, f.p, in)
+			if e != nil || first.Delivery.Status != "completed" {
+				t.Fatal(first, e)
+			}
+			var target, source string
+			f.db.QueryRow("SELECT id FROM " + kind + " LIMIT 1").Scan(&target)
+			f.db.QueryRow("SELECT path FROM assets LIMIT 1").Scan(&source)
+			pending := in
+			pending.RequestID = "pending-target"
+			pending.Sources = []Source{{Key: "one", Path: source}}
+			f.s.fault = func(point string) error {
+				if point == "prepare" {
+					return errors.New("crash")
+				}
+				return nil
+			}
+			r, e := f.s.Deliver(ctx, f.p, pending)
+			if e != nil || r.Delivery.Status != "unknown" {
+				t.Fatal(r, e)
+			}
+			value := json.RawMessage(`{"name":"renamed"}`)
+			if kind == "composition_types" {
+				value = json.RawMessage(`{"label":"renamed"}`)
+			}
+			mutation := store.Mutation{RequestID: "rename-pending", Action: "update", ID: target, Value: value}
+			unchanged := json.RawMessage(`{"name":"Movie"}`)
+			if kind == "composition_types" {
+				unchanged = json.RawMessage(`{"label":"video"}`)
+			}
+			if _, e = (store.Objects{DB: f.db}).Mutate(ctx, f.p, kind, store.Mutation{RequestID: "same-target-name", Action: "update", ID: target, Value: unchanged}); e != nil {
+				t.Fatalf("unchanged target rejected: %v", e)
+			}
+			if kind == "compositions" {
+				if _, e = (store.Objects{DB: f.db}).Mutate(ctx, f.p, kind, store.Mutation{RequestID: "attributes-pending", Action: "update", ID: target, Value: json.RawMessage(`{"attributes":"{}"}`)}); e != nil {
+					t.Fatalf("unrelated attributes rejected: %v", e)
+				}
+			}
+			if _, e = (store.Objects{DB: f.db}).Mutate(ctx, f.p, kind, mutation); !errors.Is(e, store.ErrRequestPending) {
+				t.Fatalf("pending rename %v", e)
+			}
+			f.s.fault = nil
+			r, e = f.s.Recover(ctx, f.p, pending.RequestID)
+			if e != nil || r.Delivery.Status != "completed" {
+				t.Fatal(r, e)
+			}
+			mutation.RequestID = "rename-completed"
+			if _, e = (store.Objects{DB: f.db}).Mutate(ctx, f.p, kind, mutation); e != nil {
+				t.Fatalf("completed target should be renamable: %v", e)
+			}
+			replay, e := f.s.Deliver(ctx, f.p, in)
+			if e != nil || !reflect.DeepEqual(first, replay) {
+				t.Fatalf("completed replay after rename: %+v %v", replay, e)
+			}
+		})
+	}
+}
+func TestPlacementsRequired(t *testing.T) {
+	f := setup(t)
+	in := f.input(t, "placements")
+	raw, _ := json.Marshal(in)
+	for _, bad := range []string{strings.Replace(string(raw), `,"placements":[{"key":"one","role":"main"}]`, "", 1), strings.Replace(string(raw), `"placements":[{"key":"one","role":"main"}]`, `"placements":null`, 1)} {
+		if _, e := store.DecodeValue[Request]([]byte(bad)); e == nil {
+			t.Fatalf("decoder accepted missing/null placements: %s", bad)
+		}
+	}
+	in.Output.Composition.Placements = nil
+	r, e := f.s.Deliver(context.Background(), f.p, in)
+	if e != nil || r.Delivery.Status != "blocked" {
+		t.Fatalf("direct nil placements: %+v %v", r, e)
+	}
+	for _, n := range []int{0, 50, 51} {
+		in.RequestID = fmt.Sprintf("placement-count-%d", n)
+		in.Output.Composition.Placements = make([]Placement, n)
+		for i := range in.Output.Composition.Placements {
+			in.Output.Composition.Placements[i] = Placement{Key: "one", Role: fmt.Sprintf("role-%d", i)}
+		}
+		wire, _ := json.Marshal(in)
+		_, decodeError := store.DecodeValue[Request](wire)
+		if (decodeError == nil) != (n == 50) {
+			t.Fatalf("decoder count %d: %v", n, decodeError)
+		}
+		r, e = f.s.Deliver(context.Background(), f.p, in)
+		want := "blocked"
+		if n == 50 {
+			want = "completed"
+		}
+		if e != nil || r.Delivery.Status != want {
+			t.Fatalf("direct count %d: %+v %v", n, r, e)
+		}
 	}
 }
