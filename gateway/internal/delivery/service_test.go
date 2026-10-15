@@ -633,9 +633,15 @@ func TestPlacementsRequired(t *testing.T) {
 	}
 	for _, n := range []int{0, 50, 51} {
 		in.RequestID = fmt.Sprintf("placement-count-%d", n)
+		source := "projects/" + f.p + "/files/source.txt"
+		in.Sources = make([]Source, n)
+		in.Output.Resources = make([]Resource, n)
 		in.Output.Composition.Placements = make([]Placement, n)
 		for i := range in.Output.Composition.Placements {
-			in.Output.Composition.Placements[i] = Placement{Key: "one", Role: fmt.Sprintf("role-%d", i)}
+			key := fmt.Sprintf("key-%d", i)
+			in.Sources[i] = Source{Key: key, Path: source}
+			in.Output.Resources[i] = Resource{Key: key, Mode: "create", Name: key}
+			in.Output.Composition.Placements[i] = Placement{Key: key, Role: fmt.Sprintf("role-%d", i)}
 		}
 		wire, _ := json.Marshal(in)
 		_, decodeError := store.DecodeValue[Request](wire)
@@ -650,5 +656,66 @@ func TestPlacementsRequired(t *testing.T) {
 		if e != nil || r.Delivery.Status != want {
 			t.Fatalf("direct count %d: %+v %v", n, r, e)
 		}
+		if n == 50 && (count(t, f.db, "SELECT count(*) FROM assets") != 1 || count(t, f.db, "SELECT count(*) FROM resources") != 50 || count(t, f.db, "SELECT count(*) FROM composition_members") != 50) {
+			t.Fatal("50 independent placed resources must share one repeated-path asset")
+		}
+	}
+}
+
+func TestPendingInstalledReplacementRecovery(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	in := f.input(t, "replacement-delivery")
+	files := workspace.NewService(f.db, f.w)
+	if _, e := files.Register(ctx, f.p, "register-source", in.Sources[0].Path); e != nil {
+		t.Fatal(e)
+	}
+	content := workspace.Input{RequestID: "replace-content", Path: in.Sources[0].Path, Content: "replacement content"}
+	f.s.fault = func(point string) error {
+		if point != "before_inspect" {
+			return nil
+		}
+		if _, e := f.db.Exec(`CREATE TRIGGER interrupt_content BEFORE INSERT ON assets BEGIN SELECT RAISE(ABORT,'content SQL interrupted'); END`); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := files.Mutate(ctx, f.p, "content", content); e == nil {
+			t.Fatal("expected content SQL interruption")
+		}
+		if count(t, f.db, "SELECT count(*) FROM file_operations WHERE request_id=? AND stage='prepared'", content.RequestID) != 1 {
+			t.Fatal("content journal not prepared")
+		}
+		bytes, e := os.ReadFile(filepath.Join(f.root, filepath.FromSlash(content.Path)))
+		if e != nil || string(bytes) != content.Content {
+			t.Fatal("replacement not installed", e)
+		}
+		return nil
+	}
+	r, e := f.s.Deliver(ctx, f.p, in)
+	if e != nil || r.Delivery.Status != "unknown" {
+		t.Fatalf("installed replacement must be retryable: %+v %v", r, e)
+	}
+	if _, e = f.db.Exec("DROP TRIGGER interrupt_content"); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = files.Mutate(ctx, f.p, "content", content); e != nil {
+		t.Fatalf("real content recovery: %v", e)
+	}
+	f.s.fault = nil
+	r, e = f.s.Deliver(ctx, f.p, in)
+	if e != nil || r.Delivery.Status != "completed" || count(t, f.db, "SELECT count(*) FROM versions") != 1 {
+		t.Fatalf("same key recovery: %+v %v", r, e)
+	}
+}
+func TestDuplicatePlacementKeys(t *testing.T) {
+	f := setup(t)
+	in := f.input(t, "duplicate-placements")
+	in.Output.Composition.Placements = append(in.Output.Composition.Placements, Placement{Key: "one", Role: "other"})
+	wire, _ := json.Marshal(in)
+	if _, e := store.DecodeValue[Request](wire); e == nil {
+		t.Error("decoder accepted duplicate placement keys")
+	}
+	r, e := f.s.Deliver(context.Background(), f.p, in)
+	if e != nil || r.Delivery.Status != "blocked" {
+		t.Fatalf("direct duplicate keys: %+v %v", r, e)
 	}
 }

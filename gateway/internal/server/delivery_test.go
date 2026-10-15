@@ -49,7 +49,7 @@ func TestDeliveryHTTP(t *testing.T) {
 			t.Fatalf("boundary %d %s", w.Code, w.Body.String())
 		}
 	}
-	for _, replacement := range []string{"", `,"placements":null`, `,"placements":[]`} {
+	for _, replacement := range []string{"", `,"placements":null`, `,"placements":[]`, `,"placements":[{"key":"one","role":"main"},{"key":"one","role":"other"}]`} {
 		bad := strings.Replace(body, `,"placements":[{"key":"one","role":"main"}]`, replacement, 1)
 		w := call("POST", url, bad, "http://tauri.localhost")
 		if w.Code != 400 {

@@ -260,8 +260,8 @@ func validate(in Request) error {
 		}
 	}
 	c := in.Output.Composition
-	if len(c.Placements) < 1 || len(c.Placements) > 50 {
-		return invalid("Composition requires 1–50 placements")
+	if e := validatePlacements(c.Placements); e != nil {
+		return e
 	}
 	if c.Name == "" || utf8.RuneCountInString(c.Name) > 256 || (c.Type.ID == "" && c.Type.Label == "") || utf8.RuneCountInString(c.Type.Label) > 256 {
 		return invalid("Composition requires name and type id or label (names/labels up to 256 characters)")
@@ -366,6 +366,15 @@ func (s *Service) prepare(ctx context.Context, p string, in Request, j *journal)
 	for _, src := range in.Sources {
 		ps, ok := allocated[src.Path]
 		if !ok {
+			// Successful inspection can observe installed replacement bytes before
+			// their file journal commits. Check reservations before rejecting the
+			// still-old registered identity in this same admission transaction.
+			if e = store.CheckFilePending(ctx, tx, p, src.Path); e != nil {
+				return e
+			}
+			if e = store.CheckDeliveryPaths(ctx, tx, p, in.RequestID, src.Path); e != nil {
+				return e
+			}
 			ps = plannedSource{Asset: snapshots[src.Path]}
 			a := &ps.Asset
 			var existing, status string

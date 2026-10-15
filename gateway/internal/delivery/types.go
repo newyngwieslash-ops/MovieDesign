@@ -51,10 +51,24 @@ func (c *Composition) UnmarshalJSON(b []byte) error {
 	if e != nil {
 		return e
 	}
-	if len(v.Placements) < 1 || len(v.Placements) > 50 {
-		return invalid("Composition requires 1–50 placements")
+	if e = validatePlacements(v.Placements); e != nil {
+		return e
 	}
 	*c = Composition(v)
+	return nil
+}
+
+func validatePlacements(placements []Placement) error {
+	if len(placements) < 1 || len(placements) > 50 {
+		return invalid("Composition requires 1–50 placements")
+	}
+	keys := make(map[string]bool, len(placements))
+	for _, p := range placements {
+		if keys[p.Key] {
+			return invalid("Placement keys must be unique")
+		}
+		keys[p.Key] = true
+	}
 	return nil
 }
 
