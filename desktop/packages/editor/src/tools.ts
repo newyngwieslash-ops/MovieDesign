@@ -19,9 +19,9 @@ export class Tools {
   down(point: Point): void {
     const editor = this.editor, selected = editor.getSelectedShape();
     const corner = selected ? hitHandle(point, selected.getBounds(), editor.getUiScale()) : null;
-    // Creation tools can still manipulate an already selected shape.
-    if (this.name === 'select' || corner || selected?.hitTest(point)) {
-      const shape = corner || selected?.hitTest(point) ? selected : editor.findShapeAt(point);
+    // Existing hits delegate to selection, with selected handles/body taking priority.
+    const shape = corner || selected?.hitTest(point) ? selected : editor.findShapeAt(point);
+    if (this.name === 'select' || shape) {
       editor.select(shape?.id ?? null);
       if (shape) {
         this.start = { ...point }; this.transform = { shape, original: shape.toData(), bounds: shape.getBounds(), corner };

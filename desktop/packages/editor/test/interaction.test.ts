@@ -88,6 +88,35 @@ test('pointer capture uses original delta, ignores other pointers and pointercan
   editor.undo(); assert.deepEqual(editor.getShape('r')!.getBounds(), { x: 20, y: 20, width: 60, height: 40 }); editor.destroy();
 });
 
+test('every creation tool delegates an existing topmost hit to one undoable move without creating content', () => {
+  for (const tool of ['rectangle', 'ellipse', 'line', 'arrow', 'brush', 'mosaic', 'text', 'tag'] as const) {
+    const { editor, main } = setup([rect('bottom'), rect('top')]); let textRequests = 0;
+    editor.on('text-edit', () => textRequests++); editor.setTool(tool);
+    assert.equal(editor.getState().selectedId, null, tool);
+    pointer(main, 'pointerdown', 50, 40); pointer(main, 'pointermove', 60, 45); pointer(main, 'pointerup', 60, 45);
+    assert.deepEqual(editor.getState().shapes.map(shape => shape.id), ['bottom', 'top'], tool);
+    assert.equal(editor.getState().selectedId, 'top', tool); assert.equal(textRequests, 0, tool);
+    assert.deepEqual(editor.getShape('top')!.getBounds(), { x: 30, y: 25, width: 60, height: 40 }, tool);
+    assert.deepEqual(editor.getShape('bottom')!.getBounds(), { x: 20, y: 20, width: 60, height: 40 }, tool);
+    editor.undo(); assert.deepEqual(editor.getShape('top')!.getBounds(), { x: 20, y: 20, width: 60, height: 40 }, tool);
+    assert.equal(editor.getState().canUndo, false, tool); editor.destroy();
+  }
+});
+
+test('creation delegation preserves a selected shape and its handle ahead of an overlapping topmost hit', () => {
+  for (const [start, end, expected] of [
+    [{ x: 50, y: 40 }, { x: 60, y: 45 }, { x: 30, y: 25, width: 60, height: 40 }],
+    [{ x: 20, y: 20 }, { x: 30, y: 30 }, { x: 30, y: 30, width: 50, height: 30 }],
+  ] as const) {
+    const { editor, main } = setup([rect('selected'), rect('top')]);
+    editor.setTool('text'); editor.select('selected');
+    pointer(main, 'pointerdown', start.x, start.y); pointer(main, 'pointermove', end.x, end.y); pointer(main, 'pointerup', end.x, end.y);
+    assert.equal(editor.getState().selectedId, 'selected'); assert.equal(editor.getState().shapes.length, 2);
+    assert.deepEqual(editor.getShape('selected')!.getBounds(), expected);
+    assert.deepEqual(editor.getShape('top')!.getBounds(), { x: 20, y: 20, width: 60, height: 40 }); editor.destroy();
+  }
+});
+
 test('each corner resizes from the original data, including crossing the opposite corner', () => {
   for (const [x, y, tx, ty, expected] of [[20, 20, 90, 70, { x: 80, y: 60, width: 10, height: 10 }], [80, 20, 100, 10, { x: 20, y: 10, width: 80, height: 50 }], [20, 60, 10, 90, { x: 10, y: 20, width: 70, height: 70 }], [80, 60, 100, 90, { x: 20, y: 20, width: 80, height: 70 }]] as const) {
     const { editor, main } = setup([rect()]); editor.select('r');
