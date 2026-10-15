@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+:root { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #e5e6e6; background: #111315; font-synthesis: none; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 720px; }
+a { color: inherit; text-decoration: none; }
+a:focus-visible { outline: 2px solid #c4e9aa; outline-offset: 5px; }
+.workbench { height: 100vh; display: grid; grid-template: 64px minmax(0, 1fr) / 216px minmax(0, 1fr); }
+.topbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 32px; padding: 0 24px; border-bottom: 1px solid #2a2d2e; }
+.brand { display: flex; align-items: center; gap: 11px; font-size: 18px; font-weight: 650; letter-spacing: -.5px; }
+.brand-icon { display: grid; place-items: center; background: #c4e9aa; color: #1c2820; width: 30px; height: 30px; border-radius: 9px; font-weight: 800; }
+.workspace-label { color: #9a9fa0; font-size: 12px; border-left: 1px solid #343738; padding-left: 26px; }
+.connection { margin-left: auto; display: flex; align-items: center; gap: 8px; color: #b7bcbc; font-size: 12px; }
+.connection i { width: 6px; height: 6px; background: #d4ad73; border-radius: 50%; }
+.connection.ready i { background: #c4e9aa; }
+.sidebar { padding: 28px 16px 20px; border-right: 1px solid #2a2d2e; display: flex; flex-direction: column; }
+.section-label { margin: 0 12px 18px; color: #969c9d; font-size: 11px; letter-spacing: 2px; }
+.selected-item { padding: 12px 14px; border-radius: 7px; background: #252b25; color: #d4e7c8; font-size: 13px; }
+.selected-item span { margin-right: 9px; }
+.sidebar-note { color: #999f9e; font-size: 12px; line-height: 2; padding: 26px 13px; }
+.milestone { margin-top: auto; color: #a8aead; font-size: 11px; padding: 0 12px; }
+.milestone span { border: 1px solid #434944; padding: 3px 6px; border-radius: 4px; margin-right: 8px; }
+main { min-height: 0; display: flex; flex-direction: column; padding: 28px 32px 0; }
+.canvas-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
+h1 { font-size: 21px; font-weight: 550; margin: 0 0 8px; }
+.canvas-header p { font-size: 12px; color: #a2a8a7; margin: 0; }
+.local-badge { font-size: 10px; letter-spacing: 2px; color: #b5bfaf; border: 1px solid #394037; padding: 6px 9px; border-radius: 4px; }
+.canvas-workspace { min-height: 250px; flex: 1; position: relative; overflow: auto; display: grid; place-items: center; border: 1px solid #303433; border-radius: 10px; background-color: #171b1b; background-image: radial-gradient(#343b37 .8px, transparent .8px); background-size: 24px 24px; }
+.canvas-empty { text-align: center; padding: 48px 20px; }
+.canvas-emblem { height: 72px; width: 96px; margin: 0 auto 29px; position: relative; }
+.canvas-emblem span { position: absolute; width: 49px; height: 60px; border: 1px solid #91a187; background: #212a24; border-radius: 7px; top: 4px; left: 24px; transform: rotate(-17deg) translateX(-17px); }
+.canvas-emblem span:nth-child(2) { transform: rotate(15deg) translateX(16px); border-color: #78926e; }
+.canvas-emblem span:nth-child(3) { transform: rotate(0); background: #303e30; border-color: #a7c495; }
+.eyebrow { font-size: 9px; letter-spacing: 2.5px; color: #b2c1a9; }
+h2 { font-size: 23px; font-weight: 450; letter-spacing: 1px; margin: 16px 0; }
+.canvas-empty p { color: #aeb6b2; font-size: 12px; line-height: 2; margin-bottom: 26px; }
+.stage-label { color: #b8c9af; font-size: 10px; border: 1px solid #414e3d; background: #20291f; padding: 6px 11px; border-radius: 20px; }
+.canvas-origin { position: absolute; bottom: 16px; left: 18px; color: #87968a; }
+footer { height: 42px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; color: #9ba49f; font-size: 10px; }
+.error-banner { border: 1px solid #875b48; background: #33251f; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; color: #f2c8ad; font-size: 12px; }
+.error-banner p { margin: 6px 0 0; overflow-wrap: anywhere; }
+@media (max-width: 850px) { .workbench { grid-template-columns: 160px minmax(0, 1fr); } main { padding: 22px 20px 0; } .workspace-label { display: none; } }

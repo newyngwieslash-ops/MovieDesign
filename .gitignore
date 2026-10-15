@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+desktop/src-tauri/gen/
+desktop/src-tauri/binaries/
+.tools/
+.runtime/
+*.log
+*.db
+*.db-*
+.env
+.env.*
+!.env.example
+*.pem
+*.key
