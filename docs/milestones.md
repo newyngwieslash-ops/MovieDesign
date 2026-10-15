@@ -1,12 +1,12 @@
 # 里程碑验收
 
-完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)。M2 已通过全量检查与独立整体验收，M3 正在实施，M4–M7 待实施；计划中的测试命令不是已执行结果，各阶段证据另行记录。
+完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)。M2–M3 已通过全量检查与独立整体验收，M4–M7 待实施；计划中的测试命令不是已执行结果，各阶段证据另行记录。
 
 | 里程碑 | 范围 | 状态 |
 | --- | --- | --- |
 | M1 | Tauri、gateway、SQLite、空工作台、生命周期 | 验证通过 |
 | M2 | 对象模型 CRUD、幂等投递、unknown 重放 | 验证通过 |
-| M3 | 八图形编辑器、历史、标注 | 实施中，尚未整体验收 |
+| M3 | 八图形编辑器、历史、标注、持久创作画布 | 验证通过 |
 | M4 | 图像模型、能力契约、任务状态机、计费与事件 | 待实施 |
 | M5 | opencode、MCP、提示词、聊天与确认卡 | 待实施 |
 | M6 | 两个技能、分镜批准、Prompt 锁定与 Preflight | 待实施 |
@@ -109,3 +109,12 @@ M3.4（2026-10-16）已提交 f9b9f8c、81385f8 并通过独立规格/质量复�
 Final M3.5 canvas proof: `.runtime/desktop-release-6722d68171194ac6a8dcbd5cfeb69b97/` contains `canvas-expected.json`, `canvas-production.json`, `canvas-before-restart.png`, readable `canvas-recovered.png`, native `video-playback.json` / `audio-playback.json`, and owned `webview-profile.json`. Earlier `.runtime/desktop-release-9d0ed716731c44c98391fa9245c003ec/` also passed all functional checks. The 150 ms media sample first observed an audio clock at zero; replaced with bounded native timeupdate observation, not a product workaround. Initial sandbox-only desktop startup timed out; approved external native execution passed.
 
 M3.5 独立任务复审（697b542）通过。初次审查发现共享枚举判断接受拼接值，已改为原始输入精确 token 比较；四个实际入口覆盖全部合法值以及拼接、首尾空白、空串、部分字符串，拒绝均不改变完整文档/revision/receipt；实际 HTTP 同样拒绝。覆盖检查 `go -C gateway test ./internal/store ./internal/server -run TestCanvas -v` 通过。先前生产证据中 `observedUpload` 会被后续媒体导入覆盖，不能单独引用它证明 PNG 恢复；原即时 ID/SHA 断言及持久 IDB 证据有效，新 smoke 单独保存 `recoveredPNGUpload` 供后续证据读取。最终整里程碑检查与整分支审查仍待记录，不以单任务审查代替。
+
+## M3 整体验收（2026-10-16）
+
+- M3.1–M3.5 全部通过独立规格/质量审查。整分支审查范围 7be80dd..dd4933c 后发现一项恢复边界问题，59541dd 修复并复审为 Ready to merge: Yes，无遗留发现：撤销/重做模式随本地 pending 冻结，初次发送和显式继续均使用原模式，HTTP body/requestId 不变；旧无模式记录重放后保守清除两个历史快捷动作。新增实际组件检查12项，涵盖同窗口/重载/损坏模式，原问题先失败后通过。
+- 最终应用提交 59541ddb17decc03c7e4a4f152ce8649eb597c75。`scripts/check.ps1` 在该代码通过：Go 全包/vet、sidecar、34项恢复/生命周期检查、51项编辑器/标注/画布检查、TS/Vite、Rust、真实 M1 gateway 生命周期。完整日志 `.runtime/m3-final-approved-check.txt`，gateway 证据 `.runtime/smoke-e02d256e1e4e4e66a03ff5231b5c2711/`。
+- 当前最终代码 `pnpm --dir desktop desktop:build` 成功，保留完整日志 `.runtime/m3-final-approved-build.txt`。随后生产 exe `-Mode release -Smoke canvas` 初次及原生重启均通过，正常关闭无残留 gateway；证据 `.runtime/desktop-release-d6f0d74382664da0a1ec38cfb85980c9/`，日志 `.runtime/m3-final-approved-native.txt`。生产 Origin、节点/框架/媒体/安全文档、图像编辑及不可变新版本、PNG IDB 字节与原上传号、画布原命令重放/CAS均由实际窗口检查。最终独立保存的 recoveredPNGUpload 与冻结 op.uploadID/完整SHA-256相等，renderer exceptions=[]。
+- 普通 M2 原生导入/重启、M1 原生窗口回归先前在应用2965e15通过，证据见 M3.5；后续仅画布非法枚举拒绝和本地 undo恢复元数据修正，M2业务实现不变。最终全量恢复/生命周期检查及生产 Canvas 集成均重跑通过，没有声称把全部旧原生用例重复执行。早期丰富编辑器/IME debug 证据、受控 DPR/合成 composing 按键及物理硬件未验限制继续按原记录区分。
+- 原始 000001/000002 迁移保持不变；Go1.25.8、标准库/原生 IndexedDB 与既有依赖复用，无新增业务依赖。支撑元数据、限定 patch/batch、一步 Canvas 快捷历史、只读文本1MiB及持久 undo引用暂不回收等范围已在 contracts 明确。M3 不代表供应商/AI生成、agent聊天、分镜或签名安装更新完成。
+- README 更新为实际 M1–M3 能力、Go工具链及生产/开发检查边界。远程交付以 main 的 Git refs 核对结果为准；下一阶段 M4 接入自定义本地/云端供应商、持久任务、SSE和费用确认。
