@@ -33,6 +33,20 @@ type Capability struct {
 	DurationSeconds []int    `json:"duration_seconds"`
 	Audio           bool     `json:"audio"`
 }
+
+// Normalize legacy/omitted/null optional arrays at every JSON output boundary,
+// including stored receipts, so API consumers always receive arrays.
+func (c Capability) MarshalJSON() ([]byte, error) {
+	type plain Capability
+	if c.Sizes == nil {
+		c.Sizes = []string{}
+	}
+	if c.DurationSeconds == nil {
+		c.DurationSeconds = []int{}
+	}
+	return json.Marshal(plain(c))
+}
+
 type Pricing struct {
 	Currency          string `json:"currency"`
 	Unit              string `json:"unit"`
@@ -360,4 +374,22 @@ func (s *Service) Execute(ctx context.Context, raw []byte) (Receipt, error) {
 		return empty, ErrUnavailable
 	}
 	return empty, nil
+}
+
+// Receipt reads the original completed journal result without requiring a key.
+// Absence is not proof of non-execution; clients may only replay the original ID/input.
+func (s *Service) Receipt(ctx context.Context, id string) (Receipt, error) {
+	var result Receipt
+	if err := (store.Scope{ProjectID: "_app", Operation: "providers", RequestID: id}).Validate(); err != nil {
+		return result, invalid("Invalid requestId")
+	}
+	var raw string
+	err := s.DB.QueryRowContext(ctx, `SELECT response_json FROM write_requests WHERE project_id='_app' AND operation='providers' AND request_id=? AND state='completed'`, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return result, ErrNotFound
+	}
+	if err != nil || json.Unmarshal([]byte(raw), &result) != nil {
+		return result, ErrUnavailable
+	}
+	return result, nil
 }

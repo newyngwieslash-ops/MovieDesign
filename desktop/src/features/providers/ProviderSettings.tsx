@@ -1,3 +1,4 @@
+import { pendingStorageKey, preparePending, readPending, replayPending, type PendingProvider } from './recovery';
 import { useEffect, useState } from 'react';
 import { APIError, api, newRequestID } from '../../gateway';
 
@@ -11,26 +12,51 @@ const price = (kind: string): Pricing => ({ currency: 'USD', unit: kind === 'ima
 export function ProviderSettings({ ready }: { ready: boolean }) {
   const [items, setItems] = useState<View[]>([]), [config, setConfig] = useState<Config>(blank), [editing, setEditing] = useState(false);
   const [key, setKey] = useState(''), [removeKey, setRemoveKey] = useState(false), [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false), [pending, setPending] = useState<string | null>(null);
-  const locked = busy || pending !== null || !ready;
+  const [busy, setBusy] = useState(false), [pending, setPending] = useState<PendingProvider | null>(() => {
+    try { return readPending(localStorage.getItem(pendingStorageKey)); } catch { return null; }
+  });
+  const [storageError, setStorageError] = useState(() => { try { readPending(localStorage.getItem(pendingStorageKey)); return ''; } catch { return '无法读取待确认记录；请保留记录并恢复本机存储后再写入。'; } });
+  const [recoveryKey, setRecoveryKey] = useState('');
+  const locked = busy || pending !== null || !!storageError || !ready;
   async function refresh() { const result = await api<{ items: View[] }>(null, '/api/providers'); setItems(result.items); }
   useEffect(() => { if (ready) void refresh().catch(e => setMessage(String(e.message))); }, [ready]);
   function choose(v?: View) { setConfig(v ? structuredClone(v.config) : blank()); setEditing(!!v); setKey(''); setRemoveKey(false); setMessage(''); }
-  async function send(body: string) {
+  async function accept(result: Receipt) {
+    localStorage.removeItem(pendingStorageKey); setPending(null); setKey(''); setRecoveryKey(''); setRemoveKey(false);
+    if (result.provider && !result.deleted) { setConfig(result.provider.config); setEditing(true); }
+    if (result.deleted) { setConfig(blank()); setEditing(false); }
+    setMessage(result.probe?.message ?? (result.deleted ? '已移除配置；已有任务的连接与凭据版本保留。' : '已保存。'));
+    try { await refresh(); } catch { setMessage('操作已完成，但列表刷新失败，请刷新列表。'); }
+  }
+  async function send(body: string, original?: PendingProvider) {
     setBusy(true); setMessage('');
+    let staged: PendingProvider;
+    try {
+      staged = original ?? await preparePending(body);
+      localStorage.setItem(pendingStorageKey, JSON.stringify(staged));
+      setPending(staged);
+    } catch { setStorageError('无法保存不含密钥的原请求身份，本次未发送。'); setBusy(false); return; }
     try {
       const result = await api<Receipt>(null, '/api/providers', { method: 'POST', body });
-      setPending(null); setKey(''); setRemoveKey(false);
-      if (result.provider && !result.deleted) { setConfig(result.provider.config); setEditing(true); }
-      if (result.deleted) { setConfig(blank()); setEditing(false); }
-      setMessage(result.probe?.message ?? (result.deleted ? '已移除配置；已有任务的连接与凭据版本保留。' : '已保存。'));
-      try { await refresh(); } catch { setMessage('操作已完成，但列表刷新失败，请刷新列表。'); }
+      await accept(result);
     } catch (e) {
-      // The exact original body stays in memory only. No automatic resubmission,
-      // no key in browser storage; navigation keeps this mounted until resolved.
-      if (e instanceof APIError && e.status < 500) { setPending(null); setMessage(e.message); }
-      else { setPending(body); setMessage('结果待确认。请保留本窗口并使用“确认原请求”获取原回执；刷新或关闭会清除内存中的密钥和请求，请先检查配置再发起新操作。'); }
-    } finally { setBusy(false); }
+      if (e instanceof APIError && e.status < 500 && e.status !== 409) {
+        try { localStorage.removeItem(pendingStorageKey); setPending(null); } catch { setStorageError('无法清除已拒绝的记录。'); }
+        setMessage(e.message);
+      } else { setMessage('结果待确认。原 requestId 和不含密钥的输入已保留；可在重启后查询原回执，若未找到则输入原密钥重放同一请求。'); }
+    } finally { setKey(''); setBusy(false); }
+  }
+  async function reconcile() {
+    if (!pending) return;
+    setBusy(true);
+    try { await accept(await api<Receipt>(null, `/api/providers/receipt?request_id=${encodeURIComponent(JSON.parse(pending.body).requestId)}`)); }
+    catch (e) { setMessage(e instanceof APIError && e.status === 404 ? '尚无原回执。请仅使用原输入与原密钥重放；不会创建新 requestId。' : '原回执暂不可用，请保留待确认记录。'); }
+    finally { setBusy(false); }
+  }
+  async function replay() {
+    if (!pending) return;
+    try { const body = await replayPending(pending, recoveryKey); await send(body, pending); }
+    catch (e) { setMessage((e as Error).message); }
   }
   function act(action: string, id: string) { void send(JSON.stringify({ requestId: newRequestID(), action, id })); }
   function save() { void send(JSON.stringify({ requestId: newRequestID(), action: editing ? 'update' : 'create', config, ...(key ? { key } : {}), ...(removeKey ? { remove_key: true } : {}) })); }
@@ -41,7 +67,8 @@ export function ProviderSettings({ ready }: { ready: boolean }) {
     <h1>供应商设置</h1><p>使用你自己的本地或云端 API。费用由供应商收取，本应用没有钱包。LLM 连接由 opencode 配置。</p>
     <p>已知协议模板：OpenAI Images、火山方舟视频任务。能力和价格由你声明，免费连接测试不执行生成，也不验证计费或生成权限。</p>
     {message && <p className="provider-message" role="status">{message}</p>}
-    {pending && <button disabled={busy} onClick={() => void send(pending)}>确认原请求</button>}
+    {storageError && <p role="alert">{storageError}</p>}
+    {pending && <div className="provider-recovery" role="status"><p>结果待确认：保留原请求身份，密钥不进入本机浏览器存储。</p><button disabled={busy || !ready} onClick={() => void reconcile()}>查询原回执</button>{pending.keyHash && <label>未找到回执时，请重新输入原密钥<input aria-label="恢复原密钥" type="password" autoComplete="new-password" value={recoveryKey} onChange={e => setRecoveryKey(e.target.value)} /></label>}<button disabled={busy || !ready} onClick={() => void replay()}>确认原请求</button></div>}
     <div className="provider-layout"><div className="provider-list">
       <button disabled={locked} onClick={() => choose()}>新增供应商</button><button disabled={busy} onClick={() => void refresh().catch(e => setMessage(e.message))}>刷新列表</button>
       {items.map(v => <article key={v.config.id}><h2>{v.config.name}</h2><p>{v.config.model_id} · {v.config.enabled ? '已启用' : '已停用'}{v.default_for ? ` · 默认${v.default_for === 'image' ? '图像' : '视频'}` : ''}</p><p>{v.config.base_url}</p><p>{v.has_key ? '已保存凭据' : '未保存凭据'}</p>

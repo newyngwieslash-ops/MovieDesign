@@ -340,3 +340,127 @@ func TestProviderDefaultsRemovalAndServiceRestart(t *testing.T) {
 		t.Fatal("frozen key removed")
 	}
 }
+
+func TestProviderEmptyArraysAndReceiptLookup(t *testing.T) {
+	s, _ := testService(t)
+	cfg := validConfig("empty", "https://example.com/v1")
+	cfg.Capability.Sizes = nil
+	cfg.Capability.DurationSeconds = nil
+	r := execute(t, s, map[string]any{"requestId": "array", "action": "create", "config": cfg, "key": "synthetic-rotation"})
+	raw, _ := json.Marshal(r)
+	if strings.Contains(string(raw), `"sizes":null`) || strings.Contains(string(raw), `"duration_seconds":null`) {
+		t.Fatal("accepted empty arrays must render as []", string(raw))
+	}
+}
+
+func TestSecretsRealCorruptionAndFilesystemFailures(t *testing.T) {
+	s, dir := testService(t)
+	cfg := validConfig("fault", "http://127.0.0.1:11434/v1")
+	execute(t, s, map[string]any{"requestId": "initial", "action": "create", "config": cfg, "key": "synthetic-old-fault-key"})
+	old, _ := s.Resolve("fault")
+	native := s.Secrets.(*DPAPIStore)
+	originalDir := native.dir
+	originalFile := filepath.Join(originalDir, old.CredentialVersion+".dpapi")
+	encrypted, err := os.ReadFile(originalFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := append([]byte(nil), encrypted...)
+	corrupt[len(corrupt)/2] ^= 0xff
+	if err = os.WriteFile(originalFile, corrupt, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := s.Credential(old); err == nil || value != "" {
+		t.Fatal("corrupt ciphertext decrypted")
+	}
+	if err = os.WriteFile(originalFile, encrypted, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"temp-create", "publication"} {
+		t.Run(mode, func(t *testing.T) {
+			var obstruction string
+			if mode == "temp-create" {
+				native.dir = filepath.Join(originalDir, "missing-child")
+			} else {
+				native.beforePublish = func(path string) {
+					pending, err := filepath.Glob(filepath.Join(originalDir, ".pending-*"))
+					if err != nil || len(pending) != 1 {
+						t.Fatal("expected actual encrypted temporary", err)
+					}
+					data, err := os.ReadFile(pending[0])
+					if err != nil || strings.Contains(string(data), "synthetic-new-fault-key") {
+						t.Fatal("plaintext temporary", err)
+					}
+					decrypted, err := crypt(data, false)
+					if err != nil || string(decrypted) != "synthetic-new-fault-key" {
+						t.Fatal("temporary was not real DPAPI encrypted data", err)
+					}
+					clear(decrypted)
+					obstruction = path
+					if err := os.Mkdir(path, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			raw, _ := json.Marshal(map[string]any{"requestId": "fault-" + mode, "action": "update", "config": cfg, "key": "synthetic-new-fault-key"})
+			_, writeErr := s.Execute(context.Background(), raw)
+			native.dir = originalDir
+			native.beforePublish = nil
+			if writeErr == nil {
+				t.Fatal("real filesystem failure ignored")
+			}
+			if obstruction != "" {
+				if err := os.Remove(obstruction); err != nil {
+					t.Fatal(err)
+				}
+			}
+			current, err := s.Resolve("fault")
+			if err != nil || current.CredentialVersion != old.CredentialVersion {
+				t.Fatal("pointer changed", err)
+			}
+			if key, err := s.Credential(old); err != nil || key != "synthetic-old-fault-key" {
+				t.Fatal("old credential damaged", err)
+			}
+			var count int
+			if err = s.DB.QueryRow(`SELECT count(*) FROM write_requests WHERE request_id=?`, "fault-"+mode).Scan(&count); err != nil || count != 0 {
+				t.Fatal("success receipt after failure", err)
+			}
+			files, err := os.ReadDir(originalDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(files) != 1 {
+				t.Fatal("temporary file leaked", len(files))
+			}
+			for _, file := range files {
+				data, err := os.ReadFile(filepath.Join(originalDir, file.Name()))
+				if err != nil || strings.Contains(string(data), "synthetic-new-fault-key") || strings.Contains(string(data), "synthetic-old-fault-key") {
+					t.Fatal("plaintext artifact", err)
+				}
+			}
+		})
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "providers.db"))
+	if err != nil || strings.Contains(string(data), "synthetic-new-fault-key") {
+		t.Fatal("SQL leaked secret", err)
+	}
+}
+func TestProviderReceiptRecoveryAfterKeyRotation(t *testing.T) {
+	s, _ := testService(t)
+	cfg := validConfig("rotate", "https://example.com/v1")
+	execute(t, s, map[string]any{"requestId": "first", "action": "create", "config": cfg, "key": "old"})
+	r := execute(t, s, map[string]any{"requestId": "rotation-original", "action": "update", "config": cfg, "key": "new"})
+	reopened := NewService(s.DB, s.Secrets)
+	got, err := reopened.Receipt(context.Background(), "rotation-original")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := json.Marshal(r)
+	b, _ := json.Marshal(got)
+	if string(a) != string(b) {
+		t.Fatal("different original receipt")
+	}
+	if _, err = reopened.Receipt(context.Background(), "never-sent"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("missing receipt misreported")
+	}
+}

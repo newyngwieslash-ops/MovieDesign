@@ -73,7 +73,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		kind := objectKind(r.URL.Path)
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
+			allowed := (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
@@ -83,7 +83,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if r.URL.Path == "/api/providers" {
+		if r.URL.Path == "/api/providers" || r.URL.Path == "/api/providers/receipt" {
 			serveProviders(w, r, providerService)
 			return
 		}

@@ -14,7 +14,10 @@ type SecretStore interface {
 	Get(id string) (string, error)
 	Delete(id string) error
 }
-type DPAPIStore struct{ dir string }
+type DPAPIStore struct {
+	dir           string
+	beforePublish func(string) // test-only timing seam; nil in production
+}
 
 func OpenSecrets(dir string) (*DPAPIStore, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -87,6 +90,9 @@ func (s *DPAPIStore) Put(id, value string) error {
 	to, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return err
+	}
+	if s.beforePublish != nil {
+		s.beforePublish(path)
 	}
 	return windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH)
 }

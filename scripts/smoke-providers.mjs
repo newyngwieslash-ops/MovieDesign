@@ -22,13 +22,31 @@ try {
   await click('保存供应商');await wait(`document.body.innerText.includes('结果待确认')`);const original=requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).at(-1).postData;
   await click('创作画布');await click('供应商设置');await wait(`document.body.innerText.includes('确认原请求')`);await click('确认原请求');await settled();assert.equal(requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).at(-1).postData,original);
   await click('设为默认 云端配置');await settled();list=await get();assert.equal(list.items.filter(v=>v.default_for==='image')[0].config.name,'云端配置');await writeFile(join(dir,'providers-expected.json'),JSON.stringify(list));
+  // Commit a key-changing update, lose the response, and exit with only nonsecret
+  // original identity persisted. has_key alone cannot prove this rotation landed.
+  await click('编辑 本地测试');await input('供应商密钥','native-synthetic-rotated');await evaluate(`window.providerDrop=true`);await click('保存供应商');await wait(`document.body.innerText.includes('结果待确认')`);
+  const pending=await evaluate(`localStorage.getItem('moviedesign.providers.pending.v1')`);assert(pending);assert(!pending.includes('native-synthetic-rotated'));assert(!pending.includes('native-synthetic-secret'));
  }else{
   const expected=JSON.parse(await readFile(join(dir,'providers-expected.json'),'utf8'));assert.deepEqual(await get(),expected);assert.equal(requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).length,0,'restart never automatically resubmits');
+  await wait(`document.body.innerText.includes('查询原回执')`);await click('查询原回执');await settled();assert.equal(await evaluate(`localStorage.getItem('moviedesign.providers.pending.v1')`),null);assert.equal(requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).length,0,'committed rotation reconciles without resubmission');
   await click('编辑 本地测试');assert.equal(await evaluate(`document.querySelector('input[aria-label="供应商密钥"]').value`),'');await input('供应商模型','updated-after-restart');await click('保存供应商');await settled();assert((await get()).items.find(v=>v.config.name==='本地测试').has_key,'empty key preserves stored secret');
   await click('设为默认 本地测试');await settled();assert.equal((await get()).items.find(v=>v.default_for==='image').config.name,'本地测试');
   await click('停用 本地测试');await settled();assert.equal((await get()).items.filter(v=>v.default_for).length,0);await click('移除 云端配置');await settled();assert.equal((await get()).items.length,1);
+  // API accepted null/missing optional arrays must be editable without a React crash.
+  for(const kind of ['image','video']){
+   const seed=(await get()).items[0].config;const config={...seed,id:crypto.randomUUID(),name:`空数组-${kind}`,kind,protocol:kind==='image'?'openai-images':'ark-video',enabled:true,headers:{},pricing:null,capability:{max_prompt_bytes:100,max_count:1,max_references:0,sizes:null,edit:false,audio:false}};
+   const result=await evaluate(`fetch('http://127.0.0.1:8001/api/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:${JSON.stringify(JSON.stringify({requestId:crypto.randomUUID(),action:'create',config}))}}).then(async r=>({status:r.status,data:await r.json()}))`);assert.equal(result.status,200);assert.deepEqual(result.data.provider.config.capability.sizes,[]);assert.deepEqual(result.data.provider.config.capability.duration_seconds,[]);
+   await click('刷新列表');await wait(`document.body.innerText.includes('编辑 空数组-${kind}')`);await click(`编辑 空数组-${kind}`);await settled();assert.equal(await evaluate(`document.querySelector('input[aria-label="供应商名称"]').value`),`空数组-${kind}`);
+  }
+  // Not-yet-sent key update: reload and replay only after original key reentry.
+  await click('编辑 空数组-image');await input('供应商密钥','native-synthetic-reentry');
+  await evaluate(`window.realFetch=window.fetch;window.fetch=async(...args)=>{if(String(args[0]).includes('/api/providers')&&args[1]?.method==='POST')throw Error('controlled before send');return window.realFetch(...args)}`);
+  await click('保存供应商');await wait(`document.body.innerText.includes('结果待确认')`);const remembered=await evaluate(`JSON.parse(localStorage.getItem('moviedesign.providers.pending.v1'))`);
+  await call('Page.reload');await wait(`document.body.innerText.includes('本地服务已连接')`);await click('供应商设置');await click('查询原回执');await wait(`document.body.innerText.includes('尚无原回执')`);
+  await input('恢复原密钥','wrong-key');const before=requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).length;await click('确认原请求');await wait(`document.body.innerText.includes('相同密钥')`);assert.equal(requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).length,before);
+  await input('恢复原密钥','native-synthetic-reentry');await click('确认原请求');await settled();const resent=JSON.parse(requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).at(-1).postData);const withoutKey={...resent};delete withoutKey.key;assert.deepEqual(withoutKey,JSON.parse(remembered.body));assert.equal(resent.key,'native-synthetic-reentry');assert.equal(await evaluate(`localStorage.getItem('moviedesign.providers.pending.v1')`),null);
  }
- assert(!JSON.stringify(await evaluate(`({local:{...localStorage},session:{...sessionStorage}})`)).includes('native-synthetic-secret'));assert(!JSON.stringify(storageEvents).includes('native-synthetic-secret'));assert.deepEqual(exceptions,[]);
+ assert(!JSON.stringify(await evaluate(`({local:{...localStorage},session:{...sessionStorage}})`)).includes('native-synthetic-secret'));for(const secret of ['native-synthetic-secret','native-synthetic-rotated','native-synthetic-reentry']){assert(!JSON.stringify(storageEvents).includes(secret));assert(!JSON.stringify(await evaluate(`({local:{...localStorage},session:{...sessionStorage}})`)).includes(secret));}assert.deepEqual(exceptions,[]);
  await writeFile(join(dir,`providers-${phase}.png`),Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
  // Never persist captured POST bodies; the synthetic key exercises the same boundary as a real one.
  await writeFile(join(dir,`providers-${phase}.json`),JSON.stringify({origin,phase,fixtureCalls,config:await get(),exceptions,requests:requests.map(r=>({method:r.method,url:r.url}))},null,2));

@@ -320,6 +320,8 @@ Windows DPAPI 使用当前用户保护，`credentials/<UUID>.dpapi` 是不可变
 
 `Resolve(id)`/`ResolveDefault(kind)` 返回 `FrozenProvider{config,credential_version}`；`Credential(frozen)` 只在调用前解密相应版本。冻结JSON中不含明文key，配置编辑、停用、默认切换和轮换不改变已取得快照。M4.2 必须将整个FrozenProvider持久化到tasks.provider_json，不得运行时重新Resolve默认配置。000006提供tasks/attempts/outputs/generation_inputs/events；events.project_id可NULL供应用级事件，项目订阅只读指定project_id，任务事件必须有项目，由服务执行边界检查。000007提供provider_configs/provider_defaults/capabilities/price_quotes/questions/question_receipts。此阶段不创建假任务/批准/报价记录。
 
-幂等存储复用 WriteRequest，输入是严格完整原JSON canonical后SHA-256摘要（保留遗漏/显式值/数组顺序差异），不把任何key写入SQLite。相同 requestId 改key也冲突。设置UI禁重复提交，未知响应保留完整原请求**仅在组件内存**，切换页不卸载设置；“确认原请求”显式原样重放，无自动重试。刷新/关闭会丢弃这份含密钥的内存请求，重启只GET现有配置，必须先检查配置再发起新操作；不会持久化密钥来换取跨重启重发。
+幂等存储复用 WriteRequest，输入是严格完整原JSON canonical后SHA-256摘要（保留遗漏/显式值/数组顺序差异），不把任何key写入SQLite。相同 requestId 改key也冲突。设置UI在首次POST前把原requestId及移除key后的完整输入、key的SHA256指纹保存到 localStorage `moviedesign.providers.pending.v1`；存储失败则不发送。未知结果跨刷新/关闭仍禁止新写入，重启不自动POST。`GET /api/providers/receipt?request_id=…` 是本次移植补充的只读应用级回执查询，严格单一request_id、精确Origin、no-store，直接读取既有write_requests已完成response，不返回input_json、密钥、密钥指纹或credential_version。404不代表未执行；用户只能重新输入与指纹匹配的原密钥，以原requestId和全部原字段显式重放。已完成回执可无需密钥直接核对并清除待确认记录。浏览器始终不持久化密钥本体。
 
 核实的官方协议来源（2026-10-16）：[OpenAI list models](https://developers.openai.com/api/reference/resources/models/methods/list) 定义 GET `/v1/models` 和 list/data/id 响应；本实现只在自定义 API prefix 后追加 models，Bearer key及允许的组织/project头由网关发送，成功不代表生成权限。没有调用生成接口。兼容服务是否为列表请求收费取决于服务自身约定，此按钮只使用不执行推理的模型列表协议。Ark [创建视频生成任务](https://docs.volcengine.com/docs/ark/create-video-generation-task-api?lang=zh) 本次只核实官方协议入口，未找到本任务已实现的免费探测，因此 ark-video 明示“配置校验通过，远端未测试”。[Microsoft CryptProtectData](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata) 当前用户保护；不设置 LOCAL_MACHINE、不使用CGO或新依赖。
+
+M4.1 审查修正：capability 的可选 sizes/duration_seconds 在输入省略或为null时语义为空，所有JSON输出统一为 []，包含旧配置与旧回执；仅正规化输出，不改变既存请求摘要或重新生成请求输入。

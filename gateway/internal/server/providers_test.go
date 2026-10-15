@@ -66,6 +66,19 @@ func TestProvidersHTTPBoundaryAndRedaction(t *testing.T) {
 	if result.Code != 200 || result.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("GET contract")
 	}
+	lookup := call("GET", "/api/providers/receipt?request_id=r1", "", "http://tauri.localhost")
+	if lookup.Code != 200 || lookup.Body.String() != saved.Body.String() || lookup.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("receipt lookup contract", lookup.Code, lookup.Body.String())
+	}
+	if call("GET", "/api/providers/receipt?request_id=absent", "", "http://tauri.localhost").Code != 404 {
+		t.Fatal("missing receipt")
+	}
+	if call("GET", "/api/providers/receipt?request_id=r1&request_id=r2", "", "http://tauri.localhost").Code != 400 {
+		t.Fatal("duplicate request query")
+	}
+	if call("GET", "/api/providers/receipt?request_id=r1", "", "").Code != 403 {
+		t.Fatal("receipt origin missing")
+	}
 	if strings.Contains(saved.Body.String()+result.Body.String()+logs.String(), "synthetic-http-secret") {
 		t.Fatal("secret disclosed")
 	}
