@@ -23,7 +23,7 @@
 - Test: `desktop/packages/editor/test/shapes.test.ts`。
 - Modify: `desktop/package.json`, `desktop/tsconfig.json`。
 
-**Interfaces:** `Point{x:number,y:number}`、`Bounds{x,y,width,height}`；`ShapeData{id,type,style,geometry}` 为纯数据；`Shape` 提供 draw(ctx)、hitTest(point)、getBounds()、move(dx,dy)、resize(bounds)、toData()。类型枚举 rectangle/ellipse/line/arrow/brush/text/tag/mosaic；`shapeFromData(data):Shape` 是唯一反序列化入口。TypeScript 采用 Node 可擦除语法，测试不依赖 React。
+**Interfaces:** `Point{x:number,y:number}`、`Bounds{x,y,width,height}`；`ShapeData`按04篇§2.3使用扁平判别联合：共同字段id/type/style，矩形椭圆x/y/width/height，线箭头x1/y1/x2/y2，笔刷points，文字与tag/mosaic按原字段；不加原协议没有的geometry包装。`Shape` 提供 draw(ctx)、hitTest(point)、getBounds()、move(dx,dy)、resize(bounds)、toData()。类型枚举 rectangle/ellipse/line/arrow/brush/text/tag/mosaic；`shapeFromData(data):Shape` 是唯一反序列化入口。TypeScript 采用 Node 可擦除语法，测试不依赖 React。
 
 - [ ] 创建几何测试（imports 来自 node:test、node:assert/strict 与 geometry.ts）：
 
@@ -33,7 +33,7 @@ test('normalizes reverse drags and zero length segments', () => {
   assert.equal(distanceToSegment({x:3,y:4},{x:0,y:0},{x:0,y:0}),5);
 });
 test('an unfilled rectangle has a hollow hit region', () => {
-  const rect = shapeFromData({id:'r',type:'rectangle',style:{stroke:'#000',strokeWidth:1,fill:null},geometry:{x:0,y:0,width:100,height:100}});
+  const rect = shapeFromData({id:'r',type:'rectangle',style:{stroke:'#000',strokeWidth:1},x:0,y:0,width:100,height:100});
   assert.equal(rect.hitTest({x:50,y:50}),false);
   assert.equal(rect.hitTest({x:1,y:50}),true);
 });
@@ -64,7 +64,7 @@ export function normalizeBounds(b:Bounds):Bounds {
 - Create: `desktop/packages/editor/src/mosaic.ts`, `desktop/packages/editor/test/render.html`, `desktop/packages/editor/test/render.ts`。
 - Test: `desktop/packages/editor/test/media-shapes.test.ts`, `scripts/smoke-editor.mjs`。
 
-**Interfaces:** `MosaicCache.get(key:string):HTMLCanvasElement|undefined`、`put(key,canvas)`、`clear()`；`setSource(image,revision)`；`TextShape` 的 mode=plain/filled/outlined，fontSize≥8；TagData 保存 anchor、text、bounds。内存缓存不进入 ShapeData 或历史 JSON。
+**Interfaces:** `MosaicCache.get(key:string):HTMLCanvasElement|undefined`、`put(key,canvas)`、`clear()`；`setSource(image,revision)`；文字变体按原字段`style.textVariant=plain|filled|outlined`，fontSize≥8；TagData保存原字段x/y/anchorX/anchorY/width/height/text/maxWidth，样式在style。内存缓存不进入 ShapeData 或历史 JSON。
 
 - [ ] 用 Node 测 LRU 与文本数据，真实 Canvas 测二次贝塞尔、mosaic/blur 与导出。LRU 完整核心算法：
 
@@ -147,7 +147,8 @@ export function shouldHandleShortcut(event:KeyboardEvent):boolean {
 - Create: `gateway/internal/store/canvas.go`, `gateway/internal/server/canvas.go`, `gateway/internal/store/canvas_test.go`。
 - Create: `gateway/migrations/000005_canvas.up.sql`, `gateway/migrations/000005_canvas.down.sql`。
 - Modify: `desktop/src/features/canvas/CanvasWorkspace.tsx`, `desktop/src/gateway.ts`, `desktop/src/App.tsx`, `scripts/check.ps1`, `docs/contracts.md`, `docs/milestones.md`。
-- Create: `desktop/src/features/canvas/CanvasNode.tsx`, `desktop/src/features/canvas/canvas.ts`, `desktop/src/features/canvas/canvas.test.ts`, `scripts/lib/cdp.mjs`, `scripts/smoke-canvas.mjs`。
+- Create: `desktop/src/features/canvas/CanvasNode.tsx`, `desktop/src/features/canvas/canvas.ts`, `desktop/src/features/canvas/canvas.test.ts`, `scripts/smoke-canvas.mjs`。
+- Modify: `scripts/webview-cdp.mjs`（复用 M2 已提取的真实 WebView CDP helper，不另建第二套连接器）。
 
 **Interfaces:** document=`{schemaVersion:1,revision,nodes,edges}`；node kind=composition/placeholder/frame；activeItem=`{type:'version',resourceId,versionId}|{type:'task-output',taskId,outputKey}`；pendingGeneration=`{requestId,outputKey}`。command 输入 `{requestId,expectedRevision,command}`，回执 `{requestId,appliedRevision,document,replayed,effects}`；这是原 commandId 的明确改名适配。
 
@@ -163,5 +164,5 @@ export const CANVAS_LIMITS = {nodes:10000,edges:20000,changes:30000,batch:64,con
 
 - [ ] 红灯命令 `go -C gateway test ./internal/store -run TestCanvas -v` 和 `node --experimental-strip-types --test desktop/src/features/canvas/canvas.test.ts`。
 - [ ] 一个事务验证 expectedRevision、应用 patch、更新 doc、保存 command receipt；revision 不一致不部分落库。content 分页≤200；batch≤64不嵌套。媒体类型由对象内容决定，不发明 image/video/document node.kind。
-- [ ] React 工作台实现平移/缩放/选择/拖动/缩放节点、媒体播放、文档阅读、版本选择与属性；空间变换只影响视图，节点位置写服务端。图片/视频明确使用crossOrigin=anonymous，使跨源媒体请求携带Origin；验证Range/CORS与Canvas导出不被污染，不给媒体路由添加Origin豁免。可见节点裁剪降低 DOM 数量；10,000 节点数据不能全部当图像编辑器 shapes。抽取现有 CDP 检查为 scripts/lib/cdp.mjs，原 M1 smoke 同步复用且保持通过。
+- [ ] React 工作台实现平移/缩放/选择/拖动/缩放节点、媒体播放、文档阅读、版本选择与属性；空间变换只影响视图，节点位置写服务端。图片/视频明确使用crossOrigin=anonymous，使跨源媒体请求携带Origin；验证Range/CORS与Canvas导出不被污染，不给媒体路由添加Origin豁免。可见节点裁剪降低 DOM 数量；10,000 节点数据不能全部当图像编辑器 shapes。复用 M2 已提取的 scripts/webview-cdp.mjs，原 M1 smoke 保持通过。
 - [ ] 更新 check.ps1 加入 Node editor/canvas checks；真实窗口创建媒体/文档节点、移动、重启、切版本，验证持久状态。全量测试、M1/M2回归通过后提交 `feat(M3.5): persist object canvas commands` 并推送 M3。
