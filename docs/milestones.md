@@ -1,11 +1,11 @@
 # 里程碑验收
 
-完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)。M2 正在实施，M3–M7 待实施；计划中的测试命令不是已执行结果，各阶段证据另行记录。
+完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)。M2 已通过全量检查与独立整体验收，M3–M7 待实施；计划中的测试命令不是已执行结果，各阶段证据另行记录。
 
 | 里程碑 | 范围 | 状态 |
 | --- | --- | --- |
 | M1 | Tauri、gateway、SQLite、空工作台、生命周期 | 验证通过 |
-| M2 | 对象模型 CRUD、幂等投递、unknown 重放 | 实施中，尚未整体验收 |
+| M2 | 对象模型 CRUD、幂等投递、unknown 重放 | 验证通过 |
 | M3 | 八图形编辑器、历史、标注 | 待实施 |
 | M4 | 图像模型、能力契约、任务状态机、计费与事件 | 待实施 |
 | M5 | opencode、MCP、提示词、聊天与确认卡 | 待实施 |
@@ -73,3 +73,10 @@ M2.1 提交为 `29f7b0d`，严格输入修正为 `9983337`；专项测试、Go �
 - 新增 4 项实际组件源码控序回归，修前 `node --test scripts/check-m2-ui.mjs` 为 4 失败/8 通过（`.runtime/m25-stale-ui-red.txt`）；修后连原恢复检查 13/13 通过（`.runtime/m25-stale-ui-green.txt`）。覆盖原响应先完成→旧视图续做同步 null→可新导入，原上传/提交先推进→首次只同步、再次发当前 body，以及空视图发现新待处理记录；原 P1/P2 覆盖保留。
 - 最终 `pnpm --dir desktop desktop:build`、`scripts/check.ps1` 均通过；完整检查日志 `.runtime/m25-resync-final-check.txt`，原生 gateway 生命周期证据 `.runtime/smoke-71561b74beb04b2dbaa1d95e34871163/`。
 - 最终生产 M2 真实 UI/重启恢复通过，证据 `.runtime/desktop-release-01d7a08ed2eb45598e5aa81947a5a37c/`；M1 真实 WebView/生命周期回归通过，证据 `.runtime/desktop-release-d0bc793522904eef81ba126bf3f3d16f/`。均正常关闭、无 sidecar/端口残留；控序竞态仍明确属于真实组件源码检查，未冒充 WebView 故障注入。
+
+## M2 整体验收（2026-10-15）
+
+- M2.1–M2.5 全部完成；最终应用代码 e678507，全量 scripts/check.ps1、生产构建、真实 M2 原生重启恢复与 M1 回归全部通过，最终证据见上面的审查修正记录。后续 babb15c 为文档与计划核实，不改变受验应用代码。
+- 独立整分支审查范围 fa9cc87..babb15c，结论 Ready to merge: Yes，无待修正发现。已复核严格输入、项目隔离、文件/投递互斥预留、不可变版本与血缘、Windows 原生路径、恢复视图、Origin/CSP 及关闭排空；原始 000001/000002 迁移未修改。
+- 已确认的适配均记录于 contracts.md：新增项目/类型/资产端点，提前使用获准 Go1.25.8，单路径提交，投递版本元素字段及 Resource 名称存于 description，Windows 首发与单 gateway 进程边界。taskOutputKey 实际任务产物查找留待 M4，未制造占位任务。
+- 远程交付以 main 提交历史和 GitHub refs 核对为准；M2 不代表编辑器、模型生成、agent、分镜或签名更新已经完成。M3 接续实现八图形编辑器与独立持久创作画布。
