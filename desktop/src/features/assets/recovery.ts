@@ -2,6 +2,7 @@ export type ImportOperation = {
   schema: 1; projectID: string; stage: 'upload' | 'commit' | 'deliver';
   uploadID: string; commitID: string; deliverID: string;
   file: { name: string; size: number; sha256: string };
+  generatedPNG?: true;
   target: { name: string; composition: { name: string; type: { id?: string; label?: string }; placements: { key: string; role: string }[] }; baseVersionID?: string };
   stagedPath?: string; committedPath?: string; commitBody?: string; deliveryBody?: string;
 };

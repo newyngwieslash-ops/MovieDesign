@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { allPages, api, newRequestID } from '../../gateway';
 import { advanceCommit, advanceUpload, matchesFile, readOperation, storageKey, type ImportOperation } from './recovery';
 import { VersionHistory, type Version } from './VersionHistory';
+import { ImageEditor } from '../editor/ImageEditor';
+import { fileDigest, persistExport, recoverExport, removeExport } from './exportBytes';
 
 type Asset = { id: string; name: string; path: string; mime_type: string | null; width: number | null; height: number | null; status: string };
 type Resource = { id: string; composition_id: string; description: string | null };
@@ -18,6 +20,7 @@ function Preview({ projectID, asset }: { projectID: string; asset: Asset }) {
 export function AssetLibrary({ projectID }: { projectID: string }) {
   const client = useQueryClient();
   const [selected, setSelected] = useState('');
+  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -28,11 +31,14 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
   const [storageError] = useState(() => { try { readOperation(localStorage.getItem(storageKey(projectID)), projectID); return ''; } catch (e) { return (e as Error).message; } });
   const fileRef = useRef<File | null>(null);
   const lock = useRef(false);
+  const alive = useRef(true), selectionRef = useRef(selected); selectionRef.current = selected;
+  const prepared = useRef<{ op: ImportOperation; file: File } | null>(null);
   const assets = useQuery({ queryKey: ['project', projectID, 'assets', 'all', 200], queryFn: ({ signal }) => allPages<Asset>(projectID, '/api/assets', signal) });
   const versions = useQuery({ queryKey: ['project', projectID, 'versions', 'all', 200], queryFn: ({ signal }) => allPages<Version>(projectID, '/api/versions', signal) });
   const resources = useQuery({ queryKey: ['project', projectID, 'resources', 'all', 200], queryFn: ({ signal }) => allPages<Resource>(projectID, '/api/resources', signal) });
   const compositions = useQuery({ queryKey: ['project', projectID, 'compositions', 'all', 200], queryFn: ({ signal }) => allPages<Composition>(projectID, '/api/compositions', signal) });
-  useEffect(() => () => { void client.cancelQueries({ queryKey: ['project', projectID] }); }, [client, projectID]);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; void client.cancelQueries({ queryKey: ['project', projectID] }); }; }, [client, projectID]);
+  useEffect(() => { setEditing(false); }, [selected]);
   const version = versions.data?.find(v => v.id === selected);
   const resource = resources.data?.find(r => r.id === version?.resource_id);
   const composition = compositions.data?.find(c => c.id === resource?.composition_id);
@@ -57,6 +63,8 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
     if (!owns(initial)) return;
     let current = initial;
     if (current.stage === 'upload') {
+      if (current.generatedPNG) fileRef.current = await recoverExport(current);
+      if (!owns(current)) return;
       if (!fileRef.current) throw new Error('请选择原文件；将核对完整内容并沿用上传请求号');
       const form = new FormData(); form.set('requestId', current.uploadID); form.set('file', fileRef.current);
       const uploaded = await api<{ path: string }>(projectID, '/api/upload', { method: 'POST', body: form });
@@ -74,15 +82,29 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
     if (!owns(current)) return;
     if (result.delivery.status === 'unknown') throw new Error(result.delivery.problem?.message ?? '投递尚未确认');
     localStorage.removeItem(storageKey(projectID)); setOp(null); fileRef.current = null;
+    let cleanupWarning = '';
+    if (current.generatedPNG) {
+      try { await removeExport(current); }
+      catch { cleanupWarning = '作品保存结果已确认，但本机临时图像未能清理。'; }
+    }
     if (result.delivery.status === 'blocked') throw new Error(`投递受阻：${result.delivery.problem?.message ?? '请检查输入后发起新导入'}`);
     const delivered = result.delivery.versions[0];
-    setSelected(delivered?.versionId ?? ''); setMessage('导入完成，已选择新版本');
+    const selectDelivered = alive.current && (!current.target.baseVersionID || !selectionRef.current || selectionRef.current === current.target.baseVersionID);
+    if (selectDelivered) { setSelected(delivered?.versionId ?? ''); setEditing(false); }
+    setMessage(`${selectDelivered ? '导入完成，已选择新版本' : '导入完成，可在版本历史中查看。'}${cleanupWarning}`);
     await client.invalidateQueries({ queryKey: ['project', projectID] });
   }
   async function execute(current: ImportOperation) {
     if (lock.current) return;
     lock.current = true; setBusy(true); setError(''); setMessage('');
-    try { await run(current); } catch (e) { setError((e as Error).message); }
+    try {
+      if (prepared.current?.op === current) {
+        await persistExport(current, prepared.current.file);
+        if (!save(current, null)) return;
+        prepared.current = null;
+      }
+      await run(current);
+    } catch (e) { setError((e as Error).message); }
     finally { lock.current = false; setBusy(false); }
   }
   async function choose(file: File, revision: boolean) {
@@ -91,10 +113,10 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
     try {
       if (file.size > 256 * 1024 * 1024) throw new Error('文件超过 256 MiB 上传上限');
       // ponytail: WebCrypto buffers at most 256 MiB per import; use streaming hashing if larger files are supported.
-      const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
-      const sha256 = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+      const sha256 = await fileDigest(file);
       let current = op;
       if (current) {
+        if (current.generatedPNG) throw new Error('请继续保存原导出图像，不能用其他文件替代。');
         if (current.stage !== 'upload') throw new Error('请先续投递当前导入');
         if (!matchesFile(current, file, sha256)) throw new Error('所选文件与原导入的完整内容或名称不一致，请选择原文件');
       } else {
@@ -110,14 +132,34 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
     } catch (e) { setError((e as Error).message); }
     finally { lock.current = false; setBusy(false); }
   }
+  async function exportImage(blob: Blob) {
+    if (lock.current || op || storageError || !version || !composition || !activeAsset) throw new Error('请先完成待确认的保存');
+    lock.current = true; setBusy(true); setError('');
+    const base = version.id;
+    try {
+      if (blob.size > 256 * 1024 * 1024) throw new Error('图像超过 256 MiB 上传上限');
+      const name = `${activeAsset.name.replace(/\.[^.]+$/, '')}-编辑.png`, file = new File([blob], name, { type: 'image/png' });
+      const sha256 = await fileDigest(file);
+      if (!alive.current || selectionRef.current !== base) return;
+      const current: ImportOperation = { schema: 1, generatedPNG: true, projectID, stage: 'upload', uploadID: newRequestID(), commitID: newRequestID(), deliverID: newRequestID(),
+        file: { name, size: file.size, sha256 }, target: { name, baseVersionID: base,
+          composition: { name: composition.name, type: { id: composition.type_id }, placements: [{ key: 'file', role: '素材' }] } } };
+      prepared.current = { op: current, file }; setOp(current);
+      await persistExport(current, file);
+      if (!save(current, null)) return;
+      prepared.current = null;
+      await run(current);
+    } catch (e) { setError((e as Error).message); throw e; }
+    finally { lock.current = false; setBusy(false); }
+  }
   const queryError = assets.error ?? versions.error ?? resources.error ?? compositions.error;
   return <section className="asset-library" aria-label="项目素材库" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer.files[0]) void choose(e.dataTransfer.files[0], false); }}>
     <div className="library-toolbar"><div><h2>素材与对象</h2><p>选择文件或拖入此区域，保存为可追溯的对象版本。</p></div>
-      <label className="file-button">{op?.stage === 'upload' ? '重新选择原文件' : '导入素材'}<input aria-label="导入素材" type="file" disabled={busy || !!storageError || (!!op && op.stage !== 'upload')} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void choose(f, false); }} /></label>
+      <label className="file-button">{op?.stage === 'upload' && !op.generatedPNG ? '重新选择原文件' : '导入素材'}<input aria-label="导入素材" type="file" disabled={busy || !!storageError || !!op?.generatedPNG || (!!op && op.stage !== 'upload')} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void choose(f, false); }} /></label>
     </div>
     {op && <div className="pending-import" role="status"><strong>结果待确认</strong><p>{op.file.name} · {op.stage === 'upload' ? '上传' : op.stage === 'commit' ? '提交文件' : '投递对象'}阶段</p>
       <button disabled={busy} onClick={() => void execute(op)}>重新查询/续投递</button>
-      {op.stage === 'upload' && <p>重启后请重新选择原文件，完整内容核对通过才会继续。</p>}
+      {op.stage === 'upload' && <p>{op.generatedPNG ? '原导出图像将经完整校验后继续保存。请点击继续，不会自动重试。' : '重启后请重新选择原文件，完整内容核对通过才会继续。'}</p>}
     </div>}
     {(error || storageError || queryError) && <p className="inline-error" role="alert">{storageError || error || queryError?.message}</p>}
     {message && <p role="status">{message}</p>}
@@ -129,8 +171,10 @@ export function AssetLibrary({ projectID }: { projectID: string }) {
     </div></section><aside className="object-details" aria-label="对象详情" data-resource-id={resource?.id} data-version-id={version?.id}>
       <h3>当前对象</h3>{resource ? <><p>{resource.description ?? '未命名对象'}</p><p>当前版本 · {version ? new Date(version.created_at).toLocaleString('zh-CN') : ''}</p>
         <label className="file-button">导入为新版本<input aria-label="导入为新版本" type="file" disabled={busy || !!op || !!storageError} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void choose(f, true); }} /></label>
+        {activeAsset?.mime_type?.startsWith('image/') && activeAsset.status === 'active' && <button disabled={busy || !!op || !!storageError} onClick={() => setEditing(!editing)}>{editing ? '关闭编辑' : '编辑图像'}</button>}
       </> : <p>选择素材以查看对象及版本。</p>}
       <VersionHistory versions={versions.data?.filter(v => v.resource_id === resource?.id) ?? []} selected={selected} onSelect={setSelected} />
     </aside></div>
+    {editing && activeAsset && <ImageEditor key={activeAsset.id} assetId={activeAsset.id} source={`http://127.0.0.1:8001/api/files/content?project_id=${encodeURIComponent(projectID)}&path=${encodeURIComponent(activeAsset.path)}`} onExport={exportImage} />}
   </section>;
 }

@@ -1,4 +1,4 @@
-param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2', 'editor')][string]$Smoke = 'm1')
+param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2', 'editor', 'editor-product')][string]$Smoke = 'm1')
 $ErrorActionPreference = 'Stop'
 if ($Smoke -eq 'editor' -and $Mode -ne 'debug') { throw 'Editor Canvas harness requires -Mode debug and the existing Vite dev server.' }
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -29,17 +29,19 @@ function Stop-OwnedDesktop($owned) {
 }
 $process = [System.Diagnostics.Process]::Start($info)
 try {
-    $scriptName = if ($Smoke -eq 'editor') { 'smoke-editor.mjs' } elseif ($Smoke -eq 'm2') { 'smoke-m2.mjs' } else { 'smoke-desktop.mjs' }
-    & node (Join-Path $PSScriptRoot $scriptName) $debugPort $runDir $origin
+    $scriptName = if ($Smoke -in @('editor', 'editor-product')) { 'smoke-editor.mjs' } elseif ($Smoke -eq 'm2') { 'smoke-m2.mjs' } else { 'smoke-desktop.mjs' }
+    $phase = if ($Smoke -eq 'editor-product') { 'product' } else { 'initial' }
+    & node (Join-Path $PSScriptRoot $scriptName) $debugPort $runDir $origin $phase
     if ($LASTEXITCODE -ne 0) { throw 'WebView smoke failed.' }
     $browser = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Where-Object { $_.CommandLine -like "*$profile*" }
     if (-not $browser) { throw 'Test-only WebView profile override was not observed in browser command line.' }
     $browser | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $runDir 'webview-profile.json')
     Stop-OwnedDesktop $process
-    if ($Smoke -eq 'm2') {
+    if ($Smoke -in @('m2', 'editor-product')) {
         $process.Dispose()
         $process = [System.Diagnostics.Process]::Start($info)
-        & node (Join-Path $PSScriptRoot 'smoke-m2.mjs') $debugPort $runDir $origin recovery
+        $phase = if ($Smoke -eq 'editor-product') { 'product-recovery' } else { 'recovery' }
+        & node (Join-Path $PSScriptRoot $scriptName) $debugPort $runDir $origin $phase
         if ($LASTEXITCODE -ne 0) { throw 'WebView restart recovery failed.' }
         Stop-OwnedDesktop $process
     }

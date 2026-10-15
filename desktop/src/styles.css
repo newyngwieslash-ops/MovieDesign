@@ -72,3 +72,14 @@ h3 { font-size: 14px; font-weight: 550; }
 .pending-import { background: #393322; border: 1px solid #87764a; border-radius: 6px; padding: 12px; margin: 18px 0; font-size: 13px; }
 .inline-error { color: #f2c8ad !important; overflow-wrap: anywhere; }
 @media (max-width: 1000px) { .library-columns { grid-template-columns: minmax(0, 1fr); } .object-details { border-left: 0; border-top: 1px solid #394235; padding-left: 0; } }
+.image-editor { margin-top: 24px; padding: 16px; border: 1px solid #ddd; border-radius: 12px; background: #fafafa; }
+.editor-toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.editor-toolbar button, .annotation-comment button { padding: 7px 10px; border: 1px solid #aaa; border-radius: 6px; background: white; color: #222; }
+.editor-toolbar button[aria-pressed="true"] { background: #dbeafe; border-color: #2563eb; }
+.editor-toolbar button:focus-visible, .editor-stage canvas:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.editor-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
+.editor-viewport { position: relative; width: 100%; overflow: hidden; }
+.editor-stage { position: relative; transform-origin: top left; }
+.canvas-text-input { position: absolute; padding: 0; margin: 0; border: 0; outline: 1px dashed #3370ff; resize: none; background: transparent; color: transparent; overflow: hidden; border-radius: 0; box-sizing: content-box; }
+.annotation-comment { display: flex; align-items: end; gap: 8px; margin-top: 12px; }
+.annotation-comment textarea { display: block; min-width: 240px; }

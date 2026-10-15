@@ -51,7 +51,8 @@ function harness(storageFailure = '') {
     return mod.exports;
   }
   const recovery = load('features/assets/recovery.ts');
-  const { AssetLibrary } = load('features/assets/AssetLibrary.tsx', { './recovery': recovery });
+  const exportBytes = load('features/assets/exportBytes.ts', { './recovery': recovery });
+  const { AssetLibrary } = load('features/assets/AssetLibrary.tsx', { './recovery': recovery, './exportBytes': exportBytes, '../editor/ImageEditor': { ImageEditor() {} } });
   const { App } = load('App.tsx', { './features/projects/ProjectPicker': { ProjectPicker }, './features/canvas/CanvasWorkspace': { CanvasWorkspace }, './features/assets/AssetLibrary': { AssetLibrary: AssetStub } });
   const render = (component, state) => { hooks = state; cursor = 0; return component === App ? App() : AssetLibrary({ projectID: 'p' }); };
   const drop = state => render(AssetLibrary, state).props.onDrop({ preventDefault() {}, dataTransfer: { files: [new File(['same bytes'], 'file.png')] } });

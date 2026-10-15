@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { connect } from './webview-cdp.mjs';
 import { createServer } from 'node:http';
 
-const [port, evidenceDir, origin] = process.argv.slice(2);
+const [port, evidenceDir, origin, phase] = process.argv.slice(2);
+if (phase?.startsWith('product')) { await import('./smoke-editor-product.mjs'); process.exit(0); }
 assert(port && evidenceDir && origin, 'usage: node smoke-editor.mjs <debug-port> <evidence-dir> <dev-origin>');
 assert.equal(origin, 'http://localhost:1420', 'editor harness is a dev WebView check');
 const { call, evaluate, wait, exceptions, close } = await connect(port, origin);

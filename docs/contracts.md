@@ -245,3 +245,19 @@ POST /api/deliver?project_id=<project>
 项目创建另以应用级 `moviedesign.project-create.v1` 保存完整原始 POST JSON（requestId/action/value.name），发送前先写入；网络/5xx 等未确认结果保留，刷新/重启显示原名称及“续建项目”，重发同 body。已知 400 验证拒绝或成功回执清除，400 后可修改名称。损坏记录保留并阻止覆盖。真实 smoke 从 DOMStorage 捕获原创建 body，模拟回执丢失后刷新、点击续建，独立列表确认项目总数仍为一。
 
 `scripts/smoke-desktop.ps1 -Mode release -Smoke m2` 使用进程独有 data dir、CDP port、WEBVIEW2_USER_DATA_FOLDER；检查真实子浏览器 command line 的 profile，重启复用该 profile。smoke 在 DOM 表单创建项目，用 DOM.setFileInputFiles 导入 PNG，经真实 UI 完成 upload/commit/deliver/revision，验证 naturalWidth、同请求 receipt、独立版本列表计数、血缘和跨项目隔离。CDP DOMStorage 捕获实际发送前冻结的完整 operation，再播回该已完成意图模拟回执丢失；先刷新再关闭/重启，按钮必须重发相同 POST body/requestId，版本数不增加。没有生产故障注入接口。证据见 milestones.md，运行数据只留 `.runtime/`。
+
+## M3.4 图像编辑与恢复（2026-10-16）
+
+`ImageEditor({assetId,source,onExport,onAnnotations,ref?})` 在 asset/source 改变时创建及销毁 Editor，回调经 ref 更新，不重建历史。`onExport(Blob):Promise<void>` 接收实际 PNG；`onAnnotations(Annotation[])` 及可选 `ImageEditorHandle.collectAnnotations()` 提供 `{id,assetId,rectangleId,tagId,comment,bounds}`。内部逻辑宽度为 `min(960,naturalWidth)`，高度保持图像比例；输出 bounds 乘以 natural/logical 比例，是源图像像素，与 CSS 缩放及 DPR 无关。
+
+标注矩形为尚未提交的事务草稿；确认说明后在同一事务添加 tag。取消草稿回滚。只保留不可变 pair ID 记录，是否存在、说明、位置均来自当前 Editor 图形，因此撤销删除、修改说明及移动同时恢复元数据。记录保留至关闭编辑器，没有第二份历史，也没有扩充 flat ShapeData。任一配对 ID 删除扩展为两者；区域或标签移动在同一事务更新搭档。
+
+EditorOptions 的三个局部策略入口：`onShapeCreate(data):boolean` 返回 true 表示 wrapper 已接管草稿；`expandDeletion(ids):Iterable<string>` 为所有删除命令扩展 ID；`beforeCommit(previousShapes)` 在同一历史快照比较前同步搭档。`removeShapesWithoutHistory(ids)` 仅做当前事务内删除；`rollbackInteraction()` 明确恢复事务开始的快照而不入历史。原 `cancelInteraction()` 仍只清除快照，不做回滚。键盘先判 isComposing 和 input/textarea/select/contenteditable 焦点；画布主动处理焦点且阻止随后 mousedown 默认动作抢走新 textarea 的焦点。
+
+透明 textarea 只负责输入、光标和 IME；Canvas 画实际字形，字号、字体、字重、1.4 行距和逻辑坐标一致。Enter/blur 提交，Shift+Enter 换行，composition 期间不提交。已有 text Escape 回滚，新 text Escape 删除且不留历史；tag Escape 删除并提交（配对 tag 同时删除 rectangle）。空白提交删除。
+
+编辑保存复用 AssetLibrary 中同一 `run/owns/save` 的 upload→commit→deliver(new_version) 路径：冻结 baseVersion、composition、三个 requestID 和完整文件身份，后续每个 POST 前仍持久化原始 body。新字段 `generatedPNG:true` 区分普通文件与生成图像。普通 M2 文件仍由用户重选同文件；编辑 PNG 必须先在原生 IndexedDB `moviedesign-editor-exports` / `png` 按 `projectID/uploadID` 提交 `{file:{name,size,sha256},blob}`，再写 localStorage 意图，最后才允许网络 POST。Blob 不写入 localStorage，不重新绘图替代相同请求的字节。每次恢复读取 Blob 并验证名称、大小、完整 SHA-256；损坏/丢失保留意图并阻止 POST。首次存储拒绝保留内存中冻结意图和 File，供当前窗口显式继续；未持久化成功前不能保证重启恢复。
+
+重启仅显示待确认操作，用户点击后才恢复原字节和相同 ID/body。并发响应继续使用完整前驱记录的同步 ownership 比较。completed/blocked 后只删除该 uploadID 的临时 Blob；清理失败不把已知保存结果变成未知，已完成版本仍刷新/选中并提示本机清理失败。切换项目销毁编辑器；切换版本关闭编辑器，旧结果不选入另一已选对象。未选对象的重启恢复会选择实际完成版本。
+
+`scripts/smoke-desktop.ps1 -Mode debug -Smoke editor-product` 运行真实产品 UI、原生 textarea/IME、图形像素、标注和 IDB/版本血缘检查，并正常关闭及重启同 profile。`-Smoke editor` 保留现有核心 Canvas fixture，`-Smoke m2` 保留普通导入回归。无新增网络协议、依赖、后端修改或 LLM 调用。

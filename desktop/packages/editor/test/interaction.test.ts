@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Editor } from '../src/editor.ts';
 import { shapeFromData } from '../src/shapes.ts';
 import type { ShapeData } from '../src/types.ts';
+import { annotationShapeIds, collectAnnotations, moveAnnotationPairs } from '../../../src/features/editor/annotations.ts';
 
 // Only the DOM/Canvas boundary is controlled here. Data/history/tools are real;
 // actual Canvas pixels and frame counts are checked in render.ts in WebView2.
@@ -26,6 +27,25 @@ function flushFrames() { const pending = [...frames.values()]; frames.clear(); p
 Object.assign(globalThis, { document: { createElement: () => new Surface() }, window: testWindow, requestAnimationFrame: (run: () => void) => { frames.set(++frameId, run); return frameId; }, cancelAnimationFrame: (id: number) => frames.delete(id) });
 const style = { stroke: '#000', strokeWidth: 1, fill: '#fff' };
 const rect = (id = 'r'): ShapeData => ({ id, type: 'rectangle', x: 20, y: 20, width: 60, height: 40, style });
+test('annotation delete/move and provisional rollback use the one real Editor history', () => {
+  const records = [{ id: 'a', assetId: 'asset', rectangleId: 'r', tagId: 't' }];
+  const editor = new Editor(new Surface() as unknown as HTMLElement, { width: 200, height: 100,
+    expandDeletion: ids => annotationShapeIds(records, ids),
+    beforeCommit: previous => moveAnnotationPairs(editor, records, previous),
+  });
+  editor.beginInteraction(); editor.addShapeInstanceWithoutHistory(shapeFromData(rect()));
+  editor.addShapeInstanceWithoutHistory(shapeFromData({ id: 't', type: 'tag', x: 90, y: 20, width: 30, height: 20, anchorX: 80, anchorY: 30, text: '说明', style })); editor.commitInteraction();
+  const collect = () => collectAnnotations(records, editor.getState().shapes, editor.getSize(), editor.getSize());
+  for (const id of ['r', 't']) { editor.deleteShapes([id]); assert.equal(collect().length, 0); editor.undo(); assert.equal(collect()[0].comment, '说明'); }
+  editor.beginInteraction(); editor.getShape('r')!.move(10, 5); editor.commitInteraction();
+  assert.equal((editor.getShape('t')!.data as any).x, 100); editor.undo(); assert.equal((editor.getShape('t')!.data as any).x, 90);
+  editor.beginInteraction(); editor.getShape('t')!.data = { ...editor.getShape('t')!.data, text: '更改' } as ShapeData; editor.commitInteraction();
+  assert.equal(collect()[0].comment, '更改'); editor.undo(); assert.equal(collect()[0].comment, '说明');
+  editor.beginInteraction(); editor.removeShapesWithoutHistory(['t']); editor.rollbackInteraction(); assert.equal(collect().length, 1);
+  editor.undo(); assert.equal(editor.getState().shapes.length, 0); editor.redo(); assert.equal(collect().length, 1);
+  editor.select('r'); const e = new Event('keydown'); Object.assign(e, { key: 'Delete', isComposing: true }); editor.renderer.main.dispatchEvent(e); assert.equal(collect().length, 1);
+  editor.destroy();
+});
 function setup(shapes: ShapeData[] = []) {
   const container = new Surface();
   const editor = new Editor(container as unknown as HTMLElement, { width: 200, height: 100, shapes });

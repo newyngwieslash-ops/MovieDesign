@@ -40,7 +40,7 @@ export function App() {
       <div className="selected-item"><span aria-hidden="true">▦</span> 创作画布</div>
       <ProjectPicker selected={projectID} ready={ready} onSelect={selectProject} />
       <div className="sidebar-note">从一个想法开始，<br />让作品在这里生长。</div>
-      <div className="milestone"><span>M2</span> 素材工作台</div>
+      <div className="milestone">素材工作台</div>
     </aside>
     <main>
       <div className="canvas-header"><div><h1>创作画布</h1><p>你的图像、视频与创作依据，将在这里汇合。</p></div><span className="local-badge">LOCAL</span></div>

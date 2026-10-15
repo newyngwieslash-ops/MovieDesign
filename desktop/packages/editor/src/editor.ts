@@ -6,7 +6,17 @@ import { Tools } from './tools.ts';
 import type { ToolName } from './tools.ts';
 import type { Point, ShapeData, ShapeStyle, TagData } from './types.ts';
 
-export interface EditorOptions { width: number; height: number; shapes?: ShapeData[]; style?: Partial<ShapeStyle>; tool?: ToolName }
+export interface EditorOptions {
+  width: number; height: number; shapes?: ShapeData[]; style?: Partial<ShapeStyle>; tool?: ToolName;
+  onShapeCreate?: (shape: ShapeData) => boolean;
+  expandDeletion?: (ids: readonly string[]) => Iterable<string>;
+  beforeCommit?: (previous: ShapeData[]) => void;
+}
+export function shouldHandleShortcut(event: KeyboardEvent): boolean {
+  const target = event.target;
+  return !event.isComposing && !(typeof HTMLElement !== 'undefined' && target instanceof HTMLElement &&
+    (target.isContentEditable || target.closest('input,textarea,select,[contenteditable="true"]')));
+}
 export interface EditorState { shapes: ShapeData[]; selectedId: string | null; tool: ToolName; style: ShapeStyle; canUndo: boolean; canRedo: boolean }
 export interface TextEditRequest { kind: 'text' | 'tag'; point: Point; data?: TagData; existingId?: string }
 export interface EditorEvents { change: EditorState; selection: string | null; 'text-edit': TextEditRequest }
@@ -32,8 +42,10 @@ export class Editor {
   private width: number;
   private height: number;
   private destroyed = false;
+  private options: EditorOptions;
 
   constructor(container: HTMLElement, options: EditorOptions) {
+    this.options = options;
     const shapes = options.shapes ?? [];
     if (new Set(shapes.map(s => s.id)).size !== shapes.length) throw new Error('Duplicate shape id');
     this.width = options.width; this.height = options.height;
@@ -78,6 +90,7 @@ export class Editor {
   addShapeInstance(shape: Shape): void {
     if (this.destroyed) return;
     if (this.shapeMap.has(shape.id)) throw new Error('Duplicate shape id');
+    if (this.options.onShapeCreate?.(shape.toData())) return;
     this.beginInteraction(); this.addShapeInstanceWithoutHistory(shape); this.commitInteraction();
   }
   addShapeInstanceWithoutHistory(shape: Shape): void {
@@ -87,12 +100,17 @@ export class Editor {
   }
   deleteShapes(ids: readonly string[]): void {
     if (this.destroyed) return;
-    const remove = new Set(ids); if (!this.shapes.some(s => remove.has(s.id))) return;
+    const remove = new Set(this.options.expandDeletion?.(ids) ?? ids); if (!this.shapes.some(s => remove.has(s.id))) return;
     if (this.pointerId !== null) this.finishGesture();
-    this.beginInteraction(); this.shapes = this.shapes.filter(s => !remove.has(s.id));
+    this.beginInteraction(); this.removeShapesWithoutHistory([...remove]); this.commitInteraction();
+  }
+  removeShapesWithoutHistory(ids: readonly string[]): void {
+    if (this.destroyed) return;
+    const remove = new Set(this.options.expandDeletion?.(ids) ?? ids);
+    this.shapes = this.shapes.filter(s => !remove.has(s.id));
     for (const id of remove) this.shapeMap.delete(id);
     if (this.selectedId && remove.has(this.selectedId)) this.select(null);
-    this.commitInteraction();
+    this.requestRender();
   }
   select(id: string | null): void {
     if (this.destroyed) return;
@@ -105,12 +123,17 @@ export class Editor {
   beginInteraction(): void { if (!this.destroyed && this.interactionSnapshot === null) this.interactionSnapshot = this.snapshot(); }
   commitInteraction(): void {
     if (this.destroyed) return;
+    if (this.interactionSnapshot) this.options.beforeCommit?.(structuredClone(this.interactionSnapshot));
     const previous = this.interactionSnapshot; this.interactionSnapshot = null;
     const changed = previous !== null && snapshotJSON(previous) !== snapshotJSON(this.snapshot());
     if (changed) this.history.push(previous);
     this.requestRender(); if (changed) this.emit('change', this.getState());
   }
   cancelInteraction(): void { this.interactionSnapshot = null; }
+  rollbackInteraction(): void {
+    const previous = this.interactionSnapshot; this.cancelInteraction();
+    if (!this.destroyed && previous) this.applySnapshot(previous);
+  }
   undo(): void {
     if (this.destroyed) return;
     this.finishGesture(); const snapshot = this.history.undo(this.snapshot()); if (snapshot !== undefined) this.applySnapshot(snapshot);
@@ -176,6 +199,8 @@ export class Editor {
   }
   private down = (event: PointerEvent): void => {
     if (this.destroyed || event.button !== 0 || this.pointerId !== null) return;
+    // Focus is explicit below; suppress the later native mousedown default that would blur a newly opened textarea.
+    event.preventDefault();
     this.pointerId = event.pointerId; this.renderer.main.setPointerCapture(event.pointerId); this.renderer.main.focus(); this.tool.down(this.point(event));
   };
   private move = (event: PointerEvent): void => { if (!this.destroyed && (this.pointerId === null || event.pointerId === this.pointerId)) this.tool.move(this.point(event)); };
@@ -184,6 +209,7 @@ export class Editor {
     this.releasePointer(); this.tool.up(this.point(event));
   };
   private key = (event: KeyboardEvent): void => {
+    if (!shouldHandleShortcut(event)) return;
     if (event.key === 'Delete' || event.key === 'Backspace') { if (this.selectedId) this.deleteShapes([this.selectedId]); event.preventDefault(); }
     else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) this.redo(); else this.undo(); }
     else if (event.key === 'Escape') this.select(null);
