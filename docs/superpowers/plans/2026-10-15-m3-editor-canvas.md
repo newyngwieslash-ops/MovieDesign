@@ -152,7 +152,7 @@ export function shouldHandleShortcut(event:KeyboardEvent):boolean {
 
 **Interfaces:** document=`{schemaVersion:1,revision,nodes,edges}`；node kind=composition/placeholder/frame；activeItem=`{type:'version',resourceId,versionId}|{type:'task-output',taskId,outputKey}`；pendingGeneration=`{requestId,outputKey}`。command 输入 `{requestId,expectedRevision,command}`，回执 `{requestId,appliedRevision,document,replayed,effects}`；这是原 commandId 的明确改名适配。
 
-- [ ] Go tests 检查旧 revision409、重复requestId回放、同键异patch拒绝、父环/悬空边/重复node/noop/空patch拒绝；Node tests 检查 generation-request 不能进入 activeItem。
+- [x] Go tests 检查旧 revision409、重复requestId回放、同键异patch拒绝、父环/悬空边/重复node/noop/空patch拒绝；Node tests 检查 generation-request 不能进入 activeItem。
 
 ```ts
 export type ItemRef =
@@ -162,7 +162,7 @@ export type PendingGeneration = {requestId:string;outputKey:string};
 export const CANVAS_LIMITS = {nodes:10000,edges:20000,changes:30000,batch:64,content:200,references:64} as const;
 ```
 
-- [ ] 红灯命令 `go -C gateway test ./internal/store -run TestCanvas -v` 和 `node --experimental-strip-types --test desktop/src/features/canvas/canvas.test.ts`。
-- [ ] 一个事务验证 expectedRevision、应用 patch、更新 doc、保存 command receipt；revision 不一致不部分落库。content 按原 compositionIds 批读取，每批≤200且无重复 ID；batch≤64不嵌套。媒体类型由对象内容决定，不发明 image/video/document node.kind。
-- [ ] React 工作台实现平移/缩放/选择/拖动/缩放节点、媒体播放、文档阅读、版本选择与属性；空间变换只影响视图，节点位置写服务端。图片/视频明确使用crossOrigin=anonymous，使跨源媒体请求携带Origin；验证Range/CORS与Canvas导出不被污染，不给媒体路由添加Origin豁免。可见节点裁剪降低 DOM 数量；10,000 节点数据不能全部当图像编辑器 shapes。复用 M2 已提取的 scripts/webview-cdp.mjs，原 M1 smoke 保持通过。
-- [ ] 更新 check.ps1 加入 Node editor/canvas checks；真实窗口创建媒体/文档节点、移动、重启、切版本，验证持久状态。全量测试、M1/M2回归通过后提交 `feat(M3.5): persist object canvas commands` 并推送 M3。
+- [x] 红灯命令 `go -C gateway test ./internal/store -run TestCanvas -v` 和 `node --experimental-strip-types --test desktop/src/features/canvas/canvas.test.ts`。
+- [x] 一个事务验证 expectedRevision、应用 patch、更新 doc、保存 command receipt；revision 不一致不部分落库。content 按原 compositionIds 批读取，每批≤200且无重复 ID；batch≤64不嵌套。媒体类型由对象内容决定，不发明 image/video/document node.kind。
+- [x] React 工作台实现平移/缩放/选择/拖动/缩放节点、媒体播放、文档阅读、版本选择与属性；空间变换只影响视图，节点位置写服务端。图片/视频明确使用crossOrigin=anonymous，使跨源媒体请求携带Origin；验证Range/CORS与Canvas导出不被污染，不给媒体路由添加Origin豁免。可见节点裁剪降低 DOM 数量；10,000 节点数据不能全部当图像编辑器 shapes。复用 M2 已提取的 scripts/webview-cdp.mjs，原 M1 smoke 保持通过。
+- [x] 更新 check.ps1 加入 Node editor/canvas checks；真实窗口创建媒体/文档节点、移动、重启、切版本，验证持久状态。全量测试、M1/M2回归通过后提交 `feat(M3.5): persist object canvas commands` 并推送 M3。
