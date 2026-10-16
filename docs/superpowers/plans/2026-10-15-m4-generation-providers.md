@@ -1,6 +1,6 @@
 # M4 自定义供应商与图像生成 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 实现本地/云端供应商设置、持久任务与 SSE、唯一计费确认卡，以及真实图像生成和标注编辑落库。
 
@@ -26,7 +26,7 @@ providers/config 管连接，capabilities 管参数白名单，pricing 管估算
 
 **Interfaces:** `/api/providers` GET 返回脱敏配置，POST create/update/disable/select/probe；`Config{ID,Name,Kind,Protocol,BaseURL,ModelID string; Enabled bool}`，追加 explicit capability/pricing/headers 对象；`SecretStore.Put(id,value),Get(id),Delete(id)`；`Resolve(id)(FrozenProvider,error)` 返回任务冻结快照。GET 永不返回密钥。
 
-- [ ] 表驱动检查：保存本地端点、保存云端 HTTPS、无支持协议拒绝、拒绝本应用8001/opencode4096/metadata地址、header注入拒绝、GET/log无密钥、停用配置不破坏旧任务快照。
+- [x] 表驱动检查：保存本地端点、保存云端 HTTPS、无支持协议拒绝、拒绝本应用8001/opencode4096/metadata地址、header注入拒绝、GET/log无密钥、停用配置不破坏旧任务快照。
 
 ```go
 func TestProviderURLs(t *testing.T) {
@@ -41,10 +41,10 @@ func TestProviderURLs(t *testing.T) {
 }
 ```
 
-- [ ] 运行 `go -C gateway test ./internal/providers -run 'TestProvider|TestSecrets' -v`；不存在设置/校验时应失败。
-- [ ] SQLite 配置不存明文凭据；Windows DPAPI 加密文件以临时文件+rename 更新。只允许定义的额外 header 名，不允许 Host/Origin/Content-Length/Connection 和 CR/LF。DNS解析、redirect和产物下载同样验证目标，不能通过URL跳转访问禁止地址；用户明确配置的本地模型端口允许访问。
-- [ ] 设置 UI 支持增删改、默认用途、可见 Base URL/model/protocol、write-only key、价格/能力编辑、免费连接测试。没有免费探测API的协议显示“配置校验通过，远端未测试”，不能偷偷调用生成接口。JSON 明确区分 capability 声明与 probe 已验证事实。
-- [ ] 将新端点与字段加入适配表；保存重启、切换默认配置、错误密钥展示均验证，提交 `feat(M4.1): configure local and cloud providers`。
+- [x] 运行 `go -C gateway test ./internal/providers -run 'TestProvider|TestSecrets' -v`；不存在设置/校验时应失败。
+- [x] SQLite 配置不存明文凭据；Windows DPAPI 加密文件以临时文件+rename 更新。只允许定义的额外 header 名，不允许 Host/Origin/Content-Length/Connection 和 CR/LF。DNS解析、redirect和产物下载同样验证目标，不能通过URL跳转访问禁止地址；用户明确配置的本地模型端口允许访问。
+- [x] 设置 UI 支持增删改、默认用途、可见 Base URL/model/protocol、write-only key、价格/能力编辑、免费连接测试。没有免费探测API的协议显示“配置校验通过，远端未测试”，不能偷偷调用生成接口。JSON 明确区分 capability 声明与 probe 已验证事实。
+- [x] 将新端点与字段加入适配表；保存重启、切换默认配置、错误密钥展示均验证，提交 `feat(M4.1): configure local and cloud providers`。
 
 ### Task M4.2：任务、attempt、事件持久化与 SSE
 
@@ -55,7 +55,7 @@ func TestProviderURLs(t *testing.T) {
 
 **Interfaces:** `Submit(ctx,projectID,Input)(TaskView,error)`、`Query(ctx,projectID,id)(TaskView,error)`、`Resolve(ctx,projectID,id,ResolveInput)(TaskView,error)`、`Wait(ctx,projectID,id)(TaskView,error)`。Input 含 requestId/capability_id/prompt/params/references/output；ResolveInput 含 requestId/action/expected_revision。TaskView 按 §6 字段，状态谓词复用总计划定义。
 
-- [ ] 写状态矩阵、乐观锁冲突、billing等待穿透、ordinary等待停止、unknown停止、重复提交返回原task、两个worker不重复submit测试：
+- [x] 写状态矩阵、乐观锁冲突、billing等待穿透、ordinary等待停止、unknown停止、重复提交返回原task、两个worker不重复submit测试：
 
 ```go
 func TestWaitSemantics(t *testing.T) {
@@ -67,10 +67,10 @@ func TestWaitSemantics(t *testing.T) {
 }
 ```
 
-- [ ] `go -C gateway test ./internal/tasks ./internal/events -v`，确认没有状态/CAS/持久回放时失败。
-- [ ] tasks 保存冻结输入、revision、状态、当前attempt；task_attempts保存upstream ID、提交开始/受理/结果、不可变错误；generation_inputs保存有序 asset/version 引用；task_outputs保存唯一opaque taskOutputKey及文件状态。CAS 使用 `UPDATE tasks SET status=?,revision=revision+1 WHERE id=? AND revision=?` 检查影响行数，并在同一事务更新完整任务视图与events。
-- [ ] events 保存单调 ID、project/session/task、type、payload、时间。SSE `id:` 对应持久ID，`Last-Event-Id` 后重放，15秒注释心跳；先订阅通知后追平持久游标避免 replay/live 缝隙。客户端慢消费者断开后靠游标追赶，不丢事件也不无限增长内存队列。MVP不剪裁events，标注增长上限与未来按保留策略迁移的 ponytail 注释。
-- [ ] worker 只运行已批准任务；重启时 running+upstreamID 查询上游，running无ID但submit已开始→unknown，绝不自动重提。health idle/safe_to_suspend改为真实活动计数，管道与HTTP共享读法。提交 `feat(M4.2): persist task transitions and replay events`。
+- [x] `go -C gateway test ./internal/tasks ./internal/events -v`，确认没有状态/CAS/持久回放时失败。
+- [x] tasks 保存冻结输入、revision、状态、当前attempt；task_attempts保存upstream ID、提交开始/受理/结果、不可变错误；generation_inputs保存有序 asset/version 引用；task_outputs保存唯一opaque taskOutputKey及文件状态。CAS 使用 `UPDATE tasks SET status=?,revision=revision+1 WHERE id=? AND revision=?` 检查影响行数，并在同一事务更新完整任务视图与events。
+- [x] events 保存单调 ID、project/session/task、type、payload、时间。SSE `id:` 对应持久ID，`Last-Event-Id` 后重放，15秒注释心跳；先订阅通知后追平持久游标避免 replay/live 缝隙。客户端慢消费者断开后靠游标追赶，不丢事件也不无限增长内存队列。MVP不剪裁events，标注增长上限与未来按保留策略迁移的 ponytail 注释。
+- [x] worker 只运行已批准任务；重启时 running+upstreamID 查询上游，running无ID但submit已开始→unknown，绝不自动重提。health idle/safe_to_suspend改为真实活动计数，管道与HTTP共享读法。提交 `feat(M4.2): persist task transitions and replay events`。
 
 ### Task M4.3：能力协议、参数白名单与图像适配器
 
