@@ -1,3 +1,4 @@
+import { ConfirmationCards } from './features/questions/ConfirmationCard';
 import { ProviderSettings } from './features/providers/ProviderSettings';
 import { useQuery } from '@tanstack/react-query';
 import { getConnection, getHealth } from './gateway';
@@ -47,6 +48,7 @@ export function App() {
       <div className="milestone">素材工作台</div>
     </aside>
     <main>
+      {ready && projectID && <ConfirmationCards key={projectID} projectID={projectID} />}
       <div hidden={page !== 'providers'}><ProviderSettings ready={!!ready} /></div>
       <div hidden={page !== 'canvas'}>
       <div className="canvas-header"><div><h1>创作画布</h1><p>你的图像、视频与创作依据，将在这里汇合。</p></div><span className="local-badge">LOCAL</span></div>

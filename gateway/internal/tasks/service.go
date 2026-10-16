@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -20,12 +21,14 @@ type Service struct {
 	DB       *sql.DB
 	Events   *events.Service
 	Executor *Executor
-	ctx      context.Context
-	cancel   context.CancelFunc
-	mu       sync.Mutex
-	stopping bool
-	work     sync.WaitGroup
-	active   atomic.Int64
+	// BillingGate adds the server-owned card in the admission/retry transaction.
+	BillingGate func(context.Context, *sql.Tx, string, TaskView, Input, bool) error
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.Mutex
+	stopping    bool
+	work        sync.WaitGroup
+	active      atomic.Int64
 }
 
 func NewService(db *sql.DB, e *events.Service, executor *Executor) *Service {
@@ -407,6 +410,11 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 		if e := events.Append(ctx, tx, p, i.SessionID, v.ID, "task_changed", view); e != nil {
 			return nil, e
 		}
+		if s.BillingGate != nil {
+			if e := s.BillingGate(ctx, tx, p, v, i, false); e != nil {
+				return nil, e
+			}
+		}
 		return view, nil
 	})
 	if e == nil {
@@ -540,6 +548,15 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 		if e = s.save(ctx, tx, p, session, &v, attempt); e != nil {
 			return nil, e
 		}
+		if s.BillingGate != nil && v.Status == WaitingUser && v.Problem != nil && v.Problem.Source == "billing" {
+			a, _, _, err := loadAttempt(ctx, tx, p, id)
+			if err != nil {
+				return nil, err
+			}
+			if err = s.BillingGate(ctx, tx, p, v, a.Input, true); err != nil {
+				return nil, err
+			}
+		}
 		return json.Marshal(v)
 	})
 	if e == nil {
@@ -547,4 +564,83 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 		s.Events.Notify()
 	}
 	return v, e
+}
+
+// BillingInput is SQL-only; questions must pass their own transaction.
+func (s *Service) BillingInput(ctx context.Context, tx *sql.Tx, p, session, id string, revision int64) (Input, error) {
+	v, _, ownedSession, e := query(ctx, tx, p, id)
+	if e != nil {
+		return Input{}, e
+	}
+	if session != ownedSession || v.Revision != revision || v.Status != WaitingUser || v.Problem == nil || v.Problem.Source != "billing" {
+		return Input{}, conflict()
+	}
+	a, state, started, e := loadAttempt(ctx, tx, p, id)
+	if e != nil {
+		return Input{}, e
+	}
+	if state != "billing" || started {
+		return Input{}, conflict()
+	}
+	if e = validateOwnership(ctx, tx, p, a.Input); e != nil {
+		return Input{}, e
+	}
+
+	// Validate the registered snapshot under the same receipt transaction. Native
+	// bytes are independently checked by the image executor before its HTTP POST.
+	for _, reference := range a.Input.Assets {
+		var current store.Asset
+		e = tx.QueryRowContext(ctx, "SELECT id,path,status,size,mtime_ms,dev_id,inode,quick_hash,full_hash,width,height,duration_ms,mime_type,name,metadata,created_at,updated_at FROM assets WHERE id=?", reference.Asset.ID).Scan(&current.ID, &current.Path, &current.Status, &current.Size, &current.MtimeMS, &current.DevID, &current.Inode, &current.QuickHash, &current.FullHash, &current.Width, &current.Height, &current.DurationMS, &current.MIMEType, &current.Name, &current.Metadata, &current.CreatedAt, &current.UpdatedAt)
+		if e != nil {
+			return Input{}, e
+		}
+		if current.FullHash != nil && (reference.Asset.FullHash == nil || *current.FullHash != *reference.Asset.FullHash) {
+			return Input{}, conflict()
+		}
+		// Admission computes FullHash even when the optional registry field is absent.
+		current.FullHash = reference.Asset.FullHash
+		before, _ := json.Marshal(reference.Asset)
+		after, _ := json.Marshal(current)
+		if !bytes.Equal(before, after) {
+			return Input{}, conflict()
+		}
+	}
+	return a.Input, nil
+}
+
+// DecideQuestion keeps task transitions in tasks. Generic answers never unlock billing.
+func (s *Service) DecideQuestion(ctx context.Context, tx *sql.Tx, p, session, id string, revision int64, billingApproval, rejected bool) error {
+	v, attempt, ownedSession, e := query(ctx, tx, p, id)
+	if e != nil {
+		return e
+	}
+	if v.Revision != revision || session != ownedSession || v.Status != WaitingUser {
+		return conflict()
+	}
+	if !rejected && !billingApproval {
+		return nil
+	}
+	state := "approved"
+	v.Status = Accepted
+	v.Problem = nil
+	v.Progress = Progress{Phase: "pending"}
+	v.Actions = []string{"cancel"}
+	if rejected {
+		state = "cancelled"
+		v.Status = Cancelled
+		v.Progress.Phase = "stopped"
+		v.Actions = []string{}
+	}
+	result, e := tx.ExecContext(ctx, "UPDATE task_attempts SET state=? WHERE task_id=? AND attempt=? AND state='billing' AND submit_started_at IS NULL", state, id, attempt)
+	if e != nil {
+		return e
+	}
+	n, e := result.RowsAffected()
+	if e != nil {
+		return e
+	}
+	if n != 1 {
+		return conflict()
+	}
+	return s.save(ctx, tx, p, session, &v, attempt)
 }

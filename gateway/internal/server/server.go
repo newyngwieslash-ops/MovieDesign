@@ -7,6 +7,7 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
 	"net/http"
 	"path/filepath"
@@ -120,6 +121,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 	if providerService != nil {
 		srv.tasks.Executor = tasks.ImageExecutor(providerService)
 	}
+	qs := questions.NewService(db, srv.tasks, ev)
+	if providerService != nil {
+		srv.tasks.BillingGate = qs.Billing
+	}
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -146,7 +151,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
+			allowed := questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
@@ -158,6 +163,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.URL.Path == "/api/events" {
 			serveEvents(w, r, srv.events)
+			return
+		}
+		if questionRoute(r.URL.Path) {
+			serveQuestions(w, r, qs)
 			return
 		}
 		if generationRoute(r.URL.Path) {

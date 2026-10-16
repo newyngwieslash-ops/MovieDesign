@@ -12,21 +12,10 @@ import (
 // atomic transition. Saved media is collected/delivered by M4.5, never re-POSTed.
 func ImageExecutor(s *providers.Service) *Executor {
 	return &Executor{Submit: func(ctx context.Context, a Attempt, _ func(string) error) (Outcome, error) {
-		var params map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(a.Input.Params))
-		decoder.UseNumber()
-		if e := decoder.Decode(&params); e != nil {
-			return Outcome{NotAccepted: true}, e
-		}
-		output, e := json.Marshal(a.Input.Output)
+		input, e := GenerationInput(a.ProjectID, a.Input)
 		if e != nil {
 			return Outcome{NotAccepted: true}, e
 		}
-		refs := make([]string, len(a.Input.References))
-		for i, r := range a.Input.References {
-			refs[i] = r.AssetID
-		}
-		input := providers.GenerationInput{ProjectID: a.ProjectID, Prompt: a.Input.Prompt, Params: params, References: refs, Count: a.Input.Count, Output: output, Assets: a.Input.Assets}
 		result, e := s.GenerateImage(ctx, input, a.Provider)
 		out := Outcome{}
 		if result.Data != nil {
@@ -49,4 +38,23 @@ func ImageExecutor(s *providers.Service) *Executor {
 		out.Problem = &Problem{Source: "delivery", Code: "RESULT_AWAITING_DELIVERY", Message: "Provider response saved; output delivery is not installed", Retryable: true}
 		return out, nil
 	}}
+}
+
+// GenerationInput preserves the exact same frozen input for quote and submission.
+func GenerationInput(project string, i Input) (providers.GenerationInput, error) {
+	var params map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(i.Params))
+	decoder.UseNumber()
+	if e := decoder.Decode(&params); e != nil {
+		return providers.GenerationInput{}, e
+	}
+	output, e := json.Marshal(i.Output)
+	if e != nil {
+		return providers.GenerationInput{}, e
+	}
+	refs := make([]string, len(i.References))
+	for i, r := range i.References {
+		refs[i] = r.AssetID
+	}
+	return providers.GenerationInput{ProjectID: project, Prompt: i.Prompt, Params: params, References: refs, Count: i.Count, Output: output, Assets: i.Assets}, nil
 }

@@ -50,6 +50,16 @@ func loadAttempt(ctx context.Context, q rowQuery, p, id string) (a Attempt, stat
 	a.Input.Provider = a.Provider
 	return
 }
+
+// Dispatch registers work before returning to the HTTP caller so shutdown cannot
+// miss a scheduled goroutine. Run's SQL claim permits only approved, unsent work.
+func (s *Service) Dispatch(p, id string) error {
+	if e := s.begin(); e != nil {
+		return e
+	}
+	go func() { defer s.end(); _ = s.Run(context.Background(), p, id) }()
+	return nil
+}
 func (s *Service) Run(_ context.Context, p, id string) error {
 	if s.Executor == nil {
 		return nil

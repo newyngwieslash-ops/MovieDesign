@@ -65,10 +65,16 @@ func Append(ctx context.Context, tx *sql.Tx, p, session, task, kind string, payl
 		return &store.DomainError{Status: 400, Code: "invalid_input", Message: "Invalid event scope or payload"}
 	}
 	var exists string
-	if e := tx.QueryRowContext(ctx, "SELECT id FROM tasks WHERE id=? AND project_id=? AND session_id=?", task, p, session).Scan(&exists); e != nil {
+	var taskID any
+	if task != "" {
+		if e := tx.QueryRowContext(ctx, "SELECT id FROM tasks WHERE id=? AND project_id=? AND session_id=?", task, p, session).Scan(&exists); e != nil {
+			return e
+		}
+		taskID = task
+	} else if e := tx.QueryRowContext(ctx, "SELECT id FROM projects WHERE id=?", p).Scan(&exists); e != nil {
 		return e
 	}
-	_, e := tx.ExecContext(ctx, "INSERT INTO events(project_id,session_id,task_id,type,payload_json,created_at) VALUES(?,?,?,?,?,?)", p, session, task, kind, string(payload), time.Now().UnixMilli())
+	_, e := tx.ExecContext(ctx, "INSERT INTO events(project_id,session_id,task_id,type,payload_json,created_at) VALUES(?,?,?,?,?,?)", p, session, taskID, kind, string(payload), time.Now().UnixMilli())
 	return e
 }
 func (s *Service) Read(ctx context.Context, p, session string, after int64) ([]Event, error) {

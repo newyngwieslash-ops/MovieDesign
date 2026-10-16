@@ -1,4 +1,4 @@
-param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2', 'editor', 'editor-product', 'canvas', 'providers')][string]$Smoke = 'm1')
+param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2', 'editor', 'editor-product', 'canvas', 'providers', 'questions')][string]$Smoke = 'm1')
 $ErrorActionPreference = 'Stop'
 if ($Smoke -eq 'editor' -and $Mode -ne 'debug') { throw 'Editor Canvas harness requires -Mode debug and the existing Vite dev server.' }
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -30,7 +30,7 @@ function Stop-OwnedDesktop($owned) {
 }
 $process = [System.Diagnostics.Process]::Start($info)
 try {
-    $scriptName = if ($Smoke -eq 'providers') { 'smoke-providers.mjs' } elseif ($Smoke -eq 'canvas') { 'smoke-canvas.mjs' } elseif ($Smoke -in @('editor', 'editor-product')) { 'smoke-editor.mjs' } elseif ($Smoke -eq 'm2') { 'smoke-m2.mjs' } else { 'smoke-desktop.mjs' }
+    $scriptName = if ($Smoke -eq 'questions') { 'smoke-questions.mjs' } elseif ($Smoke -eq 'providers') { 'smoke-providers.mjs' } elseif ($Smoke -eq 'canvas') { 'smoke-canvas.mjs' } elseif ($Smoke -in @('editor', 'editor-product')) { 'smoke-editor.mjs' } elseif ($Smoke -eq 'm2') { 'smoke-m2.mjs' } else { 'smoke-desktop.mjs' }
     $phase = if ($Smoke -eq 'editor-product') { 'product' } else { 'initial' }
     & node (Join-Path $PSScriptRoot $scriptName) $debugPort $runDir $origin $phase
     if ($LASTEXITCODE -ne 0) { throw 'WebView smoke failed.' }
@@ -38,7 +38,7 @@ try {
     if (-not $browser) { throw 'Test-only WebView profile override was not observed in browser command line.' }
     $browser | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $runDir 'webview-profile.json')
     Stop-OwnedDesktop $process
-    if ($Smoke -in @('m2', 'editor-product', 'canvas', 'providers')) {
+    if ($Smoke -in @('m2', 'editor-product', 'canvas', 'providers', 'questions')) {
         $process.Dispose()
         $process = [System.Diagnostics.Process]::Start($info)
         $phase = if ($Smoke -eq 'editor-product') { 'product-recovery' } else { 'recovery' }

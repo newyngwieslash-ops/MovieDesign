@@ -121,3 +121,9 @@ h3 { font-size: 14px; font-weight: 550; }
 .provider-message { padding: 12px; color: #202817; background: #edf0e3; border: 1px solid #a9b594; }
 .provider-settings :focus-visible { outline: 3px solid #3f6f24; outline-offset: 2px; }
 @media (max-width: 900px) { .provider-layout { grid-template-columns: 1fr; } }
+.confirmation-cards { display: grid; gap: 12px; margin: 16px 0; }
+.confirmation-card { border: 1px solid #a5ad99; border-radius: 12px; background: #f7f8f2; color: #202817; padding: 16px; overflow-wrap: anywhere; }
+.confirmation-card fieldset { border: 0; padding: 0; }
+.confirmation-card label { display: block; margin: 8px 0; }
+.confirmation-card button { margin: 8px 8px 0 0; }
+.confirmation-card button:focus-visible, .confirmation-card input:focus-visible { outline: 3px solid #536b2c; outline-offset: 3px; }
