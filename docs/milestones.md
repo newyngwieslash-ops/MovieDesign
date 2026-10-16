@@ -137,3 +137,8 @@ M4.2 独立审查在 1f7f085 复审通过（Spec compliant / Quality Approved）
 实现提交 ded0dca：已知 OpenAI Images 协议模板的 JSON 生成/有序 multipart 编辑、受限参数 schema、受管遮罩、整数报价和冻结输入、图像结果持久化及安全收集。生成 HTTP 新请求/重放均为 202 {task_id}，人工计费门禁仍关闭，最终 Delivery/界面由 M4.4–M4.5 接续。
 实现者最终全量 Go 测试及 vet 通过；控制端在该提交重建纯 Go gateway 并实际启动验证健康、Origin、端口冲突、重启、关闭及父进程 EOF，证据 .runtime/smoke-7076129473e74c3bbffea5f312324894。独立规格/质量审查尚未完成。所有图像协议调用均为本地 httptest fixture；没有真实供应商、付费生成或最终媒体投递验收。
 M4.3 独立复审在 f033c6f 通过（Spec compliant / Quality Approved）。ded0dca→b5d600f 修复属性 schema 大小写、精确数值与遮罩回执窗口；f033c6f 修复普通上传日志误认遮罩，通过原意图中的服务端子 UUID 绑定归属。定向恢复/数值/归属测试、全量未缓存 Go（b5d600f）、最终 providers/server/tasks 覆盖测试与 vet 通过。旧内部格式的已完成回执可重放；未完成且缺归属元数据的意图明确拒绝，不推断归属或自动重新生成。未完成的真实调用与最终媒体投递限制保持不变。
+
+### M4.4 人工费用门禁（2026-10-16）
+b120287 已通过独立规格/质量审查。初次提交/新 attempt 的报价、确认卡、回执、任务准入和事件共用事务；原回执恢复只允许尚未发送的 SQL claim，启动不自动提交。共享卡片持久化原请求，阻止损坏存储与迟到清理；SSE 单连接、持久游标、项目/会话过滤和旧连接取消。
+全量未缓存 Go/vet、最终 questions/tasks/server 覆盖、前端 events/pending 6 项、editor 47 项、Rust 1 项及生产构建通过。实际 release WebView 初次/重启证据 .runtime/desktop-release-3df90b4072f74ab69792ae3e42938a79：拒绝0POST、双击/丢响应/原key恢复总1POST、旧卡409、字面文本、损坏记录阻断、重载/重启0自动写、Last-Event-ID、正常进程回收。该原生快照早于最终 SQL/拒绝/空记录小修复，未冒称最终 binary 原生全验。
+非阻塞项：过期卡片直接拒绝入口交 M4.5 UI；换行警告如实记录。历史卡片暂保留并整体列出。真实付费供应商/生成质量/最终 Delivery 未执行，后续按阶段接续。

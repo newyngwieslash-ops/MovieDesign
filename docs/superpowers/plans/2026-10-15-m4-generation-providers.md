@@ -110,7 +110,7 @@ M4.3 已在 f033c6f 独立复审通过；最后一项的安全收集实现已验
 
 **Interfaces:** `Ask(ctx,projectID,Question)(Question,error)`、`Reply(ctx,projectID,id,HumanReply)(Receipt,error)`；Question 包含 kind=billing/choice/storyboard、session_id/task_id、revision、input_hash、状态、选项；HumanReply含requestId/answers/expected_revision。新增GET /api/question及POST /api/question/:id/reply、/:id/reject，作为用户要求入口的必要回执补充。服务端channel固定human，MCP不注册approve/reply工具。
 
-- [ ] 测试批准前provider调用数0、一次批准调用1、重复回执调用仍1、旧revision/过期quote拒绝、聊天“同意”不批准、拒绝后cancelled、重连卡片恢复：
+- [x] 测试批准前provider调用数0、一次批准调用1、重复回执调用仍1、旧revision/过期quote拒绝、聊天“同意”不批准、拒绝后cancelled、重连卡片恢复：
 
 ```go
 func TestBillingIsNotASettledWait(t *testing.T) {
@@ -119,10 +119,12 @@ func TestBillingIsNotASettledWait(t *testing.T) {
 }
 ```
 
-- [ ] `go -C gateway test ./internal/questions ./internal/tasks -run 'TestBilling|TestQuestion' -v`；无确认服务时费用隔离用例失败。
-- [ ] Reply 在一事务核对问题状态、project/session、task revision、input hash、报价版本/有效期，再写 receipt并允许worker；有效期过后重新报价/新卡，不能偷偷用旧批准。retry新增费用必须新计费卡。question source/actor由入口确定，不信任body中的user声明。
-- [ ] React 共用一套 ConfirmationCard，不用聊天文本代替。展示原币金额、积分估算、提供商、模型、动作影响、过期状态。所有按钮有键盘和屏幕阅读器名称；提交期间禁用重复点击。events.ts 单连接复用、按项目/会话分发、基于ID去重并保存重连游标。
-- [ ] 使用真实WebView验证拒绝/重复点击/重连/旧卡片；提交 `feat(M4.4): gate generation with human billing receipts`。
+- [x] `go -C gateway test ./internal/questions ./internal/tasks -run 'TestBilling|TestQuestion' -v`；无确认服务时费用隔离用例失败。
+- [x] Reply 在一事务核对问题状态、project/session、task revision、input hash、报价版本/有效期，再写 receipt并允许worker；有效期过后重新报价/新卡，不能偷偷用旧批准。retry新增费用必须新计费卡。question source/actor由入口确定，不信任body中的user声明。
+- [x] React 共用一套 ConfirmationCard，不用聊天文本代替。展示原币金额、积分估算、提供商、模型、动作影响、过期状态。所有按钮有键盘和屏幕阅读器名称；提交期间禁用重复点击。events.ts 单连接复用、按项目/会话分发、基于ID去重并保存重连游标。
+- [x] 使用真实WebView验证拒绝/重复点击/重连/旧卡片；提交 `feat(M4.4): gate generation with human billing receipts`。
+
+M4.4 b120287 独立审查通过；生产 WebView 证据早于最后几项窄修复，最终全包/专项检查覆盖后续改动，精确最终生产验收归 M4 整体验收。过期卡片拒绝入口 P3 交 M4.5 UI 收尾。
 
 ### Task M4.5：图像任务、投递、任务中心与 M4 验收
 
