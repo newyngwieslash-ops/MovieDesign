@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,9 @@ import (
 func ImageExecutor(s *providers.Service) *Executor {
 	return &Executor{Submit: func(ctx context.Context, a Attempt, _ func(string) error) (Outcome, error) {
 		var params map[string]any
-		if e := json.Unmarshal(a.Input.Params, &params); e != nil {
+		decoder := json.NewDecoder(bytes.NewReader(a.Input.Params))
+		decoder.UseNumber()
+		if e := decoder.Decode(&params); e != nil {
 			return Outcome{NotAccepted: true}, e
 		}
 		output, e := json.Marshal(a.Input.Output)

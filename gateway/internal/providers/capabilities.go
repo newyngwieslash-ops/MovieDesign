@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
@@ -34,12 +37,12 @@ type ReferenceAsset struct {
 	Height int         `json:"height"`
 }
 type parameter struct {
-	Type      string   `json:"type"`
-	Enum      []any    `json:"enum,omitempty"`
-	Minimum   *float64 `json:"minimum,omitempty"`
-	Maximum   *float64 `json:"maximum,omitempty"`
-	MinLength *int     `json:"minLength,omitempty"`
-	MaxLength *int     `json:"maxLength,omitempty"`
+	Type      string       `json:"type"`
+	Enum      []any        `json:"enum,omitempty"`
+	Minimum   *json.Number `json:"minimum,omitempty"`
+	Maximum   *json.Number `json:"maximum,omitempty"`
+	MinLength *int         `json:"minLength,omitempty"`
+	MaxLength *int         `json:"maxLength,omitempty"`
 }
 type parameterSchema struct {
 	Type                 string               `json:"type"`
@@ -57,15 +60,22 @@ func parseSchema(raw json.RawMessage) (parameterSchema, error) {
 				return parameterSchema{}, invalid("Schema keywords cannot be null")
 			}
 		}
-		var properties map[string]map[string]json.RawMessage
+		var properties map[string]json.RawMessage
 		if json.Unmarshal(object["properties"], &properties) == nil {
-			for _, p := range properties {
-				if p == nil {
+			for _, rawProperty := range properties {
+				if _, e := store.DecodeValue[parameter](rawProperty); e != nil {
+					return parameterSchema{}, invalid("Unknown or invalid property schema keyword")
+				}
+				var p map[string]json.RawMessage
+				if json.Unmarshal(rawProperty, &p) != nil || p == nil {
 					return parameterSchema{}, invalid("Property schema must be an object")
 				}
-				for _, value := range p {
+				for name, value := range p {
 					if string(value) == "null" {
 						return parameterSchema{}, invalid("Schema keywords cannot be null")
+					}
+					if (name == "minimum" || name == "maximum") && (len(value) == 0 || value[0] == '"') {
+						return parameterSchema{}, invalid("Numeric bounds must be JSON numbers")
 					}
 				}
 			}
@@ -86,13 +96,17 @@ func parseSchema(raw json.RawMessage) (parameterSchema, error) {
 		if !slices.Contains([]string{"string", "number", "integer", "boolean"}, p.Type) {
 			return s, invalid("Unsupported parameter type")
 		}
-		if p.Minimum != nil && (math.IsNaN(*p.Minimum) || math.IsInf(*p.Minimum, 0)) || p.Maximum != nil && (math.IsNaN(*p.Maximum) || math.IsInf(*p.Maximum, 0)) {
-			return s, invalid("Nonfinite bounds")
+		for _, bound := range []*json.Number{p.Minimum, p.Maximum} {
+			if bound != nil {
+				if _, ok := number(*bound); !ok {
+					return s, invalid("Invalid or excessive numeric bound")
+				}
+			}
 		}
 		if (p.Minimum != nil || p.Maximum != nil) && p.Type != "number" && p.Type != "integer" || (p.MinLength != nil || p.MaxLength != nil) && p.Type != "string" {
 			return s, invalid("Bounds do not match type")
 		}
-		if p.Minimum != nil && p.Maximum != nil && *p.Minimum > *p.Maximum || p.MinLength != nil && *p.MinLength < 0 || p.MaxLength != nil && *p.MaxLength < 0 || p.MinLength != nil && p.MaxLength != nil && *p.MinLength > *p.MaxLength {
+		if p.Minimum != nil && p.Maximum != nil && compareNumbers(*p.Minimum, *p.Maximum) > 0 || p.MinLength != nil && *p.MinLength < 0 || p.MaxLength != nil && *p.MaxLength < 0 || p.MinLength != nil && p.MaxLength != nil && *p.MinLength > *p.MaxLength {
 			return s, invalid("Invalid bounds")
 		}
 		if p.Enum != nil && len(p.Enum) == 0 {
@@ -108,25 +122,42 @@ func parseSchema(raw json.RawMessage) (parameterSchema, error) {
 	}
 	return s, nil
 }
-func number(v any) (float64, bool) {
-	var n float64
+
+var jsonNumeric = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
+
+func number(v any) (*big.Rat, bool) {
+	var token string
 	switch x := v.(type) {
 	case float64:
-		n = x
-	case json.Number:
-		var e error
-		n, e = x.Float64()
-		if e != nil {
-			return 0, false
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return nil, false
 		}
+		token = strconv.FormatFloat(x, 'g', -1, 64)
+	case json.Number:
+		token = string(x)
 	case int:
-		n = float64(x)
+		token = strconv.Itoa(x)
 	case int64:
-		n = float64(x)
+		token = strconv.FormatInt(x, 10)
 	default:
-		return 0, false
+		return nil, false
 	}
-	return n, !math.IsNaN(n) && !math.IsInf(n, 0)
+	// Bound both representation and exponent before big.Rat allocates powers of ten.
+	if len(token) > 1024 || !jsonNumeric.MatchString(token) {
+		return nil, false
+	}
+	if i := strings.IndexAny(token, "eE"); i >= 0 {
+		exponent, e := strconv.ParseInt(token[i+1:], 10, 32)
+		if e != nil || exponent < -1024 || exponent > 1024 {
+			return nil, false
+		}
+	}
+	return new(big.Rat).SetString(token)
+}
+func compareNumbers(a, b json.Number) int {
+	left, _ := number(a)
+	right, _ := number(b)
+	return left.Cmp(right)
 }
 func validParameter(p parameter, v any) bool {
 	switch p.Type {
@@ -145,8 +176,20 @@ func validParameter(p parameter, v any) bool {
 		}
 	case "number", "integer":
 		n, ok := number(v)
-		if !ok || p.Type == "integer" && math.Trunc(n) != n || p.Minimum != nil && n < *p.Minimum || p.Maximum != nil && n > *p.Maximum {
+		if !ok || p.Type == "integer" && !n.IsInt() {
 			return false
+		}
+		if p.Minimum != nil {
+			bound, ok := number(*p.Minimum)
+			if !ok || n.Cmp(bound) < 0 {
+				return false
+			}
+		}
+		if p.Maximum != nil {
+			bound, ok := number(*p.Maximum)
+			if !ok || n.Cmp(bound) > 0 {
+				return false
+			}
 		}
 	default:
 		return false
@@ -154,9 +197,9 @@ func validParameter(p parameter, v any) bool {
 	if p.Enum != nil {
 		for _, allowed := range p.Enum {
 			if p.Type == "number" || p.Type == "integer" {
-				a, _ := number(allowed)
-				b, _ := number(v)
-				if a == b {
+				a, ok := number(allowed)
+				b, valid := number(v)
+				if ok && valid && a.Cmp(b) == 0 {
 					return true
 				}
 			} else if allowed == v {
@@ -179,7 +222,7 @@ func commonSchema(c Capability) json.RawMessage {
 		}
 		return parameter{Type: "string", Enum: v}
 	}
-	lo, hi := 0.0, 100.0
+	lo, hi := json.Number("0"), json.Number("100")
 	limit := 128
 	closed := false
 	s := parameterSchema{Type: "object", AdditionalProperties: &closed, Properties: map[string]parameter{
@@ -244,7 +287,7 @@ func validateDeclaration(c Config) error {
 				}
 			}
 		}
-		if b.Minimum != nil && (p.Minimum == nil || *p.Minimum < *b.Minimum) || b.Maximum != nil && (p.Maximum == nil || *p.Maximum > *b.Maximum) || b.MaxLength != nil && (p.MaxLength == nil || *p.MaxLength > *b.MaxLength) {
+		if b.Minimum != nil && (p.Minimum == nil || compareNumbers(*p.Minimum, *b.Minimum) < 0) || b.Maximum != nil && (p.Maximum == nil || compareNumbers(*p.Maximum, *b.Maximum) > 0) || b.MaxLength != nil && (p.MaxLength == nil || *p.MaxLength > *b.MaxLength) {
 			return invalid("Schema cannot widen adapter bounds")
 		}
 	}
@@ -328,9 +371,6 @@ func ReferenceRole(cap Capability, index int) string {
 func parameterText(v any) string {
 	if s, ok := v.(string); ok {
 		return s
-	}
-	if n, ok := number(v); ok {
-		return strconv.FormatFloat(n, 'f', -1, 64)
 	}
 	return fmt.Sprint(v)
 }

@@ -82,3 +82,74 @@ func TestSchemaPrimitiveBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestSchemaKeywordCaseExact(t *testing.T) {
+	for _, property := range []string{
+		`{"TYPE":"string","maxLength":128}`,
+		`{"type":"string","MAXLENGTH":128}`,
+		`{"type":"string","maxLength":1,"MAXLENGTH":128}`,
+		`{"type":"string","maxLength":128,"ENUM":["a"]}`,
+	} {
+		t.Run(property, func(t *testing.T) {
+			c := validConfig("case", "http://127.0.0.1:11434/v1")
+			c.Capability.ParamSchema = json.RawMessage(`{"type":"object","properties":{"safety_identifier":` + property + `},"additionalProperties":false}`)
+			if ValidateConfig(c) == nil {
+				t.Fatal("case variant keyword accepted")
+			}
+		})
+	}
+}
+func TestSchemaExactNumbers(t *testing.T) {
+	cap := ImageCapability(validConfig("number", "http://127.0.0.1:11434/v1"))
+	for _, token := range []string{"1.0000000000000001", "100.0000000000000001"} {
+		t.Run("integer-"+token, func(t *testing.T) {
+			if Validate(cap, GenerationInput{Prompt: "x", Count: 1, Params: map[string]any{"output_format": "jpeg", "output_compression": json.Number(token)}}) == nil {
+				t.Fatal("fractional JSON integer accepted")
+			}
+		})
+	}
+	for _, token := range []string{"1", "1.0", "1e0"} {
+		if e := Validate(cap, GenerationInput{Prompt: "x", Count: 1, Params: map[string]any{"output_format": "jpeg", "output_compression": json.Number(token)}}); e != nil {
+			t.Fatal("valid integral spelling", token, e)
+		}
+	}
+	for _, tc := range []struct {
+		name, schema, value string
+		valid               bool
+	}{
+		{"fractional-min", `{"type":"number","minimum":1.0000000000000001}`, "1", false},
+		{"fractional-max", `{"type":"number","maximum":0.99999999999999999}`, "1", false},
+		{"number-range", `{"type":"number","maximum":100}`, "100.0000000000000001", false},
+		{"enum", `{"type":"number","enum":[1.0000000000000001]}`, "1", false},
+		{"enum-equal", `{"type":"number","enum":[1.0000000000000001]}`, "1.0000000000000001", true},
+		{"integer-fractional-min", `{"type":"integer","minimum":1.0000000000000001}`, "1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCap := cap
+			testCap.ParamSchema = json.RawMessage(`{"type":"object","properties":{"value":` + tc.schema + `},"additionalProperties":false}`)
+			e := Validate(testCap, GenerationInput{Prompt: "x", Count: 1, Params: map[string]any{"value": json.Number(tc.value)}})
+			if (e == nil) != tc.valid {
+				t.Fatalf("exact numeric constraint: %v", e)
+			}
+		})
+	}
+	for _, bounds := range []string{`"minimum":1.0000000000000001,"maximum":1`, `"minimum":0,"maximum":100.0000000000000001`} {
+		t.Run(bounds, func(t *testing.T) {
+			c := validConfig("bounds", "http://127.0.0.1:11434/v1")
+			c.Capability.ParamSchema = json.RawMessage(`{"type":"object","properties":{"output_compression":{"type":"integer",` + bounds + `}},"additionalProperties":false}`)
+			if ValidateConfig(c) == nil {
+				t.Fatal("invalid or widened fractional bound accepted")
+			}
+		})
+	}
+}
+
+func TestSchemaNumericComplexityBound(t *testing.T) {
+	cap := ImageCapability(validConfig("number", "http://127.0.0.1:11434/v1"))
+	cap.ParamSchema = json.RawMessage(`{"type":"object","properties":{"value":{"type":"number"}},"additionalProperties":false}`)
+	for _, token := range []string{"1e999999999", "1e-999999999", "0." + strings.Repeat("0", 1024) + "1"} {
+		if Validate(cap, GenerationInput{Prompt: "x", Count: 1, Params: map[string]any{"value": json.Number(token)}}) == nil {
+			t.Fatal("excessive numeric representation accepted")
+		}
+	}
+}

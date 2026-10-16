@@ -7,6 +7,7 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -92,5 +93,43 @@ func TestUnknownRetainsSanitizedUpstreamEvidence(t *testing.T) {
 	}
 	if v.Status != Unknown || v.Problem.Upstream == nil || v.Problem.Upstream.Code != "temporary_error" {
 		t.Fatal("safe upstream evidence lost", v)
+	}
+}
+
+func TestImageExecutorPreservesJSONNumbers(t *testing.T) {
+	for _, token := range []string{"1", "1.0", "1e0", "1.0000000000000001", "100.0000000000000001"} {
+		t.Run(token, func(t *testing.T) {
+			s, p, in := setup(t)
+			calls := 0
+			wire := ""
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var body map[string]json.RawMessage
+				json.NewDecoder(r.Body).Decode(&body)
+				wire = string(body["output_compression"])
+				fmt.Fprint(w, `{"data":[]}`)
+			}))
+			defer remote.Close()
+			in.Count = 1
+			in.References = nil
+			in.Provider.CredentialVersion = ""
+			in.Provider.Config.BaseURL = remote.URL
+			in.Provider.Config.Name = "Exact"
+			in.Provider.Config.ModelID = "exact-model"
+			in.Provider.Config.Kind = "image"
+			in.Provider.Config.Protocol = "openai-images"
+			in.Provider.Config.Capability.MaxCount = 1
+			in.Provider.Config.Capability.MaxPromptBytes = 65536
+			in.Params = json.RawMessage(`{"output_format":"jpeg","output_compression":` + token + `}`)
+			executor := ImageExecutor(providers.NewService(s.DB, nil))
+			_, e := executor.Submit(context.Background(), Attempt{ProjectID: p, Input: in, Provider: in.Provider}, func(string) error { return nil })
+			if strings.Contains(token, "0000000000000001") {
+				if e == nil || calls != 0 {
+					t.Fatal("rounded invalid number submitted", calls, e)
+				}
+			} else if calls != 1 || wire != token {
+				t.Fatal("numeric wire token changed", token, wire, calls, e)
+			}
+		})
 	}
 }
