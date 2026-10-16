@@ -7,6 +7,7 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +26,7 @@ func scopedQuery(r *http.Request, allowed string) (url.Values, error) {
 		return nil, e
 	}
 	for k, v := range q {
-		if len(v) != 1 || !strings.Contains(" "+allowed+" ", " "+k+" ") {
+		if len(v) != 1 || !slices.Contains(strings.Fields(allowed), k) {
 			return nil, errors.New("Invalid query parameters")
 		}
 	}

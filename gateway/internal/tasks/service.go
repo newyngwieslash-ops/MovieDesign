@@ -453,7 +453,7 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 		}
 		switch i.Action {
 		case "cancel":
-			if _, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='cancelled' WHERE task_id=? AND attempt=? AND submit_started_at IS NULL", id, attempt); e != nil {
+			if _, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='cancelled' WHERE task_id=? AND attempt=? AND (submit_started_at IS NULL OR state='collection_pending')", id, attempt); e != nil {
 				return nil, e
 			}
 			v.Status = Cancelled

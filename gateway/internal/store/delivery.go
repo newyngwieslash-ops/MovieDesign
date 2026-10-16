@@ -131,6 +131,9 @@ func ResolveDeliveryTarget(ctx context.Context, tx *sql.Tx, p, typeID, label, na
 	target.Name = name
 	if typeID != "" {
 		e = tx.QueryRowContext(ctx, "SELECT id,label FROM composition_types WHERE id=? AND project_id=?", typeID, p).Scan(&target.TypeID, &target.TypeLabel)
+		if errors.Is(e, sql.ErrNoRows) {
+			e = &DomainError{404, "not_found", "Composition type not found"}
+		}
 		if e != nil {
 			return
 		}

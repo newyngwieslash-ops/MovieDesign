@@ -29,6 +29,111 @@ func TestWaitSemantics(t *testing.T) {
 	}
 }
 
+func TestSavedCollectionRecoveryAfterReopen(t *testing.T) {
+	for _, upstream := range []string{"", "remote-result"} {
+		t.Run("upstream="+upstream, func(t *testing.T) {
+			s, p, in := setup(t)
+			ctx := context.Background()
+			v, err := s.Submit(ctx, p, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			posts, collects, queries := 0, 0, 0
+			executor := &Executor{Submit: func(_ context.Context, _ Attempt, checkpoint func(string) error) (Outcome, error) {
+				posts++
+				if upstream != "" {
+					if err := checkpoint(upstream); err != nil {
+						return Outcome{}, err
+					}
+				}
+				return Outcome{Status: Failed, Problem: &Problem{Source: "delivery", Code: "SAVE_FAILED", Retryable: true}, Result: []byte(`{"saved":true}`)}, nil
+			}, Query: func(context.Context, Attempt) (Outcome, error) { queries++; return Outcome{}, nil }, Collect: func(_ context.Context, a Attempt) (Outcome, error) {
+				collects++
+				if a.Number != 1 || a.TaskID != v.ID || string(a.Result) != `{"saved":true}` || a.UpstreamID != upstream {
+					t.Errorf("collection identity changed: %+v", a)
+				}
+				return Outcome{Status: Failed, Problem: &Problem{Source: "delivery", Code: "SAVE_FAILED", Retryable: true}}, nil
+			}}
+			s.Executor = executor
+			if _, err = s.DB.Exec("UPDATE task_attempts SET state='approved' WHERE task_id=?", v.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.Run(ctx, p, v.ID); err != nil {
+				t.Fatal(err)
+			}
+			v, err = s.Query(ctx, p, v.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			v, err = s.Resolve(ctx, p, v.ID, ResolveInput{RequestID: "retry", Action: "retry", ExpectedRevision: v.Revision})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var target, outputKey, evidence, path, dbName string
+			var seq int
+			if err = s.DB.QueryRow("SELECT source_json,task_output_key FROM task_outputs WHERE task_id=?", v.ID).Scan(&target, &outputKey); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.DB.QueryRow("SELECT error_json FROM task_attempts WHERE task_id=?", v.ID).Scan(&evidence); err != nil {
+				t.Fatal(err)
+			}
+			// Persist the checkpoint at which the process exits, without returning from Collect.
+			v.Status = Running
+			raw, _ := json.Marshal(v)
+			if _, err = s.DB.Exec("UPDATE tasks SET status='running',view_json=? WHERE id=?", string(raw), v.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.DB.Exec("UPDATE task_attempts SET state='collecting' WHERE task_id=?", v.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.DB.QueryRow("PRAGMA database_list").Scan(&seq, &dbName, &path); err != nil {
+				t.Fatal(err)
+			}
+			s.Close()
+			s.Events.Close()
+			if err = s.DB.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s = NewService(db, events.NewService(db), executor)
+			defer s.Close()
+			defer s.Events.Close()
+			if err = s.Recover(ctx); err != nil {
+				t.Fatal(err)
+			}
+			v, err = s.Query(ctx, p, v.ID)
+			if err != nil || v.Status != Failed || v.Problem == nil || v.Problem.Source != "delivery" || strings.Join(v.Actions, ",") != "retry" {
+				t.Fatalf("lost saved-result recovery: %+v %v", v, err)
+			}
+			if posts != 1 || collects != 0 || queries != 0 {
+				t.Fatalf("automatic adapter calls: %d/%d/%d", posts, collects, queries)
+			}
+			v, err = s.Resolve(ctx, p, v.ID, ResolveInput{RequestID: "retry-after-restart", Action: "retry", ExpectedRevision: v.Revision})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = s.Run(ctx, p, v.ID); err != nil {
+				t.Fatal(err)
+			}
+			var gotTarget, gotKey, gotEvidence, result string
+			var attempt int
+			if err = db.QueryRow("SELECT current_attempt,result_json,error_json FROM tasks JOIN task_attempts ON task_id=id AND attempt=current_attempt WHERE id=?", v.ID).Scan(&attempt, &result, &gotEvidence); err != nil {
+				t.Fatal(err)
+			}
+			if err = db.QueryRow("SELECT source_json,task_output_key FROM task_outputs WHERE task_id=?", v.ID).Scan(&gotTarget, &gotKey); err != nil {
+				t.Fatal(err)
+			}
+			if attempt != 1 || result != `{"saved":true}` || gotEvidence != evidence || gotTarget != target || gotKey != outputKey || posts != 1 || collects != 1 || queries != 0 {
+				t.Fatal("collection changed saved evidence/identities or submitted generation")
+			}
+		})
+	}
+}
+
 func setup(t *testing.T) (*Service, string, Input) {
 	t.Helper()
 	db, e := store.Open(filepath.Join(t.TempDir(), "t.db"))

@@ -177,6 +177,58 @@ func TestBlocked(t *testing.T) {
 	}
 }
 
+func TestMissingCompositionTypeIsBlocked(t *testing.T) {
+	for _, kind := range []string{"missing", "cross-project", "database-error"} {
+		t.Run(kind, func(t *testing.T) {
+			f := setup(t)
+			ctx := context.Background()
+			in := f.input(t, "missing-type")
+			in.Output.Composition.Type = CompositionType{ID: "missing"}
+			if kind == "cross-project" {
+				p, err := (store.Objects{DB: f.db}).CreateProject(ctx, "other", "Other")
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, err := (store.Objects{DB: f.db}).Mutate(ctx, p.ID, "composition_types", store.Mutation{RequestID: "type", Action: "create", Value: json.RawMessage(`{"label":"Foreign"}`)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var typ struct{ ID string }
+				if err = json.Unmarshal(raw, &typ); err != nil {
+					t.Fatal(err)
+				}
+				in.Output.Composition.Type.ID = typ.ID
+			}
+			if kind == "database-error" {
+				// A real SQL failure must not be classified as a definite missing target.
+				if _, err := f.db.Exec("ALTER TABLE composition_types RENAME COLUMN label TO unavailable_label"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r, err := f.s.Deliver(ctx, f.p, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "database-error" {
+				if r.Delivery.Status != "unknown" {
+					t.Fatalf("SQL failure misclassified: %+v", r)
+				}
+				return
+			}
+			if r.Delivery.Status != "blocked" || r.Delivery.Problem == nil || r.Delivery.Problem.Code != "not_found" {
+				t.Fatalf("missing type receipt: %+v", r)
+			}
+			if count(t, f.db, "SELECT count(*) FROM deliveries WHERE status='unknown'") != 0 {
+				t.Fatal("missing target stranded unknown delivery")
+			}
+			again, err := f.s.Deliver(ctx, f.p, in)
+			if err != nil || !reflect.DeepEqual(r, again) {
+				t.Fatal("blocked receipt changed", again, err)
+			}
+		})
+	}
+}
+
 func TestBatchLineageAndReferences(t *testing.T) {
 	f := setup(t)
 	ctx := context.Background()

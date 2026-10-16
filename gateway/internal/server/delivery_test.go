@@ -77,4 +77,13 @@ func TestDeliveryHTTP(t *testing.T) {
 	if n != 1 {
 		t.Fatal("manual origin")
 	}
+	missingType := strings.Replace(body, `"requestId":"deliver"`, `"requestId":"missing-type"`, 1)
+	missingType = strings.Replace(missingType, `"label":"video"`, `"id":"missing"`, 1)
+	w := call("POST", url, missingType, "http://tauri.localhost")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"status":"blocked"`) || !strings.Contains(w.Body.String(), `"code":"not_found"`) {
+		t.Fatal("missing type receipt", w.Code, w.Body.String())
+	}
+	if health := h.Health(); !health.Idle || !health.SafeToSuspend {
+		t.Fatal("missing target blocked suspension", health)
+	}
 }

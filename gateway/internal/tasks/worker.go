@@ -139,14 +139,17 @@ func (s *Service) finish(a Attempt, out Outcome, callErr error) error {
 	if attempt != a.Number {
 		return conflict()
 	}
-	persisted, _, _, e := loadAttempt(ctx, tx, a.ProjectID, a.TaskID)
+	persisted, state, _, e := loadAttempt(ctx, tx, a.ProjectID, a.TaskID)
 	if e != nil {
 		return e
 	}
 	status := out.Status
 	if callErr != nil || status == "" {
 		status = Unknown
-		if out.NotAccepted && persisted.UpstreamID == "" {
+		if state == "collecting" && string(persisted.Result) != "null" {
+			status = Failed
+			out.Problem = &Problem{Source: "delivery", Code: "COLLECTION_INTERRUPTED", Message: "Saved result collection was interrupted; retry collection", Retryable: true}
+		} else if out.NotAccepted && persisted.UpstreamID == "" {
 			status = Failed
 		}
 	}
@@ -227,7 +230,7 @@ func (s *Service) Recover(_ context.Context) error {
 	}
 	defer s.end()
 	ctx := s.ctx
-	rows, e := s.DB.QueryContext(ctx, "SELECT t.id,t.project_id FROM tasks t JOIN task_attempts a ON a.task_id=t.id AND a.attempt=t.current_attempt WHERE t.status IN ('running','unknown') OR (t.status='cancelled' AND a.state IN ('submitting','submitted','running','unknown'))")
+	rows, e := s.DB.QueryContext(ctx, "SELECT t.id,t.project_id FROM tasks t JOIN task_attempts a ON a.task_id=t.id AND a.attempt=t.current_attempt WHERE t.status IN ('running','unknown') OR (t.status='cancelled' AND a.state IN ('submitting','submitted','running','unknown','collection_pending','collecting'))")
 	if e != nil {
 		return e
 	}
@@ -249,6 +252,15 @@ func (s *Service) Recover(_ context.Context) error {
 		a, _, started, e := loadAttempt(ctx, s.DB, pair[1], pair[0])
 		if e != nil {
 			return e
+		}
+		// Saved output is collection work, regardless of whether the provider uses
+		// an upstream ID. Startup exposes an explicit retry and performs no I/O.
+		// finish also drains interrupted cancelled collection without reviving it.
+		if string(a.Result) != "null" {
+			if e = s.finish(a, Outcome{Status: Failed, Problem: &Problem{Source: "delivery", Code: "COLLECTION_INTERRUPTED", Message: "Saved result collection was interrupted; retry collection", Retryable: true}}, nil); e != nil {
+				return e
+			}
+			continue
 		}
 		if !started {
 			continue
