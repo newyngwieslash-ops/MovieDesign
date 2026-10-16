@@ -1,6 +1,6 @@
 # M4 自定义供应商与图像生成 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 实现本地/云端供应商设置、持久任务与 SSE、唯一计费确认卡，以及真实图像生成和标注编辑落库。
 
@@ -81,7 +81,7 @@ func TestWaitSemantics(t *testing.T) {
 
 **Interfaces:** `Capability{ID,Operation,Protocol,ModelID,KnowledgeCard string; ParamSchema json.RawMessage; Constraints Constraints}`；providers包定义`GenerationInput{Prompt string; Params map[string]any; References []string; Count int}`，tasks.Input通过显式转换传入，providers不import tasks；`Validate(capability,GenerationInput)error`；`Estimate(input,frozenConfig)(Quote,error)`；`GenerateImage(ctx,input,frozenConfig)(ProviderResult,error)`。仅支持已知协议 `openai-images`：POST images/generations JSON、images/edits multipart。Base URL 与模型来自配置，不是硬编码官方账号。
 
-- [ ] httptest.Server 捕获 wire：模型名、prompt 原字符串、有序 image multipart、mask、参数白名单、结果 b64/url、401/429/5xx、submit断流。确认 references 中出现 path/URL 而非 asset id 时在联网前拒绝。
+- [x] httptest.Server 捕获 wire：模型名、prompt 原字符串、有序 image multipart、mask、参数白名单、结果 b64/url、401/429/5xx、submit断流。确认 references 中出现 path/URL 而非 asset id 时在联网前拒绝。
 
 ```go
 func TestUnknownParameterRejected(t *testing.T) {
@@ -91,12 +91,14 @@ func TestUnknownParameterRejected(t *testing.T) {
 }
 ```
 
-- [ ] `go -C gateway test ./internal/providers -run 'TestImage|TestUnknownParameter|TestQuote' -v`。
-- [ ] capability list/get 返回 id、paramSchema、引用/尺寸/时长限制与知识卡路径。prompt 上限按用户64KB采用 UTF-8字节≤65536，同时满足所配模型更小限制；原源码64000字符差异记入适配表，Go与前端一致。count 合法范围来自能力，拒绝嵌套未声明params、缺output、虚假asset、跨项目引用。
-- [ ] 能力schema采用gateway拥有的受限JSON Schema子集：object/properties/required/additionalProperties=false、string/number/integer/boolean、enum、数值范围和字符串长度。配置仅可收紧适配器已知字段/约束，不能宣告任意透传字段；不支持的schema关键字在保存时拒绝，不能显示已校验而实际跳过。count变体预先声明全部output key及role，输出数量不符进入可解释问题状态，不产生无身份文件。
-- [ ] 新增`POST /api/generate/estimate`作为BYOK适配端点，复用输入校验与报价函数，保存带requestId的quote；返回quote_id、currency、estimated_amount、estimated_credits、expires_at及input_hash。该请求不调用生成器；确认卡绑定服务器保存的quote，不能接受前端自报金额。路径和字段作为移植新增面记录，不冒称原产品协议。
-- [ ] 报价输入冻结并hash；精度采用整数最小货币单位与有理数积分倍率，上调取整，不用浮点金额；quote保存source/version/expires_at。未配置报价的付费连接阻止提交并解释，不能默认为免费；本地免费需显式价格为0。图像mask由标注几何生成后作为受管资产登记，原图和mask均走有序references；编辑能力知识卡明确各位置角色，params不得塞base64/path/URL。mask使用原图像素坐标并匹配尺寸，不承诺模型严格保持mask外内容。
+- [x] `go -C gateway test ./internal/providers -run 'TestImage|TestUnknownParameter|TestQuote' -v`。
+- [x] capability list/get 返回 id、paramSchema、引用/尺寸/时长限制与知识卡路径。prompt 上限按用户64KB采用 UTF-8字节≤65536，同时满足所配模型更小限制；原源码64000字符差异记入适配表，Go与前端一致。count 合法范围来自能力，拒绝嵌套未声明params、缺output、虚假asset、跨项目引用。
+- [x] 能力schema采用gateway拥有的受限JSON Schema子集：object/properties/required/additionalProperties=false、string/number/integer/boolean、enum、数值范围和字符串长度。配置仅可收紧适配器已知字段/约束，不能宣告任意透传字段；不支持的schema关键字在保存时拒绝，不能显示已校验而实际跳过。count变体预先声明全部output key及role，输出数量不符进入可解释问题状态，不产生无身份文件。
+- [x] 新增`POST /api/generate/estimate`作为BYOK适配端点，复用输入校验与报价函数，保存带requestId的quote；返回quote_id、currency、estimated_amount、estimated_credits、expires_at及input_hash。该请求不调用生成器；确认卡绑定服务器保存的quote，不能接受前端自报金额。路径和字段作为移植新增面记录，不冒称原产品协议。
+- [x] 报价输入冻结并hash；精度采用整数最小货币单位与有理数积分倍率，上调取整，不用浮点金额；quote保存source/version/expires_at。未配置报价的付费连接阻止提交并解释，不能默认为免费；本地免费需显式价格为0。图像mask由标注几何生成后作为受管资产登记，原图和mask均走有序references；编辑能力知识卡明确各位置角色，params不得塞base64/path/URL。mask使用原图像素坐标并匹配尺寸，不承诺模型严格保持mask外内容。
 - [ ] 供应商返回的媒体先下载/解码至确定受管目标，校验内容与大小，再生成 task_outputs；断流未知不会自动再次POST。记录真实官方/本地协议样本，提交 `feat(M4.3): validate capabilities and adapt image APIs`。
+
+M4.3 已在 f033c6f 独立复审通过；最后一项的安全收集实现已验证，最终 task_outputs/Delivery 接线归 M4.5 完成后勾选。真实供应商调用尚未执行。
 
 ### Task M4.4：统一确认卡与计费执行门禁
 
