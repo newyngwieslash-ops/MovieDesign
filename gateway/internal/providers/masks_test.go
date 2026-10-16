@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +42,10 @@ func TestImageMaskSourcePixelsAndReceipt(t *testing.T) {
 	_, _, _, outside := decoded.At(1, 1).RGBA()
 	if inside != 0 || outside != 65535 {
 		t.Fatal("mask alpha wrong", inside, outside)
+	}
+	// A legacy intent can still replay its authoritative completed mask receipt.
+	if _, e = s.DB.Exec("UPDATE write_requests SET response_json='{}' WHERE project_id=? AND operation='generate.mask.intent' AND request_id=?", p, in.RequestID); e != nil {
+		t.Fatal(e)
 	}
 	again, e := s.CreateMask(ctx, p, in)
 	if e != nil || again.ID != mask.ID {
@@ -85,7 +90,7 @@ func TestImageMaskCommitRecoveryBeforeSource(t *testing.T) {
 				t.Fatal("failure injection missed")
 			}
 			var receipt string
-			if e = s.DB.QueryRow("SELECT receipt FROM file_operations WHERE project_id=? AND request_id='mask-commit-recover-mask' AND stage='completed'", p).Scan(&receipt); e != nil {
+			if e = s.DB.QueryRow("SELECT f.receipt FROM file_operations f JOIN write_requests r ON r.project_id=f.project_id AND f.request_id=json_extract(r.response_json,'$.commit') WHERE r.project_id=? AND r.operation='generate.mask.intent' AND r.request_id='recover-mask' AND f.stage='completed'", p).Scan(&receipt); e != nil {
 				t.Fatal("mask did not commit", e)
 			}
 			var original struct {
@@ -138,7 +143,7 @@ func TestImageMaskUploadedRecoveryBeforeSource(t *testing.T) {
 		t.Fatal(e)
 	}
 	in := MaskInput{RequestID: "recover-upload", AssetID: source.ID, Bounds: []MaskBounds{{Width: 1, Height: 1}}}
-	if _, e = s.DB.Exec(`CREATE TRIGGER fail_mask_commit BEFORE INSERT ON file_operations WHEN NEW.request_id='mask-commit-recover-upload' BEGIN SELECT RAISE(ABORT,'injected commit preparation failure'); END`); e != nil {
+	if _, e = s.DB.Exec(`CREATE TRIGGER fail_mask_commit BEFORE INSERT ON file_operations WHEN NEW.operation='commit' BEGIN SELECT RAISE(ABORT,'injected commit preparation failure'); END`); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = s.CreateMask(ctx, p, in); e == nil {
@@ -151,11 +156,44 @@ func TestImageMaskUploadedRecoveryBeforeSource(t *testing.T) {
 		t.Fatal(e)
 	}
 	// Simulate the durable uploaded checkpoint before Stage writes its receipt.
-	if _, e = s.DB.Exec("UPDATE file_operations SET stage='uploaded',receipt=NULL WHERE project_id=? AND request_id='mask-upload-recover-upload'", p); e != nil {
+	if _, e = s.DB.Exec("UPDATE file_operations SET stage='uploaded',receipt=NULL WHERE project_id=? AND request_id=(SELECT json_extract(response_json,'$.upload') FROM write_requests WHERE project_id=? AND operation='generate.mask.intent' AND request_id='recover-upload')", p, p); e != nil {
 		t.Fatal(e)
 	}
 	mask, e := s.CreateMask(ctx, p, in)
 	if e != nil || mask.ID == "" {
 		t.Fatal("uploaded mask recovery depends on source", e)
+	}
+}
+
+func TestImageMaskRejectsUnrelatedJournals(t *testing.T) {
+	for _, operation := range []string{"commit", "upload"} {
+		t.Run(operation, func(t *testing.T) {
+			s, p := imageService(t)
+			ctx := context.Background()
+			stage, e := s.Files.Stage(ctx, p, "mask-upload-collision", "ordinary.txt", bytes.NewBufferString("ordinary user file"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			if operation == "commit" {
+				if _, e = s.Files.Commit(ctx, p, "mask-commit-collision", stage); e != nil {
+					t.Fatal(e)
+				}
+			}
+			in := MaskInput{RequestID: "collision", AssetID: "unavailable-source", Bounds: []MaskBounds{{Width: 1, Height: 1}}}
+			mask, e := s.CreateMask(ctx, p, in)
+			if e == nil || mask.ID != "" {
+				t.Fatalf("adopted unrelated %s as mask: %+v %v", operation, mask, e)
+			}
+			var count int
+			if e = s.DB.QueryRow("SELECT count(*) FROM write_requests WHERE project_id=? AND operation='generate.mask'", p).Scan(&count); e != nil || count != 0 {
+				t.Fatal("invalid mask received final receipt", count, e)
+			}
+			if _, e = s.DB.Exec("UPDATE write_requests SET response_json='{}' WHERE project_id=? AND operation='generate.mask.intent' AND request_id=?", p, in.RequestID); e != nil {
+				t.Fatal(e)
+			}
+			if _, e = s.CreateMask(ctx, p, in); e == nil || !strings.Contains(e.Error(), "lacks owned journals") {
+				t.Fatal("legacy incomplete intent must not infer ownership", e)
+			}
+		})
 	}
 }

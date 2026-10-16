@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"image"
 	"image/color"
@@ -26,6 +27,10 @@ type MaskInput struct {
 	Bounds       []MaskBounds    `json:"bounds"`
 	OriginalWire json.RawMessage `json:"-"`
 }
+type maskJournals struct {
+	Upload string `json:"upload"`
+	Commit string `json:"commit"`
+}
 
 // CreateMask registers a source-pixel rectangle mask through the existing journal.
 func (s *Service) CreateMask(ctx context.Context, p string, in MaskInput) (store.Asset, error) {
@@ -44,9 +49,12 @@ func (s *Service) CreateMask(ctx context.Context, p string, in MaskInput) (store
 	if e != nil {
 		return zero, e
 	}
-	// Reserve the complete mask intent before any managed upload. Replay shares
-	// the existing upload/commit journals and never runs file I/O inside a SQL tx.
-	if _, e = store.WriteRequest(ctx, s.DB, store.Scope{ProjectID: p, Operation: "generate.mask.intent", RequestID: in.RequestID}, canonical, func(tx *sql.Tx) ([]byte, error) { return []byte(`{}`), nil }); e != nil {
+	// Freeze private child IDs with the original intent. Public file request IDs
+	// derived from the caller's mask key cannot establish journal ownership.
+	intent, e := store.WriteRequest(ctx, s.DB, store.Scope{ProjectID: p, Operation: "generate.mask.intent", RequestID: in.RequestID}, canonical, func(tx *sql.Tx) ([]byte, error) {
+		return json.Marshal(maskJournals{Upload: uuid.NewString(), Commit: uuid.NewString()})
+	})
+	if e != nil {
 		return zero, e
 	}
 	var receipt string
@@ -58,10 +66,16 @@ func (s *Service) CreateMask(ctx context.Context, p string, in MaskInput) (store
 	if !errors.Is(e, sql.ErrNoRows) {
 		return zero, e
 	}
+	var journals maskJournals
+	if json.Unmarshal(intent, &journals) != nil || journals.Upload == "" || journals.Commit == "" {
+		// Unreleased legacy intents did not record ownership; do not infer it
+		// from caller-selectable journal prefixes or regenerate unknown output.
+		return zero, invalid("Mask intent lacks owned journals; use a new requestId")
+	}
 	// The workspace commit may already have moved the staging file. Resume it
 	// from its original input before consulting either upload bytes or source media.
 	var commitInput string
-	e = s.DB.QueryRowContext(ctx, "SELECT input_json FROM file_operations WHERE project_id=? AND request_id=? AND operation='commit'", p, "mask-commit-"+in.RequestID).Scan(&commitInput)
+	e = s.DB.QueryRowContext(ctx, "SELECT input_json FROM file_operations WHERE project_id=? AND request_id=? AND operation='commit'", p, journals.Commit).Scan(&commitInput)
 	if e == nil {
 		var saved struct {
 			Path string `json:"path"`
@@ -69,26 +83,26 @@ func (s *Service) CreateMask(ctx context.Context, p string, in MaskInput) (store
 		if json.Unmarshal([]byte(commitInput), &saved) != nil || saved.Path == "" {
 			return zero, ErrUnavailable
 		}
-		return s.commitMask(ctx, p, in.RequestID, saved.Path, canonical)
+		return s.commitMask(ctx, p, in.RequestID, journals.Commit, saved.Path, canonical)
 	}
 	if !errors.Is(e, sql.ErrNoRows) {
 		return zero, e
 	}
 	var stage, state string
-	e = s.DB.QueryRowContext(ctx, "SELECT stage,json_extract(source,'$[0].target') FROM file_operations WHERE project_id=? AND request_id=? AND operation='upload' AND stage IN ('uploaded','completed')", p, "mask-upload-"+in.RequestID).Scan(&state, &stage)
+	e = s.DB.QueryRowContext(ctx, "SELECT stage,json_extract(source,'$[0].target') FROM file_operations WHERE project_id=? AND request_id=? AND operation='upload' AND stage IN ('uploaded','completed')", p, journals.Upload).Scan(&state, &stage)
 	if e == nil {
 		if state == "uploaded" {
 			file, err := s.Files.Workspace.OpenRegular(p, stage)
 			if err != nil {
 				return zero, err
 			}
-			stage, e = s.Files.Stage(ctx, p, "mask-upload-"+in.RequestID, "mask.png", file)
+			stage, e = s.Files.Stage(ctx, p, journals.Upload, "mask.png", file)
 			file.Close()
 			if e != nil {
 				return zero, e
 			}
 		}
-		return s.commitMask(ctx, p, in.RequestID, stage, canonical)
+		return s.commitMask(ctx, p, in.RequestID, journals.Commit, stage, canonical)
 	}
 	if !errors.Is(e, sql.ErrNoRows) {
 		return zero, e
@@ -128,15 +142,15 @@ func (s *Service) CreateMask(ctx context.Context, p string, in MaskInput) (store
 	if e = png.Encode(&encoded, mask); e != nil {
 		return zero, e
 	}
-	stage, e = s.Files.Stage(ctx, p, "mask-upload-"+in.RequestID, "mask.png", &encoded)
+	stage, e = s.Files.Stage(ctx, p, journals.Upload, "mask.png", &encoded)
 	if e != nil {
 		return zero, e
 	}
-	return s.commitMask(ctx, p, in.RequestID, stage, canonical)
+	return s.commitMask(ctx, p, in.RequestID, journals.Commit, stage, canonical)
 }
 
-func (s *Service) commitMask(ctx context.Context, p, key, stage string, canonical []byte) (store.Asset, error) {
-	asset, e := s.Files.Commit(ctx, p, "mask-commit-"+key, stage)
+func (s *Service) commitMask(ctx context.Context, p, key, commitKey, stage string, canonical []byte) (store.Asset, error) {
+	asset, e := s.Files.Commit(ctx, p, commitKey, stage)
 	if e != nil {
 		return store.Asset{}, e
 	}
