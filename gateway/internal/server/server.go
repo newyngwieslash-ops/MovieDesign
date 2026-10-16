@@ -108,12 +108,18 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 	if len(configured) > 0 {
 		providerService = configured[0]
 	}
+	if providerService != nil {
+		providerService.Files = files
+	}
 	var deliveries *delivery.Service
 	if files != nil {
 		deliveries = delivery.NewService(db, files.Workspace, "user")
 	}
 	ev := events.NewService(db)
 	srv := &Server{db: db, events: ev, tasks: tasks.NewService(db, ev, nil)}
+	if providerService != nil {
+		srv.tasks.Executor = tasks.ImageExecutor(providerService)
+	}
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -140,7 +146,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
+			allowed := generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
@@ -152,6 +158,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.URL.Path == "/api/events" {
 			serveEvents(w, r, srv.events)
+			return
+		}
+		if generationRoute(r.URL.Path) {
+			serveGenerate(w, r, providerService, srv.tasks)
 			return
 		}
 		if taskRoute(r.URL.Path) {

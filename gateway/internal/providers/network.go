@@ -75,11 +75,21 @@ func Endpoint(base, operation string) (string, error) {
 // by numeric IP (no second resolver lookup/rebinding window). Downloads must use
 // unauthenticated requests; unrelated private/local targets remain forbidden.
 func NewClient(base string, download bool) (*http.Client, error) {
+	return newClient(base, download, 20*time.Second)
+}
+
+// Image generation gets a bounded ten-minute budget; probes/downloads retain 20s.
+// Both use this identical DNS/address/redirect boundary.
+func newClient(base string, download bool, budget time.Duration) (*http.Client, error) {
 	if err := ValidateBaseURL(base); err != nil {
 		return nil, err
 	}
 	configured, _ := url.Parse(base)
-	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, ResponseHeaderTimeout: 15 * time.Second, TLSHandshakeTimeout: 10 * time.Second}
+	headerBudget := budget
+	if budget == 20*time.Second {
+		headerBudget = 15 * time.Second
+	}
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, ResponseHeaderTimeout: headerBudget, TLSHandshakeTimeout: 10 * time.Second}
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil || port == "8001" || port == "4096" {
@@ -98,7 +108,7 @@ func NewClient(base string, download bool) (*http.Client, error) {
 		// All answers were checked. Dial one answer once; a user can explicitly retry a failed probe.
 		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
 	}
-	return &http.Client{Transport: guardTransport{base: configured, download: download, next: transport}, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("provider redirects are not allowed") }}, nil
+	return &http.Client{Transport: guardTransport{base: configured, download: download, next: transport}, Timeout: budget, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("provider redirects are not allowed") }}, nil
 }
 func effectivePort(u *url.URL) string {
 	if u.Port() != "" {

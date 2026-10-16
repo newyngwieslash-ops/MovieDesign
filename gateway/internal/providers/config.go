@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
 )
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -22,16 +23,23 @@ var ErrUnavailable = errors.New("provider storage unavailable")
 
 func invalid(message string) error { return errors.Join(ErrInvalid, errors.New(message)) }
 
-// Capability contains declarations, never probe-verified generation facts. ParamSchema
-// is intentionally not accepted until the constrained adapter schema lands in M4.3.
+// Capability contains declarations, never probe-verified generation facts.
 type Capability struct {
-	MaxPromptBytes  int      `json:"max_prompt_bytes"`
-	MaxCount        int      `json:"max_count"`
-	MaxReferences   int      `json:"max_references"`
-	Sizes           []string `json:"sizes"`
-	Edit            bool     `json:"edit"`
-	DurationSeconds []int    `json:"duration_seconds"`
-	Audio           bool     `json:"audio"`
+	ID              string          `json:"id,omitempty"`
+	Operation       string          `json:"operation,omitempty"`
+	Protocol        string          `json:"protocol,omitempty"`
+	ModelID         string          `json:"model_id,omitempty"`
+	KnowledgeCard   string          `json:"knowledgeCard,omitempty"`
+	ParamSchema     json.RawMessage `json:"paramSchema,omitempty"`
+	Constraints     Constraints     `json:"constraints,omitempty"`
+	ReferenceRoles  []string        `json:"reference_roles,omitempty"`
+	MaxPromptBytes  int             `json:"max_prompt_bytes"`
+	MaxCount        int             `json:"max_count"`
+	MaxReferences   int             `json:"max_references"`
+	Sizes           []string        `json:"sizes"`
+	Edit            bool            `json:"edit"`
+	DurationSeconds []int           `json:"duration_seconds"`
+	Audio           bool            `json:"audio"`
 }
 
 // Normalize legacy/omitted/null optional arrays at every JSON output boundary,
@@ -105,6 +113,7 @@ type mutation struct {
 	RemoveKey bool    `json:"remove_key,omitempty"`
 }
 type Service struct {
+	Files   *workspace.Service
 	DB      *sql.DB
 	Secrets SecretStore
 	mu      sync.Mutex
@@ -149,6 +158,9 @@ func ValidateConfig(c Config) error {
 	}
 	if c.Kind == "image" && (len(cap.DurationSeconds) > 0 || cap.Audio) || c.Kind == "video" && (cap.Edit || cap.MaxCount != 1) {
 		return invalid("Capability not supported by protocol template")
+	}
+	if err := validateDeclaration(c); err != nil {
+		return err
 	}
 	if p := c.Pricing; p != nil {
 		if !regexp.MustCompile(`^[A-Z]{3}$`).MatchString(p.Currency) || p.MinorUnitScale < 0 || p.MinorUnitScale > 6 || p.UnitAmount < 0 || p.UnitAmount > 1e12 || p.CreditNumerator < 0 || p.CreditNumerator > 1e9 || p.CreditDenominator < 1 || p.CreditDenominator > 1e9 || p.EffectiveAt < 0 || strings.TrimSpace(p.Source) == "" || len(p.Source) > 200 || strings.TrimSpace(p.Version) == "" || len(p.Version) > 100 {

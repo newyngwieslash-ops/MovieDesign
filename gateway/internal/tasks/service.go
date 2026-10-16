@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/google/uuid"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"strings"
 	"sync"
@@ -160,6 +161,9 @@ func (s *Service) Changed(ctx context.Context, p, id string, after int64) (TaskV
 	}
 }
 func validateInput(i Input) error {
+	if i.Count < 0 || i.Count > 10 || i.Count > 0 && i.Count != len(i.Output.Resources) {
+		return invalid("Count must match declared output slots")
+	}
 	if i.CapabilityID == "" || len(i.CapabilityID) > 128 || len(i.Prompt) > 65536 || !utf8.ValidString(i.Prompt) || len(i.References) > 100 || len(i.SessionID) > 128 {
 		return invalid("Invalid task input")
 	}
@@ -197,6 +201,23 @@ func validateInput(i Input) error {
 		}
 	}
 	return nil
+}
+
+// ValidateAdmission shares output and project validation with estimate; it performs
+// no reservations, file operations or network calls inside the read transaction.
+func (s *Service) ValidateAdmission(ctx context.Context, p string, i Input) error {
+	if e := scope(p, i.RequestID); e != nil {
+		return e
+	}
+	if e := validateInput(i); e != nil {
+		return e
+	}
+	tx, e := s.DB.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	return validateOwnership(ctx, tx, p, i)
 }
 func validateOwnership(ctx context.Context, tx *sql.Tx, p string, i Input) error {
 	var id string
@@ -318,6 +339,17 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 		}
 		v = TaskView{ID: uuid.NewString(), CapabilityID: i.CapabilityID, Prompt: i.Prompt, Revision: 1, Outputs: declarations(i)}
 		billing(&v)
+		if i.QuoteID != "" {
+			var frozen string
+			if e := tx.QueryRowContext(ctx, "SELECT frozen_json FROM price_quotes WHERE project_id=? AND id=?", p, i.QuoteID).Scan(&frozen); e != nil {
+				return nil, invalid("Quote not found in project")
+			}
+			var quoted providers.QuotedInput
+			if json.Unmarshal([]byte(frozen), &quoted) != nil {
+				return nil, invalid("Invalid saved quote")
+			}
+			v.Billing.EstimatedCredits = &quoted.Quote.EstimatedCredits
+		}
 		view, _ := json.Marshal(v)
 		provider, _ := json.Marshal(i.Provider)
 		now := time.Now().UnixMilli()
@@ -343,6 +375,7 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 			}
 			binding["resource_id"], binding["base_version_id"] = resourceID, r.BaseVersionID
 			binding["version_id"] = uuid.NewString()
+			binding["collection_key"] = uuid.NewString()
 			// Reserve per-resource history order once; retries retain this slot.
 			var ordinal int64
 			if e = tx.QueryRowContext(ctx, `SELECT coalesce(max(ordinal),0)+1 FROM (SELECT ordinal FROM canvas_version_state WHERE resource_id=? UNION ALL SELECT CAST(json_extract(source_json,'$.ordinal') AS INTEGER) FROM task_outputs WHERE json_extract(source_json,'$.resource_id')=?)`, resourceID, resourceID).Scan(&ordinal); e != nil {

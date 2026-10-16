@@ -30,13 +30,16 @@ type Reference struct {
 	Role      string `json:"role"`
 }
 type Input struct {
-	RequestID    string          `json:"requestId"`
-	SessionID    string          `json:"session_id,omitempty"`
-	CapabilityID string          `json:"capability_id"`
-	Prompt       string          `json:"prompt"`
-	Params       json.RawMessage `json:"params"`
-	References   []Reference     `json:"references"`
-	Output       delivery.Output `json:"output"`
+	RequestID    string                     `json:"requestId"`
+	SessionID    string                     `json:"session_id,omitempty"`
+	CapabilityID string                     `json:"capability_id"`
+	Prompt       string                     `json:"prompt"`
+	Params       json.RawMessage            `json:"params"`
+	References   []Reference                `json:"references"`
+	Output       delivery.Output            `json:"output"`
+	Count        int                        `json:"count,omitempty"`
+	QuoteID      string                     `json:"quote_id,omitempty"`
+	Assets       []providers.ReferenceAsset `json:"assets,omitempty"`
 	// Supplied by trusted capability admission; never accepted from HTTP/MCP JSON.
 	Provider providers.FrozenProvider `json:"-"`
 	// OriginalWire holds the complete public body from trusted admission.

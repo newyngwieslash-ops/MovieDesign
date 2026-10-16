@@ -162,6 +162,9 @@ func (s *Service) finish(a Attempt, out Outcome, callErr error) error {
 	problem := out.Problem
 	if status == Unknown {
 		problem = &Problem{Source: "provider", Code: "PROVIDER_OUTCOME_UNKNOWN", Message: "Submission outcome is unknown; do not resubmit"}
+		if out.Problem != nil {
+			problem.Upstream = out.Problem.Upstream
+		}
 	} else if status == Failed && problem == nil {
 		problem = &Problem{Source: "provider", Code: "PROVIDER_REJECTED", Message: "Provider did not accept generation", Retryable: out.NotAccepted}
 	}
