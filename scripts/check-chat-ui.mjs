@@ -26,8 +26,13 @@ function harness(initial={},storageFailure=false,annotationSource){
  const render=()=>{cursor=0;tree=ChatPanel({projectID:'p',annotationSource});while(effects.length)effects.shift()();return tree;};
  const settle=async()=>{for(let i=0;i<5;i++){render();await tick();}render();};
  render();
- return {map,writes,reads,APIError,render,settle,get text(){return text;},button:label=>find(render(),n=>n.type==='button'&&[n.props.children].flat().join('')===label),type:value=>{text=value;doc={type:'doc',content:[{type:'paragraph',content:[{type:'text',text:value}]}]};editorOptions.onUpdate({editor});},history:value=>{history=value;},event:e=>listener(e),unmount:()=>{for(const h of hooks)h?.cleanup?.();}};
+ return {map,writes,reads,APIError,render,settle,get text(){return text;},select:label=>find(render(),n=>n.type==='select'&&n.props['aria-label']===label),button:label=>find(render(),n=>n.type==='button'&&[n.props.children].flat().join('')===label),type:value=>{text=value;doc={type:'doc',content:[{type:'paragraph',content:[{type:'text',text:value}]}]};editorOptions.onUpdate({editor});},history:value=>{history=value;},event:e=>listener(e),unmount:()=>{for(const h of hooks)h?.cleanup?.();}};
 }
+test('actual skill selector freezes explicit choice and restart replay retains it',async()=>{
+ const h=harness();await h.settle();h.select('创作方法').props.onChange({target:{value:'口播视频'}});h.type('original');h.button('发送消息').props.onClick();const wire=h.writes[0].body;assert.equal(JSON.parse(wire).skill_id,'口播视频');h.writes[0].reject(Error('lost'));await h.settle();assert(h.select('创作方法').props.disabled);
+ const restart=harness(Object.fromEntries(h.map));await restart.settle();assert.equal(restart.writes.length,0);restart.button('恢复原发送请求').props.onClick();assert.equal(restart.writes[0].body,wire);
+ const none=harness();await none.settle();none.select('创作方法').props.onChange({target:{value:''}});none.type('口播');none.button('发送消息').props.onClick();assert.equal(JSON.parse(none.writes[0].body).skill_id,'');
+});
 test('actual composer freezes unknown body, locks duplicates, and restart never POSTs',async()=>{
  const h=harness();await h.settle();h.type('original');const send=h.button('发送消息');send.props.onClick();send.props.onClick();assert.equal(h.writes.length,1);const wire=h.writes[0].body;h.writes[0].reject(Error('lost'));await h.settle();h.type('changed behind disabled editor');h.button('恢复原发送请求').props.onClick();assert.equal(h.writes[1].body,wire);assert.equal(JSON.parse(wire).text,'original');h.unmount();
  const restart=harness(Object.fromEntries(h.map));await restart.settle();assert.equal(restart.writes.length,0);assert(restart.button('发送消息').props.disabled);assert(restart.reads.every(p=>p.includes('limit=100')));

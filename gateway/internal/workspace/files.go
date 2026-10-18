@@ -154,6 +154,14 @@ func (w *Workspace) heldDirectory(p, rel string, create bool) (*os.File, func(),
 			return nil, nil, e
 		}
 	}
+	parts := []string{"projects", p}
+	if rel != "." {
+		parts = append(parts, strings.Split(rel, "/")...)
+	}
+	return w.heldPath(parts, create)
+}
+
+func (w *Workspace) heldPath(parts []string, create bool) (*os.File, func(), error) {
 	root, e := w.root.Open(".")
 	if e != nil {
 		return nil, nil, e
@@ -163,10 +171,6 @@ func (w *Workspace) heldDirectory(p, rel string, create bool) (*os.File, func(),
 		for i := len(held) - 1; i >= 0; i-- {
 			held[i].Close()
 		}
-	}
-	parts := []string{"projects", p}
-	if rel != "." {
-		parts = append(parts, strings.Split(rel, "/")...)
 	}
 	parent := root
 	for _, part := range parts {
@@ -179,6 +183,57 @@ func (w *Workspace) heldDirectory(p, rel string, create bool) (*os.File, func(),
 		parent = f
 	}
 	return parent, release, nil
+}
+
+// ManagedRead and ManagedInstall reuse the same held, non-reparse ancestor chain.
+// They are internal storage operations, never a native agent filesystem tool.
+func (w *Workspace) ManagedRead(name string, limit int64) ([]byte, error) {
+	if e := validPath(name); e != nil {
+		return nil, e
+	}
+	parts := strings.Split(name, "/")
+	parent, release, e := w.heldPath(parts[:len(parts)-1], false)
+	if e != nil {
+		return nil, e
+	}
+	defer release()
+	f, e := nativeAccess(parent, parts[len(parts)-1], false, false, false, false)
+	if e != nil {
+		return nil, e
+	}
+	defer f.Close()
+	if e = checkHandle(f, true); e != nil {
+		return nil, e
+	}
+	b, e := io.ReadAll(io.LimitReader(f, limit+1))
+	if int64(len(b)) > limit {
+		return nil, invalid("Managed file exceeds size limit")
+	}
+	return b, e
+}
+func (w *Workspace) ManagedInstall(name string, content []byte) error {
+	if e := validPath(name); e != nil {
+		return e
+	}
+	parts := strings.Split(name, "/")
+	parent, release, e := w.heldPath(parts[:len(parts)-1], true)
+	if e != nil {
+		return e
+	}
+	defer release()
+	f, e := nativeOpen(parent, parts[len(parts)-1], false, true, false)
+	if errors.Is(e, os.ErrExist) {
+		f, e = nativeAccess(parent, parts[len(parts)-1], false, false, false, false)
+		if e != nil {
+			return e
+		}
+		defer f.Close()
+		return checkHandle(f, true)
+	}
+	if e != nil {
+		return e
+	}
+	return writeClosed(f, strings.NewReader(string(content)), int64(len(content)))
 }
 func writeClosed(f *os.File, r io.Reader, limit int64) error {
 	_, e := io.Copy(f, io.LimitReader(r, limit+1))

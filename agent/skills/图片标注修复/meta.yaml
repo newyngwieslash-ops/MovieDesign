@@ -1,0 +1,5 @@
+name: "图片标注修复"
+description: "依据真实参考图、版本和区域说明，确认编辑方案后生成可追溯的新版本。"
+trigger-words: ["标注修复", "修复图片", "修改图片", "区域标注", "修复这张图"]
+version: "1.0.0"
+references: ["references/annotations.md"]

@@ -20,7 +20,7 @@
     "active": true,
     "targets": ["nsis"],
     "externalBin": ["binaries/open-design-gateway", "binaries/moviedesign-opencode"],
-    "resources": { "../../docs/third-party.md": "licenses/third-party.md", "binaries/media/": "media/" },
+    "resources": { "../../docs/third-party.md": "licenses/third-party.md", "binaries/media/": "media/", "../../agent/skills/": "skills/" },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
   }
 }

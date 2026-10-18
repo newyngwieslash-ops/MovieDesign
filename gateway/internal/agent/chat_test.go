@@ -24,6 +24,7 @@ type chatFixture struct {
 	prompts, aborts  atomic.Int32
 	mu               sync.Mutex
 	parent, text     string
+	promptParts      []map[string]string
 	finished         bool
 	delay            time.Duration
 	reject           bool
@@ -74,11 +75,13 @@ func newChatFixture(t *testing.T, delay time.Duration, reject bool) *chatFixture
 		case strings.HasSuffix(r.URL.Path, "/prompt_async"):
 			f.prompts.Add(1)
 			var body struct {
-				MessageID string `json:"messageID"`
+				MessageID string              `json:"messageID"`
+				Parts     []map[string]string `json:"parts"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.mu.Lock()
 			f.parent = body.MessageID
+			f.promptParts = body.Parts
 			f.mu.Unlock()
 			if f.accept != nil {
 				select {

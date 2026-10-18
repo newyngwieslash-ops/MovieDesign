@@ -81,6 +81,9 @@ func (s *Server) Close() error {
 	}
 	s.tasks.Close()
 	if s.workspace != nil {
+		if s.chat.Skills != nil {
+			_ = s.chat.Skills.Close()
+		}
 		return s.workspace.Close()
 	}
 	return nil
@@ -119,6 +122,11 @@ func New(origin string, db *sql.DB, workspaceRoot string) (*Server, error) {
 	}
 	srv := newHandler(origin, db, workspace.NewService(db, ws), providers.NewService(db, secrets)).(*Server)
 	srv.workspace = ws
+	srv.chat.Skills, err = agent.InstallSkills(filepath.Join(filepath.Dir(workspaceRoot), "skills"))
+	if err != nil {
+		srv.Close()
+		return nil, err
+	}
 	if db != nil {
 		if err = srv.turns.Recover(context.Background()); err != nil {
 			srv.Close()
@@ -196,7 +204,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := chatMethod(r.URL.Path, method) || agentMethod(r.URL.Path, method) || questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
+			allowed := (r.URL.Path == "/api/skills" && method == "GET") || chatMethod(r.URL.Path, method) || agentMethod(r.URL.Path, method) || questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
@@ -228,6 +236,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.URL.Path == "/api/events" {
 			serveEvents(w, r, srv.events)
+			return
+		}
+		if r.URL.Path == "/api/skills" {
+			srv.serveSkills(w, r)
 			return
 		}
 		if questionRoute(r.URL.Path) {

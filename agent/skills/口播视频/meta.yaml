@@ -1,0 +1,5 @@
+name: "口播视频"
+description: "从授权参考、口播脚本和语义分镜，制作一条完整且具备所需音频的视频。"
+trigger-words: ["口播", "讲解视频"]
+version: "1.0.0"
+references: ["references/storyboard.md", "references/preflight.md"]

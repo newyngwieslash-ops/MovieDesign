@@ -24,6 +24,7 @@ type Session struct {
 	CreatedAt int64  `json:"created_at"`
 }
 type ChatInput struct {
+	SkillID     *string           `json:"skill_id,omitempty"`
 	RequestID   string            `json:"requestId"`
 	Document    json.RawMessage   `json:"document"`
 	Text        string            `json:"text"`
@@ -31,17 +32,20 @@ type ChatInput struct {
 	Annotations []json.RawMessage `json:"annotations"`
 }
 type Message struct {
-	ID        string          `json:"id"`
-	SessionID string          `json:"session_id"`
-	RequestID string          `json:"requestId"`
-	Role      string          `json:"role"`
-	Content   json.RawMessage `json:"content"`
-	State     string          `json:"state"`
-	Error     string          `json:"error,omitempty"`
-	CreatedAt int64           `json:"created_at"`
+	SkillDisabled bool            `json:"skill_disabled,omitempty"`
+	Skill         *Skill          `json:"skill,omitempty"`
+	ID            string          `json:"id"`
+	SessionID     string          `json:"session_id"`
+	RequestID     string          `json:"requestId"`
+	Role          string          `json:"role"`
+	Content       json.RawMessage `json:"content"`
+	State         string          `json:"state"`
+	Error         string          `json:"error,omitempty"`
+	CreatedAt     int64           `json:"created_at"`
 }
 
 type Chat struct {
+	Skills     *Skills
 	DB         *sql.DB
 	Turns      *Turns
 	Events     *events.Service
@@ -160,7 +164,7 @@ func (c *Chat) Messages(ctx context.Context, p, session string, offset, limit in
 	if e := c.owned(ctx, p, session); e != nil {
 		return nil, e
 	}
-	rows, e := c.DB.QueryContext(ctx, "SELECT m.id,m.session_id,m.request_id,m.role,m.content_json,coalesce(d.state,'completed'),coalesce(d.error,''),m.created_at FROM chat_messages m LEFT JOIN chat_dispatch d ON d.message_id=m.id WHERE m.session_id=? ORDER BY m.created_at,m.rowid LIMIT ? OFFSET ?", session, limit, offset)
+	rows, e := c.DB.QueryContext(ctx, "SELECT m.id,m.session_id,m.request_id,m.role,m.content_json,coalesce(d.state,'completed'),coalesce(d.error,''),m.created_at,coalesce(json_extract(w.response_json,'$.skill'),'null') FROM chat_messages m LEFT JOIN chat_dispatch d ON d.message_id=m.id LEFT JOIN write_requests w ON w.project_id=? AND w.operation='chat.send.'||m.session_id AND w.request_id=m.request_id AND m.role='user' WHERE m.session_id=? ORDER BY m.created_at,m.rowid LIMIT ? OFFSET ?", p, session, limit, offset)
 	if e != nil {
 		return nil, e
 	}
@@ -168,11 +172,14 @@ func (c *Chat) Messages(ctx context.Context, p, session string, offset, limit in
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		var raw string
-		if e = rows.Scan(&m.ID, &m.SessionID, &m.RequestID, &m.Role, &raw, &m.State, &m.Error, &m.CreatedAt); e != nil {
+		var raw, skill string
+		if e = rows.Scan(&m.ID, &m.SessionID, &m.RequestID, &m.Role, &raw, &m.State, &m.Error, &m.CreatedAt, &skill); e != nil {
 			return nil, e
 		}
 		m.Content = json.RawMessage(raw)
+		if e = json.Unmarshal([]byte(skill), &m.Skill); e != nil {
+			return nil, e
+		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -189,14 +196,41 @@ func (c *Chat) Send(ctx context.Context, p, session string, raw []byte) (Message
 	if json.Unmarshal(in.Document, &doc) != nil || string(doc["type"]) != `"doc"` {
 		return Message{}, chatError(400, "Invalid document")
 	}
+	var wire map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &wire)
+	if v, ok := wire["skill_id"]; ok && string(v) == "null" {
+		return Message{}, chatError(400, "Invalid skill selection")
+	}
+	selected, e := c.SelectSkill(ctx, p, session, in)
+	if e != nil {
+		return Message{}, e
+	}
 	out, e := store.WriteRequest(ctx, c.DB, store.Scope{ProjectID: p, Operation: "chat.send." + session, RequestID: in.RequestID}, raw, func(tx *sql.Tx) ([]byte, error) {
+		disabled := in.SkillID != nil && *in.SkillID == ""
+		// Re-read continuation under the write transaction, so concurrent admitted
+		// messages adopt the latest method rather than a stale preflight observation.
+		if in.SkillID == nil {
+			var previous string
+			err := tx.QueryRowContext(ctx, "SELECT w.response_json FROM chat_messages m JOIN write_requests w ON w.project_id=? AND w.operation='chat.send.'||m.session_id AND w.request_id=m.request_id WHERE m.session_id=? AND m.role='user' ORDER BY m.rowid DESC LIMIT 1", p, session).Scan(&previous)
+			if err == nil {
+				var adopted Message
+				if err = json.Unmarshal([]byte(previous), &adopted); err != nil {
+					return nil, err
+				}
+				if adopted.Skill != nil || adopted.SkillDisabled {
+					selected, disabled = adopted.Skill, adopted.SkillDisabled
+				}
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
+		}
 		for _, id := range in.References {
 			var found string
 			if tx.QueryRowContext(ctx, "SELECT asset_id FROM asset_projects WHERE asset_id=? AND project_id=?", id, p).Scan(&found) != nil {
 				return nil, chatError(400, "Reference does not belong to project")
 			}
 		}
-		m := Message{ID: uuid.NewString(), SessionID: session, RequestID: in.RequestID, Role: "user", Content: append([]byte(nil), raw...), State: "queued", CreatedAt: time.Now().UnixMilli()}
+		m := Message{Skill: selected, SkillDisabled: disabled, ID: uuid.NewString(), SessionID: session, RequestID: in.RequestID, Role: "user", Content: append([]byte(nil), raw...), State: "queued", CreatedAt: time.Now().UnixMilli()}
 		if _, e := tx.ExecContext(ctx, "INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at)VALUES(?,?,?,'user',?,?)", m.ID, session, in.RequestID, string(raw), m.CreatedAt); e != nil {
 			return nil, e
 		}
@@ -325,6 +359,19 @@ func (c *Chat) run() {
 			var input ChatInput
 			_ = json.Unmarshal([]byte(raw), &input)
 			parts := []any{map[string]string{"type": "text", "text": input.Text}}
+			var receipt string
+			var admitted Message
+			if e = c.DB.QueryRow("SELECT response_json FROM write_requests WHERE project_id=? AND operation=? AND request_id=?", p, "chat.send."+session, input.RequestID).Scan(&receipt); e != nil || json.Unmarshal([]byte(receipt), &admitted) != nil {
+				if !c.failUnsent(scope, id) {
+					return
+				}
+				continue
+			}
+			if admitted.Skill != nil {
+				parts = append([]any{map[string]string{"type": "text", "text": admitted.Skill.Prefix()}}, parts...)
+			} else {
+				parts = append([]any{map[string]string{"type": "text", "text": "本轮未采用创作技能。此前消息中的方法不构成本轮选择；遇到方法不明确时请用户明确选择，不推定任何方案或费用已获批准。"}}, parts...)
+			}
 			if rules, e := c.Questions.ReadRules(c.ctx, p); e == nil && rules.Content != "" {
 				parts = append(parts, map[string]string{"type": "text", "text": "当前项目已批准的长期规则：\n" + rules.Content})
 			}

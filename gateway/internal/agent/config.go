@@ -47,7 +47,7 @@ func BuildConfig(c LLMConfig, m MCPConnection) ([]byte, error) {
 			return nil, err
 		}
 	}
-	permission := map[string]any{"*": "deny", "question": "allow"}
+	permission := map[string]any{"*": "deny", "question": "allow", "skill": "deny"}
 	external := map[string]string{"*": "deny", "{env:MOVIEDESIGN_TRUNCATE_GLOB}": "deny"}
 	permission["external_directory"] = external
 	config := map[string]any{"$schema": "https://opencode.ai/config.json", "permission": permission, "plugin": []string{}, "autoupdate": false, "share": "disabled", "lsp": false, "formatter": false, "watcher": map[string]any{"ignore": []string{"**"}}, "enabled_providers": []string{"moviedesign"}, "compaction": map[string]any{"auto": false}}

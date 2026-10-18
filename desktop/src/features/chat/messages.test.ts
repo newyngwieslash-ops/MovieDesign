@@ -9,6 +9,17 @@ test('wire input owns original document and annotation bytes after draft edits',
  assert.equal(JSON.parse(wire).requestId,'original-id');assert.deepEqual(JSON.parse(wire).references,['a','b']);assert.equal(JSON.parse(wire).annotations[0].comment,'original');assert.equal(JSON.parse(wire).annotations[0].sourceVersionID,'version-1');
 });
 const message={id:'m',session_id:'s',requestId:'r',role:'user',content:{text:'hello'},state:'accepted',created_at:1};
+test('skill selection freezes original pending wire and old bodies remain compatible',()=>{
+ for(const skill of [undefined,'','口播视频','图片标注修复']) {
+  const body=messageBody('r',document,'hello',[],skill),record={schema:1,projectID:'p',kind:'send',sessionID:'s',body};
+  assert.equal(readPending(JSON.stringify(record),'p','send')?.body,body);
+  assert.equal(JSON.parse(body).skill_id,skill);
+ }
+ for(const skill_id of [null,3,'../secret','unknown']) {
+  const body=JSON.stringify({...JSON.parse(messageBody('r',document,'hello',[])),skill_id});
+  assert.throws(()=>readPending(JSON.stringify({schema:1,projectID:'p',kind:'send',sessionID:'s',body}),'p','send'));
+ }
+});
 const event=(id:number,payload:object,type='chat_message',session='s')=>({id,project_id:'p',session_id:session,type,payload:{session_id:session,message_id:'m',step:1,part_id:'part',part_type:'text',type:'content_delta',...payload}});
 test('delta replay, snapshot replacement, session separation and terminal late frames',()=>{
  let s=historyState('p','s',[message]);s=reduceEvent(s,event(10,{content_delta:'哈哈'}));s=reduceEvent(s,event(10,{content_delta:'哈哈'}));

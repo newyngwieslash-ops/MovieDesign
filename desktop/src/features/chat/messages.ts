@@ -1,8 +1,10 @@
 import type { GatewayEvent } from '../../events.ts';
 export type DocNode = { type?: string; text?: string; attrs?: Record<string, unknown>; content?: DocNode[] };
-export type Input = {requestId: string; document: DocNode; text: string; references: string[]; annotations: unknown[]};
+export type Input = {requestId: string; document: DocNode; text: string; references: string[]; annotations: unknown[]; skill_id?: string};
+export type SkillInfo = {name:string;description:string;'trigger-words':string[];version:string;revision:string;bundle_revision:string;modified:boolean};
+export type Skill = SkillInfo & {body:string;references:Record<string,string>};
 export type Session = {id: string; project_id: string; title: string; state: string; created_at: number};
-export type Message = {id: string; session_id: string; requestId: string; role: string; content: Input & {reply_to?: string; parts?: Part[]}; state: string; error?: string; created_at: number};
+export type Message = {id: string; session_id: string; requestId: string; role: string; content: Input & {reply_to?: string; parts?: Part[]}; state: string; error?: string; created_at: number; skill?: Skill};
 export type Part = {session_id: string; message_id: string; step: number; part_id?: string; call_id?: string; type: string; part_type: string; content?: string; content_delta?: string; tool?: string; state?: string; tool_input?: unknown; tool_output?: string};
 export type ChatState = {project: string; session: string; cursor: number; messages: Message[]; parts: Record<string,Part[]>};
 export type Pending = {schema: 1; projectID: string; kind: 'create'|'send'|'cancel'; sessionID: string; body: string; edit?: Input};
@@ -16,8 +18,8 @@ export function assetReferences(root: DocNode): string[] {
  }
  visit(root); return [...result];
 }
-export function messageBody(requestId: string, document: DocNode, text: string, annotations: unknown[]): string {
- return JSON.stringify({requestId,document,text,references:assetReferences(document),annotations});
+export function messageBody(requestId: string, document: DocNode, text: string, annotations: unknown[], skillID?:string): string {
+ return JSON.stringify({requestId,document,text,references:assetReferences(document),annotations,...(skillID===undefined?{}:{skill_id:skillID})});
 }
 const identifier = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 function validDoc(value: unknown, depth = 0): value is DocNode {
@@ -26,7 +28,7 @@ function validDoc(value: unknown, depth = 0): value is DocNode {
  return typeof node.type === 'string' && (node.text === undefined || typeof node.text === 'string') && (node.attrs === undefined || !!node.attrs && typeof node.attrs === 'object' && !Array.isArray(node.attrs)) && (node.content === undefined || Array.isArray(node.content) && node.content.every(c => validDoc(c,depth+1)));
 }
 function validInput(value: Input) {
- return value && Object.keys(value).sort().join(',') === 'annotations,document,references,requestId,text' && identifier(value.requestId) && typeof value.text === 'string' && !!value.text.trim() && new TextEncoder().encode(value.text).length <= 65536 && validDoc(value.document) && value.document.type === 'doc' && Array.isArray(value.references) && value.references.length <= 16 && value.references.every(identifier) && JSON.stringify(value.references) === JSON.stringify(assetReferences(value.document)) && Array.isArray(value.annotations) && value.annotations.every(a => !!a && typeof a === 'object' && !Array.isArray(a));
+ return value && ['annotations,document,references,requestId,text','annotations,document,references,requestId,skill_id,text'].includes(Object.keys(value).sort().join(',')) && (value.skill_id === undefined || typeof value.skill_id === 'string' && (value.skill_id === '' || ['口播视频','图片标注修复'].includes(value.skill_id))) && identifier(value.requestId) && typeof value.text === 'string' && !!value.text.trim() && new TextEncoder().encode(value.text).length <= 65536 && validDoc(value.document) && value.document.type === 'doc' && Array.isArray(value.references) && value.references.length <= 16 && value.references.every(identifier) && JSON.stringify(value.references) === JSON.stringify(assetReferences(value.document)) && Array.isArray(value.annotations) && value.annotations.every(a => !!a && typeof a === 'object' && !Array.isArray(a));
 }
 export function readPending(raw: string|null, project: string, kind: Pending['kind']): Pending|null {
  if (raw === null) return null;
