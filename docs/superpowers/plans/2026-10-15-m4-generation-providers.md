@@ -96,7 +96,7 @@ func TestUnknownParameterRejected(t *testing.T) {
 - [x] 能力schema采用gateway拥有的受限JSON Schema子集：object/properties/required/additionalProperties=false、string/number/integer/boolean、enum、数值范围和字符串长度。配置仅可收紧适配器已知字段/约束，不能宣告任意透传字段；不支持的schema关键字在保存时拒绝，不能显示已校验而实际跳过。count变体预先声明全部output key及role，输出数量不符进入可解释问题状态，不产生无身份文件。
 - [x] 新增`POST /api/generate/estimate`作为BYOK适配端点，复用输入校验与报价函数，保存带requestId的quote；返回quote_id、currency、estimated_amount、estimated_credits、expires_at及input_hash。该请求不调用生成器；确认卡绑定服务器保存的quote，不能接受前端自报金额。路径和字段作为移植新增面记录，不冒称原产品协议。
 - [x] 报价输入冻结并hash；精度采用整数最小货币单位与有理数积分倍率，上调取整，不用浮点金额；quote保存source/version/expires_at。未配置报价的付费连接阻止提交并解释，不能默认为免费；本地免费需显式价格为0。图像mask由标注几何生成后作为受管资产登记，原图和mask均走有序references；编辑能力知识卡明确各位置角色，params不得塞base64/path/URL。mask使用原图像素坐标并匹配尺寸，不承诺模型严格保持mask外内容。
-- [ ] 供应商返回的媒体先下载/解码至确定受管目标，校验内容与大小，再生成 task_outputs；断流未知不会自动再次POST。记录真实官方/本地协议样本，提交 `feat(M4.3): validate capabilities and adapt image APIs`。
+- [x] 供应商返回的媒体先下载/解码至确定受管目标，校验内容与大小，再生成 task_outputs；断流未知不会自动再次POST。记录真实官方/本地协议样本，提交 `feat(M4.3): validate capabilities and adapt image APIs`。
 
 M4.3 已在 f033c6f 独立复审通过；最后一项的安全收集实现已验证，最终 task_outputs/Delivery 接线归 M4.5 完成后勾选。真实供应商调用尚未执行。
 
@@ -134,8 +134,10 @@ M4.4 b120287 独立审查通过；生产 WebView 证据早于最后几项窄修�
 
 **Interfaces:** `POST /api/generate/image`→202 `{task_id}`；`GET /api/tasks/:id`；`POST /api/tasks/:id/resolve`；成功产物通过同一 delivery.Service 交付。生成请求保存output，worker不能自行猜Composition/role。
 
-- [ ] 集成用本地httptest provider执行完整approved→active→download→deliver→completed；故障测试包括provider拒绝、未知提交、下载失败可续下载、投递回执丢失、取消与完成竞态。
-- [ ] `go -C gateway test ./...`、`node --experimental-strip-types --test desktop/src/features/tasks/tasks.test.ts desktop/src/events.test.ts`，然后运行真实桌面smoke-generation。
-- [ ] 任务UI按服务器phase/percent/problem.upstream/actions展示；retry原样冻结prompt/params/references，CAS检查旧revision。对failed的显式retry新增attempt并进入新的billing等待，旧attempt不可变；这是一条明确用户恢复边，不是自动终态跳转。unknown默认只查询对账；无法证明未受理时要求用户明确了解可能重复收费后才允许新attempt。
-- [ ] 完成后投递使用稳定requestId（task+attempt+output），将pending节点替换成version引用一次。取消晚到结果保留upstream对账事实与文件状态，不自动投递；用户另行选择采用时再走deliver。卡片因任务取消/完成及时失效。
+- [x] 集成用本地httptest provider执行完整approved→active→download→deliver→completed；故障测试包括provider拒绝、未知提交、下载失败可续下载、投递回执丢失、取消与完成竞态。
+- [x] `go -C gateway test ./...`、`node --experimental-strip-types --test desktop/src/features/tasks/tasks.test.ts desktop/src/events.test.ts`，然后运行真实桌面smoke-generation。
+- [x] 任务UI按服务器phase/percent/problem.upstream/actions展示；retry原样冻结prompt/params/references，CAS检查旧revision。对failed的显式retry新增attempt并进入新的billing等待，旧attempt不可变；这是一条明确用户恢复边，不是自动终态跳转。unknown默认只查询对账；无法证明未受理时要求用户明确了解可能重复收费后才允许新attempt。
+- [x] 完成后投递使用稳定requestId（task+attempt+output），将pending节点替换成version引用一次。取消晚到结果保留upstream对账事实与文件状态，不自动投递；用户另行选择采用时再走deliver。卡片因任务取消/完成及时失效。
 - [ ] 在用户配置的真实图像连接执行一次文生图、一次标注修复，记录实际provider/model/任务ID与落库版本；不把测试适配器当真实成功。全量通过后提交 `feat(M4.5): deliver image tasks into the canvas`，推送M4。
+
+M4.5 工程项已在 91d7d31 经独立复审通过（Spec compliant / Task quality Approved），三项 R1–R3 均关闭。当前生产构建/真实 WebView fixture 初次与重启、完整检查及 14 项未缓存生成集成检查通过；完整证据在里程碑记录与本地报告。末项真实凭据文生图/标注修复仍未执行，保留未勾选。整 M4 审查、合并与推送另行记录；依据总计划§6，真实调用缺少配置不阻止后续独立 M5 工程。

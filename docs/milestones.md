@@ -133,12 +133,24 @@ M4.2 实现提交 4d9f485，审查修复提交 1f7f085；专项及全量 Go/vet 
 
 M4.2 独立审查在 1f7f085 复审通过（Spec compliant / Quality Approved），四项问题全部关闭。实际红灯覆盖已知/无上游 ID 的收集重启、排队/活动收集取消、普通投递缺失/跨项目类型、复合 query key；修后 tasks/events/server/store/delivery 五包测试与相关 vet 通过。取消保留首次结果/错误证据，已知结果恢复只提供同 attempt 显式收集重试，不启动 Submit/Query/Collect；缺失类型恢复 blocked/not_found 分类。当前阶段仍无真实模型执行、费用批准或产物投递，后续 M4.3–M4.5 接续。M4.2 原生冒烟覆盖后台生命周期，最终 M4 生产桌面整体验收另行执行。
 
-### M4.3 图像能力与报价（2026-10-16，独立审查中）
+### M4.3 图像能力与报价（2026-10-16，独立复审通过）
 实现提交 ded0dca：已知 OpenAI Images 协议模板的 JSON 生成/有序 multipart 编辑、受限参数 schema、受管遮罩、整数报价和冻结输入、图像结果持久化及安全收集。生成 HTTP 新请求/重放均为 202 {task_id}，人工计费门禁仍关闭，最终 Delivery/界面由 M4.4–M4.5 接续。
-实现者最终全量 Go 测试及 vet 通过；控制端在该提交重建纯 Go gateway 并实际启动验证健康、Origin、端口冲突、重启、关闭及父进程 EOF，证据 .runtime/smoke-7076129473e74c3bbffea5f312324894。独立规格/质量审查尚未完成。所有图像协议调用均为本地 httptest fixture；没有真实供应商、付费生成或最终媒体投递验收。
+实现者最终全量 Go 测试及 vet 通过；控制端在该提交重建纯 Go gateway 并实际启动验证健康、Origin、端口冲突、重启、关闭及父进程 EOF，证据 .runtime/smoke-7076129473e74c3bbffea5f312324894。该实现快照之后的独立复审和修复记录见下段。所有图像协议调用均为本地 httptest fixture；没有真实供应商、付费生成或最终媒体投递验收。
 M4.3 独立复审在 f033c6f 通过（Spec compliant / Quality Approved）。ded0dca→b5d600f 修复属性 schema 大小写、精确数值与遮罩回执窗口；f033c6f 修复普通上传日志误认遮罩，通过原意图中的服务端子 UUID 绑定归属。定向恢复/数值/归属测试、全量未缓存 Go（b5d600f）、最终 providers/server/tasks 覆盖测试与 vet 通过。旧内部格式的已完成回执可重放；未完成且缺归属元数据的意图明确拒绝，不推断归属或自动重新生成。未完成的真实调用与最终媒体投递限制保持不变。
 
 ### M4.4 人工费用门禁（2026-10-16）
 b120287 已通过独立规格/质量审查。初次提交/新 attempt 的报价、确认卡、回执、任务准入和事件共用事务；原回执恢复只允许尚未发送的 SQL claim，启动不自动提交。共享卡片持久化原请求，阻止损坏存储与迟到清理；SSE 单连接、持久游标、项目/会话过滤和旧连接取消。
 全量未缓存 Go/vet、最终 questions/tasks/server 覆盖、前端 events/pending 6 项、editor 47 项、Rust 1 项及生产构建通过。实际 release WebView 初次/重启证据 .runtime/desktop-release-3df90b4072f74ab69792ae3e42938a79：拒绝0POST、双击/丢响应/原key恢复总1POST、旧卡409、字面文本、损坏记录阻断、重载/重启0自动写、Last-Event-ID、正常进程回收。该原生快照早于最终 SQL/拒绝/空记录小修复，未冒称最终 binary 原生全验。
 非阻塞项：过期卡片直接拒绝入口交 M4.5 UI；换行警告如实记录。历史卡片暂保留并整体列出。真实付费供应商/生成质量/最终 Delivery 未执行，后续按阶段接续。
+
+### M4.5 图像投递与工作台接线（2026-10-18，独立审查前）
+
+已接入冻结输出身份→安全收集→共享 Delivery→Resource/Version/Asset→画布的实际路径。投递回执与任务完成在同一 SQL 事务提交；重启先恢复原投递日志，再考虑收集，保持预留 Version ID/ordinal；取消后的迟到结果通过服务端创建的结构化采纳卡处理，任务本身保持 cancelled。新增任务分页与 coverage、原请求持久化、StrictMode/迟到响应归属保护、参数声明编辑；标注修复使用实际选中源 Version，沿用同一 Resource，并保留 source_version_id 与原资产。
+
+原生记录来自本地协议 fixture，非真实供应商：生产 generation 初次/重启 `.runtime/desktop-release-a4f3c63f753a4894bb8e7b5eca482838/`，确认前0调用、批准后落库/画布、PNG遮罩与有序multipart、修复血缘、仅续下载、取消/采纳、重启0控制写均有记录；生产 providers `0b1d831cbf0a4782a0320cc55060f9cc`、questions `e581362e07ba4227a0204e57cfc7c098`、Canvas `12d363a320074f1cac77d07c6ab53945`、M2 `613f23dcd95f43dba0b2aa2ce0f5baed`、M1 `94dce5c9e979453293ba1a9d8c9d69f0` 为独立生产回归目录。debug 编辑器源码检查使用 `.runtime/desktop-debug-d45a30506889429c8eb54d73fbb29c48/`，不标成 production；物理 IME 候选窗和跨显示器 DPI 限制沿用 M3 记录。
+
+收尾提交为 46555f7，报告 `.superpowers/sdd/m4.5-report.md`；本次全量检查通过并保留 `.runtime/m45-final-check.txt`：Go 全包（缓存）/vet、39 项组件检查、62 项 TS 检查、生产前端构建、Rust 及新 Gateway 进程冒烟；另以 `-count=1` 重跑 11 项生成 HTTP/SQLite/文件系统集成测试通过，日志 `.runtime/m45-generation-final.txt`。收尾未改产品代码；先前原生记录通过文件/二进制时间关联，但没有内嵌构建哈希，因此不声称本次重新跑过完整原生矩阵。新审查者已开始独立任务审查，随后还有整 M4 审查；提交与绿色检查不等于两个审查已通过。真实凭据支持的文生图、标注修复、模型效果与实际计费验收仍为 **未执行**；不阻止后续独立工程工作，不据此声明完整产品已完成。
+
+M4.5 独立任务审查在 46555f7 发现三项 P2：已完成画布阻断原生成请求恢复、取消归档后的文件保护遗漏、迟到的低 ordinal 版本覆盖较新的 currentVersion。91d7d31 在共享逻辑修复，并以实际组件恢复/公共文件操作/HTTP+SQLite 顺序检查先复现后通过；14 项生成矩阵与普通 blocked 文件控制用例通过。当前全量 `.runtime/m45-fixwave-check.txt` 通过（43 组件＋62 TS、Go/vet、前端构建、Rust、新 M1进程冒烟）；生产构建和真实窗口初次/重启 `.runtime/desktop-release-3ec69bfdd52349b2b6ecc6aaac752978/` 通过，新增丢生成响应→批准完成→原请求恢复的实际点击路径，原 body、任务数、调用数和画布保持正确。`.runtime/m45-fixwave-evidence.json` 将提交与二进制、sidecar、前端 bundle、检查/构建/原生日志 SHA-256 关联，产品源码与提交相符。当前正由原独立审查者复审，尚未宣布 M4 整体通过或推送；真实调用仍未执行。
+
+M4.5 在 91d7d31 的独立复审结论为 Spec compliant / Task quality Approved，R1–R3 均已关闭；复审核对全部修复补丁、RED/GREEN 日志和 8 项制品哈希。M4.1–M4.5 单任务工程门禁至此全部通过。下一门禁为 c8372f5 起的整 M4 分支审查；尚未合并/推送。真实调用未执行的状态保持不变。
