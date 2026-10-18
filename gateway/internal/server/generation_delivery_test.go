@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,8 +23,9 @@ import (
 // Real human HTTP approval, SQLite journals and real managed PNG bytes. Removing
 // collection, reserved identity, commit replay or cancellation guards breaks this.
 func TestGenerationDelivery(t *testing.T) {
-	for _, mode := range []string{"complete", "receipt-restart", "invalid-media", "bad-count", "download-retry", "commit-restart", "cancel-download", "cancel-archive", "adopt-late", "unknown", "reject"} {
+	for _, mode := range []string{"complete", "receipt-restart", "invalid-media", "bad-count", "download-retry", "commit-restart", "cancel-download", "cancel-archive", "adopt-late", "adopt-archive-delete", "adopt-archive-rename", "late-version", "unknown", "reject"} {
 		t.Run(mode, func(t *testing.T) {
+			archiveAdoption := strings.HasPrefix(mode, "adopt-archive")
 			ctx := context.Background()
 			db, e := store.Open(filepath.Join(t.TempDir(), "generation.db"))
 			if e != nil {
@@ -96,7 +98,24 @@ func TestGenerationDelivery(t *testing.T) {
 				h.ServeHTTP(w, r)
 				return w
 			}
-			gen := call("/api/generate/image", map[string]any{"requestId": "generation", "capability_id": "image:fixture", "prompt": "exact original", "output": map[string]any{"resources": []any{map[string]string{"key": "main", "mode": "create", "name": "Image"}}, "composition": map[string]any{"name": "Scene", "type": map[string]string{"label": "Images"}, "placements": []any{map[string]string{"key": "main", "role": "primary"}}}}})
+			createObject := func(path, key string, value any) string {
+				out := call(path, map[string]any{"requestId": key, "action": "create", "value": value})
+				var object struct{ ID string }
+				if out.Code != 200 || json.Unmarshal(out.Body.Bytes(), &object) != nil || object.ID == "" {
+					t.Fatal("create object", path, out.Code, out.Body.String())
+				}
+				return object.ID
+			}
+			declaration := map[string]string{"key": "main", "mode": "create", "name": "Image"}
+			var existingResource, newer string
+			if mode == "late-version" || archiveAdoption {
+				typeID := createObject("/api/composition-types", "type", map[string]string{"label": "Images"})
+				compositionID := createObject("/api/compositions", "composition", map[string]string{"type_id": typeID, "name": "Scene"})
+				existingResource = createObject("/api/resources", "resource", map[string]string{"composition_id": compositionID})
+				base := createObject("/api/versions", "base", map[string]string{"resource_id": existingResource})
+				declaration["mode"], declaration["baseVersionId"] = "new_version", base
+			}
+			gen := call("/api/generate/image", map[string]any{"requestId": "generation", "capability_id": "image:fixture", "prompt": "exact original", "output": map[string]any{"resources": []any{declaration}, "composition": map[string]any{"name": "Scene", "type": map[string]string{"label": "Images"}, "placements": []any{map[string]string{"key": "main", "role": "primary"}}}}})
 			if gen.Code != 202 {
 				t.Fatal(gen.Code, gen.Body.String())
 			}
@@ -112,13 +131,35 @@ func TestGenerationDelivery(t *testing.T) {
 			if posts.Load() != 0 {
 				t.Fatal("unapproved submission")
 			}
+			if existingResource != "" {
+				newer = createObject("/api/versions", "newer", map[string]string{"resource_id": existingResource})
+			}
+			checkCurrent := func() {
+				var current string
+				var oldOrdinal, newerOrdinal, highwater, unique, count int
+				if e = db.QueryRow("SELECT current_version_id,next_ordinal FROM canvas_resource_state WHERE resource_id=?", resource).Scan(&current, &highwater); e != nil {
+					t.Fatal(e)
+				}
+				if newer == "" {
+					if current != version {
+						t.Fatal("forward delivery did not advance current version", current)
+					}
+					return
+				}
+				db.QueryRow("SELECT ordinal FROM canvas_version_state WHERE version_id=?", version).Scan(&oldOrdinal)
+				db.QueryRow("SELECT ordinal FROM canvas_version_state WHERE version_id=?", newer).Scan(&newerOrdinal)
+				db.QueryRow("SELECT count(*),count(DISTINCT ordinal) FROM canvas_version_state WHERE resource_id=?", resource).Scan(&count, &unique)
+				if current != newer || oldOrdinal != ordinal || oldOrdinal >= newerOrdinal || highwater <= newerOrdinal || count != unique {
+					t.Fatalf("late reserved version replaced newer current: current=%s want=%s ordinals=%d/%d highwater=%d unique=%d/%d", current, newer, oldOrdinal, newerOrdinal, highwater, unique, count)
+				}
+			}
 			if mode == "commit-restart" {
 				_, e = db.Exec(`CREATE TRIGGER generation_fault BEFORE UPDATE OF stage ON deliveries WHEN NEW.stage='completed' BEGIN SELECT RAISE(ABORT,'fixture commit failure'); END`)
 				if e != nil {
 					t.Fatal(e)
 				}
 			}
-			if mode == "cancel-archive" {
+			if mode == "cancel-archive" || archiveAdoption {
 				_, e = db.Exec(`CREATE TRIGGER generation_cancel AFTER UPDATE OF stage ON delivery_sources WHEN NEW.stage='archived' BEGIN UPDATE tasks SET status='cancelled',revision=revision+1,view_json=json_set(view_json,'$.status','cancelled','$.revision',revision+1,'$.actions',json('[]')) WHERE id='` + id + `'; END`)
 				if e != nil {
 					t.Fatal(e)
@@ -175,10 +216,10 @@ func TestGenerationDelivery(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 				}
 			}
-			if mode == "adopt-late" {
+			if mode == "adopt-late" || archiveAdoption {
 				var count int
 				db.QueryRow("SELECT count(*) FROM versions").Scan(&count)
-				if count != 0 {
+				if count != 0 && !archiveAdoption || archiveAdoption && count != 2 {
 					t.Fatal("late output auto-delivered")
 				}
 				deadline = time.Now().Add(4 * time.Second)
@@ -192,6 +233,32 @@ func TestGenerationDelivery(t *testing.T) {
 				}
 				if adoption == "" {
 					t.Fatal("no explicit adoption card for late result")
+				}
+				if archiveAdoption {
+					var source, archive, originalInput, originalPlan, status string
+					if e = db.QueryRow("SELECT s.source_path,s.archive_path,d.input_json,d.plan_json,d.status FROM delivery_sources s JOIN deliveries d USING(project_id,request_id)").Scan(&source, &archive, &originalInput, &originalPlan, &status); e != nil || status != "blocked" {
+						t.Fatal("cancel archive checkpoint", status, e)
+					}
+					op := strings.TrimPrefix(mode, "adopt-archive-")
+					input := map[string]any{"requestId": "mutate-archive", "paths": []string{archive}}
+					if op == "rename" {
+						input = map[string]any{"requestId": "mutate-archive", "path": archive, "new_name": "moved.png"}
+					}
+					mutation := call("/api/files/"+op, input)
+					if mutation.Code != 409 {
+						t.Fatal("retained archive mutation allowed", op, mutation.Code, mutation.Body.String())
+					}
+					f, err := ws.OpenRegular(project.ID, archive)
+					if err != nil {
+						t.Fatal("retained archive lost", err)
+					}
+					f.Close()
+					var savedPath, savedInput, savedPlan string
+					db.QueryRow("SELECT path FROM task_outputs WHERE task_id=?", id).Scan(&savedPath)
+					db.QueryRow("SELECT input_json,plan_json FROM deliveries").Scan(&savedInput, &savedPlan)
+					if savedPath != source || savedInput != originalInput || savedPlan != originalPlan {
+						t.Fatal("frozen adoption identity changed")
+					}
 				}
 				body := map[string]any{"requestId": "adopt", "expected_revision": 1, "answers": [][]string{{"采用已返回结果"}}}
 				adopted := call("/api/question/"+adoption+"/reply", body)
@@ -219,6 +286,13 @@ func TestGenerationDelivery(t *testing.T) {
 				}
 				if posts.Load() != 1 {
 					t.Fatal("adoption generated again")
+				}
+				if archiveAdoption {
+					db.QueryRow("SELECT count(*) FROM versions").Scan(&count)
+					if count != 3 || downloads.Load() != 1 {
+						t.Fatal("adoption repeated collection or version insertion", count, downloads.Load())
+					}
+					checkCurrent()
 				}
 				return
 			}
@@ -268,7 +342,7 @@ func TestGenerationDelivery(t *testing.T) {
 				}
 				return
 			}
-			if count != 1 {
+			if count != 1 && mode != "late-version" || mode == "late-version" && count != 3 {
 				t.Fatal("duplicate versions", count)
 			}
 			for _, suffix := range []string{"&offset=0&limit=1", "&offset=1&limit=1"} {
@@ -294,6 +368,7 @@ func TestGenerationDelivery(t *testing.T) {
 			if gotResource != resource || gotOrdinal != ordinal {
 				t.Fatal("reserved slot changed")
 			}
+			checkCurrent()
 			f, e := ws.OpenRegular(project.ID, path)
 			if e != nil {
 				t.Fatal(e)

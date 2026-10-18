@@ -571,6 +571,12 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 		if e != nil {
 			return Receipt{}, e
 		}
+		var previousVersion sql.NullString
+		if ps.Task != nil {
+			if e = tx.QueryRowContext(ctx, "SELECT current_version_id FROM canvas_resource_state WHERE resource_id=?", ps.ResourceID).Scan(&previousVersion); e != nil {
+				return Receipt{}, e
+			}
+		}
 		_, e = tx.ExecContext(ctx, "INSERT INTO versions(id,resource_id,asset_id,source_version_id,origin,created_at) VALUES(?,?,?,?,?,?)", ps.VersionID, ps.ResourceID, ps.Asset.ID, nullable(ps.BaseVersionID), j.Origin, time.Now().UnixMilli())
 		if e != nil {
 			return Receipt{}, e
@@ -579,7 +585,9 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 			if _, e = tx.ExecContext(ctx, "UPDATE canvas_version_state SET ordinal=? WHERE version_id=?", ps.Task.Ordinal, ps.VersionID); e != nil {
 				return Receipt{}, e
 			}
-			if _, e = tx.ExecContext(ctx, "UPDATE canvas_resource_state SET next_ordinal=max(next_ordinal,?+1) WHERE resource_id=?", ps.Task.Ordinal, ps.ResourceID); e != nil {
+			// The insert trigger advanced current before the reserved ordinal was
+			// restored. Retain a newer prior choice instead of moving it backwards.
+			if _, e = tx.ExecContext(ctx, "UPDATE canvas_resource_state SET current_version_id=CASE WHEN (SELECT ordinal FROM canvas_version_state WHERE version_id=?)>? THEN ? ELSE current_version_id END,next_ordinal=max(next_ordinal,?+1) WHERE resource_id=?", previousVersion, ps.Task.Ordinal, previousVersion, ps.Task.Ordinal, ps.ResourceID); e != nil {
 				return Receipt{}, e
 			}
 			if _, e = tx.ExecContext(ctx, "UPDATE task_outputs SET state='delivered',asset_id=?,version_id=? WHERE task_output_key=?", ps.Asset.ID, ps.VersionID, ps.Source.TaskOutputKey); e != nil {

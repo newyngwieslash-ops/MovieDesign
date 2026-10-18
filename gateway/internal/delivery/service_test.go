@@ -177,6 +177,37 @@ func TestBlocked(t *testing.T) {
 	}
 }
 
+func TestBlockedFileDeliveryDoesNotReservePaths(t *testing.T) {
+	f := setup(t)
+	in := f.input(t, "blocked-file")
+	f.s.fault = func(point string) error {
+		if point == "prepare" {
+			return errors.New("prepared checkpoint")
+		}
+		return nil
+	}
+	if receipt, e := f.s.Deliver(context.Background(), f.p, in); e != nil || receipt.Delivery.Status != "unknown" {
+		t.Fatal(receipt, e)
+	}
+	// Inject a terminal blocked checkpoint for an ordinary file journal. Only
+	// task-output journals retain the separate late-result adoption obligation.
+	if _, e := f.db.Exec("UPDATE deliveries SET status='blocked' WHERE request_id=?", in.RequestID); e != nil {
+		t.Fatal(e)
+	}
+	var source, archive string
+	if e := f.db.QueryRow("SELECT source_path,archive_path FROM delivery_sources WHERE request_id=?", in.RequestID).Scan(&source, &archive); e != nil {
+		t.Fatal(e)
+	}
+	tx, e := f.db.BeginTx(context.Background(), nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer tx.Rollback()
+	if e = store.CheckDeliveryPaths(context.Background(), tx, f.p, "", source, archive); e != nil {
+		t.Fatal("blocked ordinary file retained path reservation", e)
+	}
+}
+
 func TestMissingCompositionTypeIsBlocked(t *testing.T) {
 	for _, kind := range []string{"missing", "cross-project", "database-error"} {
 		t.Run(kind, func(t *testing.T) {

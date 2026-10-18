@@ -21,7 +21,7 @@ func CheckDeliveryPaths(ctx context.Context, tx *sql.Tx, p, except string, paths
 	if e != nil || !exists {
 		return e
 	}
-	rows, e := tx.QueryContext(ctx, `SELECT s.source_path,s.archive_path FROM delivery_sources s JOIN deliveries d USING(project_id,request_id) WHERE s.project_id=? AND s.request_id<>? AND d.status='unknown'`, p, except)
+	rows, e := tx.QueryContext(ctx, `SELECT s.source_path,s.archive_path FROM delivery_sources s JOIN deliveries d USING(project_id,request_id) WHERE s.project_id=? AND s.request_id<>? AND (d.status='unknown' OR (d.status='blocked' AND coalesce(json_extract(s.source_json,'$.Source.taskOutputKey'),'')<>''))`, p, except)
 	if e != nil {
 		return e
 	}

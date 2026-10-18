@@ -49,6 +49,9 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
   const existing=Object.values(current.current.nodes).filter(n=>n.pendingGeneration?.requestId===input.requestId);
   if(existing.length===input.output.resources.length)return;
   if(!ready||storageError)throw Error('画布尚未就绪');
+  // Admission outlives its pending nodes, including conversion and user deletion.
+  if((await tasks.refetch({throwOnError:true})).data?.some(t=>t.request_id===input.requestId))return;
+  if(!alive.current)throw Error('项目已切换，保留原请求');
   const saved=readPending(localStorage.getItem(pendingKey(projectID)),projectID);
   if(saved){if(JSON.parse(saved.body).requestId!==`generation-${input.requestId}`)throw Error('请先确认原画布命令');if(!await send(saved))throw Error('画布结果待确认');return}
   const nodes=input.output.resources.map((r,i)=>{const after:Node={id:`generation-${input.requestId}-${i}`,kind:'placeholder',expectedKind:'image',draft:null,pendingGeneration:{requestId:input.requestId,outputKey:r.key},parentId:null,position:{x:40+i*370,y:50},size:{width:350,height:350},zIndex:Object.keys(current.current.nodes).length+i+1,hidden:false};return {id:after.id,before:null,after}});
