@@ -81,8 +81,8 @@ func TestFortyCalls(t *testing.T) {
 
 **Interfaces:** mention attrs.path严格为 `asset:<id>`，遍历整个 TipTap JSON收集唯一有序引用；发送包括完整doc及标注，不从渲染HTML反推。消息队列状态 queued/sending/accepted/done/error/cancelled 是UI发送状态，不能覆盖生成任务状态机。
 
-- [ ] 用Node内置测试器验证嵌套引用、重复引用、恶意HTML、重放delta、不同session混合事件、终态后迟到事件、排队消息编辑生成新requestId；发送中unknown重试仍用原内容和requestId。
-- [ ] 最小遍历函数落 `messages.ts`；其输入不依赖编辑器实例，能直接测试：
+- [x] 用Node内置测试器验证嵌套引用、重复引用、恶意HTML、重放delta、不同session混合事件、终态后迟到事件、排队消息编辑生成新requestId；发送中unknown重试仍用原内容和requestId。
+- [x] 最小遍历函数落 `messages.ts`；其输入不依赖编辑器实例，能直接测试：
 
 ```ts
 type DocNode = { type?: string; attrs?: Record<string, unknown>; content?: DocNode[] };
@@ -99,9 +99,9 @@ export function assetReferences(root: DocNode): string[] {
 }
 ```
 
-- [ ] gateway再次验证每个ID及项目归属，UI不承担安全校验。TipTap自定义mention提供键盘选择、删除和资产缩略图。标注配对数据随消息发送，发送后的不可变消息与当前编辑草稿分开。
-- [ ] 单一SSE事件reducer按session/step与事件ID归并；工具卡/文本分别显示，禁止重复append。排队可编辑/撤回，处于发送中不复用修改后的body。确认卡复用M4组件；IME组合态不触发Enter发送或Delete编辑器快捷键。
-- [ ] `pnpm --dir desktop build`、`node --experimental-strip-types --test desktop/src/features/chat/messages.test.ts`；WebView验证忙时排队、引用、流式输出、用户取消、键盘确认，提交 `feat(M5.4): compose referenced chat and render streamed turns`。
+- [x] gateway再次验证每个ID及项目归属，UI不承担安全校验。TipTap自定义mention提供键盘选择、删除和资产缩略图。标注配对数据随消息发送，发送后的不可变消息与当前编辑草稿分开。
+- [x] 单一SSE事件reducer按session/step与事件ID归并；工具卡/文本分别显示，禁止重复append。排队可编辑/撤回，处于发送中不复用修改后的body。确认卡复用M4组件；IME组合态不触发Enter发送或Delete编辑器快捷键。
+- [x] `pnpm --dir desktop build`、`node --experimental-strip-types --test desktop/src/features/chat/messages.test.ts`；WebView验证忙时排队、引用、流式输出、用户取消、键盘确认，提交 `feat(M5.4): compose referenced chat and render streamed turns`。
 
 ### Task M5.5：工具矩阵补齐、系统提示词与 M5 验收
 
