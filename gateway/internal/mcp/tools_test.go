@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
@@ -156,5 +157,27 @@ func TestDocumentReadRulesAndCatalogTools(t *testing.T) {
 	}
 	if r := call(t, f.client, "design_deliver", `{"requestId":"bad-deliver","sources":[],"output":{}}`); r["error"] == nil {
 		t.Fatal(r)
+	}
+}
+
+func TestStoryboardMCP(t *testing.T) {
+	f := setup(t)
+	f.server.services.Delivery = delivery.NewService(f.db, f.providers.Files.Workspace, "agent")
+	raw := `{"requestId":"storyboard","mode":"create","format":"md","typedDocument":{"kind":"storyboard","pipelineId":"film","expectedRevision":0,"storyboard":{"panels":[{"id":"p","timeMs":0,"framing":"close","action":"speak","transition":"continuous"}],"shots":[{"id":"s","startMs":0,"endMs":2000,"panelIds":["p"],"narrativeRole":"intro","startState":"start","endState":"end"}],"timeline":{"durationMs":2000,"shotIds":["s"],"audioIntent":"none"}}},` + output + `}`
+	r := call(t, f.client, "design_document_write", raw)
+	if r["error"] != nil || r["delivery"].(map[string]any)["status"] != "completed" {
+		t.Fatal(r)
+	}
+	var n int
+	if e := f.db.QueryRow("SELECT count(*) FROM storyboard_revisions").Scan(&n); e != nil || n != 1 {
+		t.Fatal(n, e)
+	}
+	for _, bad := range []string{strings.Replace(raw, `"expectedRevision":0,`, "", 1), strings.Replace(raw, `"timeMs":0`, `"timeMs":0,"extra":true`, 1), strings.Replace(raw, `"durationMs":2000`, `"durationMs":2.5`, 1)} {
+		v, e := f.client.CallTool(context.Background(), &sdk.CallToolParams{Name: "design_document_write", Arguments: json.RawMessage(bad)})
+		if e == nil && !v.IsError {
+			if got := call(t, f.client, "design_document_write", bad); got["error"] == nil {
+				t.Fatal("strict schema accepted", got)
+			}
+		}
 	}
 }

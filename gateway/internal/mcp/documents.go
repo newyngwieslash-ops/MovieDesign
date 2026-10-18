@@ -75,7 +75,7 @@ func (s *Server) documents(server *sdk.Server, scope agent.ToolScope) {
 		}
 		return map[string]any{"items": items}, nil
 	})
-	add(s, server, scope, "design_document_write", "Create/replace/atomic exact-anchored patch of md/txt/srt/ass through staging and Delivery. Revisions declare new_version and baseVersionId; immutable Version, no mutable baseRevision/disposition.", func(ctx context.Context, _ delivery.DocumentRequest, raw []byte) (any, error) {
+	add(s, server, scope, "design_document_write", "Create/replace/atomic exact-anchored patch of md/txt/srt/ass through shared Delivery. For semantic storyboard_review.md use typedDocument {kind:storyboard,pipelineId,expectedRevision,storyboard:{panels,shots,timeline}}; all times integer milliseconds, Shots are narrative chapters, not generated clips. Typed writes render deterministic Markdown; optional complete Markdown content must match typed JSON. Semantic revisions require replace/new_version/baseVersionId of current revision and preserve Resource. Text never grants approval.", func(ctx context.Context, _ delivery.DocumentRequest, raw []byte) (any, error) {
 		if s.services.Delivery == nil {
 			return nil, invalid("Delivery unavailable")
 		}

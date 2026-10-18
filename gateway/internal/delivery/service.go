@@ -623,6 +623,9 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 		}
 		r.Delivery.Versions = append(r.Delivery.Versions, Version{Key: ps.Source.Key, ResourceID: ps.ResourceID, VersionID: ps.VersionID, AssetID: ps.Asset.ID})
 	}
+	if e = commitDocument(ctx, tx, p, key, j, r.Delivery.Versions); e != nil {
+		return Receipt{}, e
+	}
 	if pl.Sources[0].Task != nil {
 		if s.CompleteTask == nil {
 			return Receipt{}, invalid("Task completion is not installed")

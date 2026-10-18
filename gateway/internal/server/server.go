@@ -204,7 +204,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := (r.URL.Path == "/api/skills" && method == "GET") || chatMethod(r.URL.Path, method) || agentMethod(r.URL.Path, method) || questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
+			allowed := pipelineMethod(r.URL.Path, method) || (r.URL.Path == "/api/skills" && method == "GET") || chatMethod(r.URL.Path, method) || agentMethod(r.URL.Path, method) || questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
@@ -260,6 +260,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if canvasRoute(r.URL.Path) {
 			serveCanvas(w, r, store.Canvas{DB: db})
+			return
+		}
+		if r.URL.Path == "/api/pipeline/storyboard" || r.URL.Path == "/api/documents/write" {
+			srv.servePipeline(w, r, deliveries)
 			return
 		}
 		if r.URL.Path == "/api/deliver" {

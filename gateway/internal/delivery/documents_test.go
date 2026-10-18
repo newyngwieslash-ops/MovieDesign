@@ -4,10 +4,97 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"strings"
 	"testing"
 )
+
+func TestStoryboardRecoveryCASAndFrozenActor(t *testing.T) {
+	ctx := context.Background()
+	for _, point := range []string{"prepare", "archive", "before_commit", "after_commit"} {
+		t.Run(point, func(t *testing.T) {
+			f := setup(t)
+			s := pipeline.Storyboard{Panels: []pipeline.Panel{{ID: "p", TimeMS: 0, Framing: "近景", Action: "口播", Transition: "连续"}}, Shots: []pipeline.Shot{{ID: "s", StartMS: 0, EndMS: 2000, PanelIDs: []string{"p"}, NarrativeRole: "讲述", StartState: "开始", EndState: "结束"}}, Timeline: pipeline.Timeline{DurationMS: 2000, ShotIDs: []string{"s"}, AudioIntent: "口播音乐"}}
+			in := DocumentRequest{RequestID: "typed", Mode: "create", Format: "md", TypedDocument: &pipeline.Document{Kind: "storyboard", PipelineID: "film", Storyboard: s}, Output: f.input(t, "unused").Output}
+			raw, _ := json.Marshal(in)
+			f.s.fault = func(at string) error {
+				if at == point {
+					return errors.New("controlled crash")
+				}
+				return nil
+			}
+			first, e := f.s.WriteDocument(ctx, f.p, raw)
+			if e != nil || first.Delivery.Status != "unknown" {
+				t.Fatalf("fault %+v %v", first, e)
+			}
+			var key string
+			if e = f.db.QueryRow("SELECT request_id FROM deliveries WHERE project_id=?", f.p).Scan(&key); e != nil {
+				t.Fatal(e)
+			}
+			// Restart-equivalent fresh opposite-actor instance enters generic Recover.
+			other := NewService(f.db, f.w, "agent")
+			got, e := other.Recover(ctx, f.p, key)
+			if e != nil || got.Delivery.Status != "completed" {
+				t.Fatalf("recover %+v %v", got, e)
+			}
+			var origin string
+			if e = f.db.QueryRow("SELECT origin FROM versions WHERE id=?", got.Delivery.Versions[0].VersionID).Scan(&origin); e != nil || origin != "user" {
+				t.Fatal(origin, e)
+			}
+			again, e := other.WriteDocument(ctx, f.p, raw)
+			if e != nil || again.Delivery.Versions[0] != got.Delivery.Versions[0] {
+				t.Fatal("lost receipt", again, e)
+			}
+			if n := count(t, f.db, "SELECT count(*) FROM storyboard_revisions"); n != 1 {
+				t.Fatal(n)
+			}
+			// Freeze two same-base plans before either final commit. First commits,
+			// second must roll back all objects/revision and become durably blocked.
+			in.Mode = "replace"
+			in.TypedDocument.ExpectedRevision = 1
+			in.Output.Resources[0].Mode = "new_version"
+			in.Output.Resources[0].BaseVersionID = got.Delivery.Versions[0].VersionID
+			keys := []string{}
+			f.s.fault = func(at string) error {
+				if at == "before_commit" {
+					return errors.New("hold")
+				}
+				return nil
+			}
+			for _, id := range []string{"race-a", "race-b"} {
+				in.RequestID = id
+				in.TypedDocument.Storyboard.Panels[0].Action = id
+				b, _ := json.Marshal(in)
+				r, e := f.s.WriteDocument(ctx, f.p, b)
+				if e != nil || r.Delivery.Status != "unknown" {
+					t.Fatal(r, e)
+				}
+				var frozen string
+				f.db.QueryRow("SELECT 'document-' || json_extract(response_json,'$.Key') FROM write_requests WHERE operation='document.write' AND request_id=?", id).Scan(&frozen)
+				keys = append(keys, frozen)
+			}
+			a, e := other.Recover(ctx, f.p, keys[0])
+			if e != nil || a.Delivery.Status != "completed" {
+				t.Fatal(a, e)
+			}
+			b, e := other.Recover(ctx, f.p, keys[1])
+			if e != nil || b.Delivery.Status != "blocked" {
+				t.Fatal(b, e)
+			}
+			replay, e := other.Recover(ctx, f.p, keys[1])
+			if e != nil || replay.Delivery.Status != "blocked" {
+				t.Fatal(replay, e)
+			}
+			if n := count(t, f.db, "SELECT count(*) FROM versions"); n != 2 {
+				t.Fatal("orphan SQL version", n)
+			}
+			if n := count(t, f.db, "SELECT count(*) FROM storyboard_revisions"); n != 2 {
+				t.Fatal(n)
+			}
+		})
+	}
+}
 
 func TestDocumentRequiresExplicitContentAndReplaysFrozenUnknown(t *testing.T) {
 	f := setup(t)

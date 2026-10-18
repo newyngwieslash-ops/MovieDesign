@@ -1,5 +1,60 @@
 # MovieDesign 契约
 
+## M6.1 技能方法与冻结采用（已实现接口补记）
+
+`GET /api/skills?offset=0&limit=50` 返回 `{items:[{name,description,"trigger-words",version,revision,bundle_revision,modified}],coverage:{total,next_offset,exhausted}}`；默认 limit=50，范围 1–200，严格拒绝未知/重复/非规范/负分页参数。`GET /api/skills?name=<name>` 与分页互斥，返回同样元信息及完整 `body`、`references`（受管相对名→完整正文），未知名称 404，畸形本地技能 400，保持 Origin 与只读 GET 预检。
+
+Chat send 可选 `skill_id` 字符串：显式名称采用当前本地完整方法；空字符串持久停用；省略继承服务拥有的已采用快照（尚无采用时才按已实现唯一触发词选择）。null/client-forged skill 快照拒绝。服务在 chat.send 的 `write_requests.response_json` 与消息/队列同事务保存 SkillInfo+Body+全部 References；原 Message.content 保留原 wire。历史 `Message.skill` 是该服务快照，入队/继续/重启都注入冻结内容为原生 prompt 首个文本部分，不再读实时文件。方法不是批准证明，不增加 design 18+question 权限，text agent 仍零工具。
+
+## M6.2 语义分镜 typed document（已实现的移植适配）
+
+来源概念为 spec §10 / analysis-docs 05：Panel 是语义时间点，Logical Shot 是连续叙事章节，Master Timeline 是单次完整渲染计划；**下面的机器字段是 MovieDesign 新增 typed port，并非原产品公开 wire**。不固定 Panel/Shot 数量、均匀分布、独占分区、网格、厂商字数预算。Shot 重叠可表达过渡，不是独立生成片段。
+
+既有 `design_document_write`（工具总数仍为 18 + native question）和新增 `POST /api/documents/write?project_id=...` 共用 `delivery.Service.WriteDocument(ctx,projectID,raw)`，保留完整原始 JSON 幂等身份。HTTP actor=user，MCP actor=agent，由可信服务选择。以下为 DocumentRequest 新增的可选 `typedDocument` 的完整 JSON Schema；未提供它的通用 md/txt/srt/ass create/replace/patch 行为保持原入口。
+
+```json
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "type":"object","additionalProperties":false,
+  "required":["kind","pipelineId","expectedRevision","storyboard"],
+  "properties":{
+    "kind":{"const":"storyboard"},
+    "pipelineId":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,128}$"},
+    "expectedRevision":{"type":"integer","minimum":0},
+    "storyboard":{"$ref":"#/$defs/storyboard"}
+  },
+  "$defs":{
+    "id":{"type":"string","minLength":1,"maxLength":128},
+    "text":{"type":"string","minLength":1},
+    "ms":{"type":"integer","minimum":0,"maximum":9007199254740991},
+    "panel":{"type":"object","additionalProperties":false,"required":["id","timeMs","framing","action","transition"],"properties":{"id":{"$ref":"#/$defs/id"},"timeMs":{"$ref":"#/$defs/ms"},"framing":{"$ref":"#/$defs/text"},"action":{"$ref":"#/$defs/text"},"transition":{"$ref":"#/$defs/text"}}},
+    "shot":{"type":"object","additionalProperties":false,"required":["id","startMs","endMs","panelIds","narrativeRole","startState","endState"],"properties":{"id":{"$ref":"#/$defs/id"},"startMs":{"$ref":"#/$defs/ms"},"endMs":{"$ref":"#/$defs/ms"},"panelIds":{"type":"array","minItems":1,"uniqueItems":true,"items":{"$ref":"#/$defs/id"}},"narrativeRole":{"$ref":"#/$defs/text"},"startState":{"$ref":"#/$defs/text"},"endState":{"$ref":"#/$defs/text"}}},
+    "timeline":{"type":"object","additionalProperties":false,"required":["durationMs","shotIds","audioIntent"],"properties":{"durationMs":{"type":"integer","minimum":1,"maximum":9007199254740991},"shotIds":{"type":"array","minItems":1,"uniqueItems":true,"items":{"$ref":"#/$defs/id"}},"audioIntent":{"$ref":"#/$defs/text"}}},
+    "storyboard":{"type":"object","additionalProperties":false,"required":["panels","shots","timeline"],"properties":{"panels":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/panel"}},"shots":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/shot"}},"timeline":{"$ref":"#/$defs/timeline"}}}
+  }
+}
+```
+
+字段映射：framing=景别，action=主体动作，transition=转场依据；narrativeRole=叙事职责，startState/endState=起止状态；audioIntent=完整时间线音轨意图（允许明确“无”，不做音频能力或质量推断）。所有文本必须非空白，原文保留；所有时间为整数毫秒，不持久化 UI 时间字符串。Panel/Shot ID 在一份分镜中全局唯一，ID 上限 128 UTF-8 字节；每个 Panel 至少被一个 Shot 引用，每个 Shot 至少引用一个 Panel，引用时间点在该 Shot 闭区间内。Timeline 恰好引用全部 Shot 一次，Shot 满足 `0 <= startMs < endMs <= durationMs`，所有区间的并集须从 0 无缺口覆盖到 durationMs。允许不均匀时间点、共享 Panel、重叠 Shot，数组顺序也是候选语义的一部分。
+
+typedDocument 只用于 format=md、mode=create/replace。首次 expectedRevision=0，资源 output.mode=create；后续 expectedRevision 为当前 revision，output.mode=new_version 且 baseVersionId 必须精确等于当前语义 revision 的 document_version_id。pipelineId 为整个本地数据库内的稳定标识（建议 UUID），首次绑定项目与 Resource；标题变化不创建新 Resource，也不改变项目归属。已有 output 类型/Composition/placement 校验继续执行。修改 Composition 应另走已有 Composition 编辑流程。
+
+服务确定性渲染 `storyboard_review.md`：固定说明和一个带完整 typed JSON 的 fenced code block，文档是不可变 Version。可选 content 为手工 Markdown 候选，必须具有唯一完整 JSON 区块、通过同一结构校验且与 typedDocument.storyboard 相等；仅区块结构是语义真值，外围文字重新渲染，不从“已批准”等普通文字读取授权。未带 typedDocument 的文档即使名为 storyboard_review.md 也只是普通文档，不能创建分镜 revision 或批准。
+
+语义指纹是按固定 Go 字段顺序编码、保留数组次序及原始文本的完整 Storyboard JSON 的 SHA-256。新意图需先通过 expectedRevision/baseVersion CAS；同语义内容不新增文件、Version 或 revision，冻结并重放原 Version 的真实交付回执。新 output key 可作为该回执的别名返回；同语义无动作不得借此改变 Composition 或新增 placement role（400），name 仍是投递描述，不是 Resource rename 命令。原 requestId 精确重放返回冻结结果，即使后面已有新 revision；同 requestId 不同原始输入是 409。新的过期 expectedRevision/baseVersion 是 409/invalid_input。
+
+迁移 `000012_pipeline` 添加 pipelines、storyboard_revisions、approvals、prompt_contracts、version_dependencies，核心五表和旧迁移不变。`storyboard_revisions` 主键 `(pipeline_id,revision)`，存 content_json/semantic_hash/document_version_id/created_at，禁止 UPDATE/DELETE，并以 FK 保护真实 Version。pipelines.resource_id 唯一绑定原 Resource。支持表 approvals 必须引用现有 human question_receipts；M6.2 没有批准写入入口，UI 明示“未批准 · 人类批准功能待接入”。
+
+原子边界：共享 document.write write_requests 首先冻结生成的内部 key、完整渲染内容、output、可信 actor、typedDocument；文件 Stage/归档完全在 SQL Tx 外。普通 Delivery 最终事务通过 `commitDocument` 查回该原请求计划，核对冻结 output/actor 和受管文件的既有 xxh3 full_hash，调用 `pipeline.SaveStoryboard(ctx,tx,scope,requestID,pipelineID,expectedRevision,storyboard,baseVersionID,resourceID,versionID)`。这个 supplied-Tx 形态是计划 SaveStoryboard 接口的必要集成适配：实际 Resource/Version、分镜 revision、prompt_status=pending、已有 approvals.valid=0、pending/ready prompt_contracts→invalidated、version_dependencies 和 Canvas.PlaceDelivery 一起提交。submitted 合同及已有 task/attempt 的冻结输入不更改；不在事务中调用 DB getter、WriteDocument、文件或网络。
+
+恢复仍走原 Delivery journal，不新增独立交付管线。相同 document requestId 可补完尚未 Stage 的计划；已有 journal 的通用 Recover 会使用持久原计划与同一个提交钩子。四个 crash seam（prepare/archive/before_commit/after_commit）沿原 actor/对象身份恢复。两个已归档候选晚到的 CAS 冲突回滚全部新 SQL 对象，Delivery 回执永久 blocked，保留原 journal/归档证据；不会自动改 expectedRevision、偷偷重生成或成为永久 unknown。需要用户重新阅读后以新请求编辑；未成功引用的受管归档保留供恢复审计，本任务不做垃圾回收。
+
+新增只读 `GET /api/pipeline/storyboard?project_id=...&versionId=...` 返回 `{pipelineId,revision,storyboard,semanticHash,documentVersionId,createdAt,currentRevision,promptStatus,approvalStatus:"unapproved"}`。查询通过 pipelines.project_id 与精确 document_version_id 连接；普通文档/跨项目版本返回 404，非法/重复/未知参数返回 400。新增 HTTP 写端返回既有 `{delivery:{status,versions,problem?}}` 三态回执；1 MiB 限制、Origin、严格大小写/未知字段/重复键/null/整数检查不变。预提交验证 400，幂等/CAS 409，超限 413，不存在 404，基础设施错误 502；晚到提交冲突通过 200 + delivery.status=blocked 表达既有 Delivery 语义。以上两个 HTTP 路径为本移植 UI 支撑扩展，不冒称原产品端点。
+
+CanvasNode 根据选中 Version 读取真实 revision，展示 Panel→Shot→Timeline、revision/状态及上一版 panels/shots/timeline 变更分类。旧版只读；Markdown 编辑提交服务端校验后的新候选。编辑请求先保存本地 project/pipeline/version/revision/完整 body，复用现有 updatePending CAS，只能清除自己持有的记录；重复节点、未知结果、晚到响应、损坏/不可用存储不会覆盖新意图。重挂载/重启只读，用户显式重试原冻结请求。普通文档保留文本预览。交付复用原节点，保留布局。
+
+M6.3 接续：通过 questions.Reply 的 supplied-Tx human receipt hook 绑定 revision/hash/门禁，不从 native question 或 Markdown 推断批准；ReadVersion 和 UI 的批准状态届时接真实门禁。M6.4 接续：Prompt 是单独 Resource，绑定其来源语义 revision 与版本依赖；把 audioIntent 中经人类确认的要求编译成可机读音频/口播/音乐合同能力，当前自由文本不等于机器能力验证。Preflight、真实 LLM 方法质量和视频生成仍未实现/未执行；本地合成 fixture 只证明真实 native MCP/WebView 传输与恢复。
+
 ## M3.2 媒体形状与内存缓存
 
 继续复用 `ShapeData` 的八种原始平面字段和唯一工厂 `shapeFromData`。样式留在 `style`；Tag 保留 `x/y/anchorX/anchorY/width/height/text/maxWidth`，文字变体保留 `style.textVariant=plain|filled|outlined`。实例构造与 `toData` 深拷贝；处理底图、笔刷离屏画布和文字基线缓存只在内存，不进入形状 JSON 或后续历史。
