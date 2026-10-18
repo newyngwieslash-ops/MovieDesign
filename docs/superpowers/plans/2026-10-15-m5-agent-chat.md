@@ -1,6 +1,6 @@
 # M5 Agent、MCP 与聊天 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 让受限 opencode 通过 gateway 工具完成真实对话、提问、生成与投递，前端支持引用、排队和流式输出。
 
@@ -20,19 +20,19 @@
 
 **Interfaces:** Tauri 在 gateway 就绪后启动独立 opencode serve，固定127.0.0.1:4096；gateway 代理所有 session/config/auth 请求。`BuildConfig(LLMConfig,MCPConnection) ([]byte,error)` 输出隔离配置。LLMConfig 区分内置 provider 与受 opencode 支持的自定义兼容协议，包含 baseURL/modelID/write-only key；不允许任意 npm 包名或插件路径。
 
-- [ ] 先测试配置：默认拒绝工具、配置外未知工具拒绝、key 不出现在 API GET/log、项目内恶意 opencode 配置不被合并、端口被占用立即失败、退出只关闭自身子进程。
-- [ ] 升级项目 Go 工具链，锁定满足官方公告修复要求的 SDK（至少 v1.4.1，核对 go.mod）；运行 `go -C gateway test ./...`。读取锁定 opencode 的配置 schema 和 `/doc` OpenAPI，保存用于测试的最小脱敏样本，不能假设当前 npm shim 就是可分发 exe。
-- [ ] 构建脚本从官方发行下载指定版本/架构的二进制并校验可获得的官方摘要；保存版本、来源、摘要、许可证清单。不修改用户全局 opencode；Tauri externalBin 包含本应用专用 binary，配置/会话/日志使用应用数据目录。
-- [ ] MCP remote 配置包含精确 Origin 和随机连接令牌；令牌只给受管 opencode。对原生 question 允许，工具总权限默认 deny，其余仅按实际 MCP tools/list 返回的前缀名称逐项 allow。禁用项目配置合并、自动技能发现和插件加载；技能由 gateway 注入。
-- [ ] opencode serve 使用官方 `OPENCODE_SERVER_PASSWORD` HTTP Basic 认证，每次启动生成随机密码，经受保护的原生启动配置交给 gateway；前端、API GET 和日志均不得获得密码。只允许 gateway 的认证客户端调用 session/config/question API，不为前端开启4096的CORS。测试无认证请求被拒绝、gateway认证请求成功，并验证工具权限关闭后原生HTTP管理接口仍受认证保护。依据锁定版本的官方 Server 文档核对变量与认证行为。
-- [ ] 设置页新增 LLM 配置与免费探测，只有已支持的 opencode provider 协议才能保存。改配置影响新会话/新轮次，不更换已在执行任务的模型；必要重启先排空会话。启动错误在 UI 可读，agent 未就绪不冒充正常。
-- [ ] 运行 `cargo test --manifest-path desktop/src-tauri/Cargo.toml` 和 `./scripts/check.ps1`，真实启动/关闭验证两个子进程；提交 `feat(M5.1): host isolated opencode with configurable providers`。
+- [x] 先测试配置：默认拒绝工具、配置外未知工具拒绝、key 不出现在 API GET/log、项目内恶意 opencode 配置不被合并、端口被占用立即失败、退出只关闭自身子进程。
+- [x] 升级项目 Go 工具链，锁定满足官方公告修复要求的 SDK（至少 v1.4.1，核对 go.mod）；运行 `go -C gateway test ./...`。读取锁定 opencode 的配置 schema 和 `/doc` OpenAPI，保存用于测试的最小脱敏样本，不能假设当前 npm shim 就是可分发 exe。
+- [x] 构建脚本从官方发行下载指定版本/架构的二进制并校验可获得的官方摘要；保存版本、来源、摘要、许可证清单。不修改用户全局 opencode；Tauri externalBin 包含本应用专用 binary，配置/会话/日志使用应用数据目录。
+- [x] MCP remote 配置包含精确 Origin 和随机连接令牌；令牌只给受管 opencode。对原生 question 允许，工具总权限默认 deny，其余仅按实际 MCP tools/list 返回的前缀名称逐项 allow。禁用项目配置合并、自动技能发现和插件加载；技能由 gateway 注入。
+- [x] opencode serve 使用官方 `OPENCODE_SERVER_PASSWORD` HTTP Basic 认证，每次启动生成随机密码，经受保护的原生启动配置交给 gateway；前端、API GET 和日志均不得获得密码。只允许 gateway 的认证客户端调用 session/config/question API，不为前端开启4096的CORS。测试无认证请求被拒绝、gateway认证请求成功，并验证工具权限关闭后原生HTTP管理接口仍受认证保护。依据锁定版本的官方 Server 文档核对变量与认证行为。
+- [x] 设置页新增 LLM 配置与免费探测，只有已支持的 opencode provider 协议才能保存。改配置影响新会话/新轮次，不更换已在执行任务的模型；必要重启先排空会话。启动错误在 UI 可读，agent 未就绪不冒充正常。
+- [x] 运行 `cargo test --manifest-path desktop/src-tauri/Cargo.toml` 和 `./scripts/check.ps1`，真实启动/关闭验证两个子进程；提交 `feat(M5.1): host isolated opencode with configurable providers`。
 
 ### Task M5.2：官方 MCP 服务、工具 schema 与执行预算
 
 **Files:**
 - Create: `gateway/internal/mcp/server.go`, `gateway/internal/mcp/tools.go`, `gateway/internal/mcp/server_test.go`, `gateway/internal/agent/budget.go`, `gateway/internal/agent/budget_test.go`。
-- Create: `gateway/migrations/000008_agent_sessions.up.sql`, `gateway/migrations/000008_agent_sessions.down.sql`。
+- Create: `gateway/migrations/000009_agent_sessions.up.sql`, `gateway/migrations/000009_agent_sessions.down.sql`。
 - Modify: `gateway/internal/server/server.go`, `gateway/cmd/open-design-gateway/main.go`, `docs/contracts.md`。
 
 **Interfaces:** MCP 使用官方 Streamable HTTP handler 挂载 `/mcp`，同样校验 Origin，并验证专用令牌。`ToolScope{ProjectID,SessionID,TurnID}` 由 gateway 的受管会话绑定，不能由模型任选。写工具显式要求 requestId；tool requestId 与重放记录持久化。服务注入对象、投递、任务、问题服务，不复制业务算法。

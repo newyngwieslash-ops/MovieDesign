@@ -107,8 +107,9 @@ JSON 与 multipart（字段 requestId）统一要求幂等；MCP 的写工具也
 | 000005_canvas | canvas_documents、canvas_commands |
 | 000006_tasks_events | tasks、task_attempts、task_outputs、generation_inputs、events |
 | 000007_providers_questions | provider_configs、capabilities、price_quotes、questions、question_receipts |
-| 000008_agent_sessions | chat_sessions、chat_messages、chat_turns、agent_tool_calls、project_rules |
-| 000009_pipeline | pipelines、storyboard_revisions、approvals、prompt_contracts、version_dependencies |
+| 000008_llm_settings | llm_settings：独立 LLM 配置与不可变加密凭据版本指针 |
+| 000009_agent_sessions | chat_sessions、chat_messages、chat_turns、agent_tool_calls、project_rules |
+| 000010_pipeline | pipelines、storyboard_revisions、approvals、prompt_contracts、version_dependencies |
 
 每个文件均有 `.up.sql/.down.sql`，更新 `migrations/embed.go` 的既有嵌入方式即可。生产不自动执行 down。单连接数据库事务中只调用当前 `*sql.Tx`，禁止事务内回到 `db.Query` 死锁；任何联网和等待用户都必须在事务外。
 
