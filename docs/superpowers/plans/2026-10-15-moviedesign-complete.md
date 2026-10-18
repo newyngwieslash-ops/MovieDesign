@@ -110,7 +110,8 @@ JSON 与 multipart（字段 requestId）统一要求幂等；MCP 的写工具也
 | 000008_llm_settings | llm_settings：独立 LLM 配置与不可变加密凭据版本指针 |
 | 000009_agent_sessions | chat_sessions、chat_messages、chat_turns、agent_tool_calls、project_rules |
 | 000010_chat_bridge | 持久消息队列、原生 question 转发状态、推理准入与恢复记录 |
-| 000011_pipeline | pipelines、storyboard_revisions、approvals、prompt_contracts、version_dependencies |
+| 000011_text_inference | 独立无工具文本任务的推理作用域与防重复准入 |
+| 000012_pipeline | pipelines、storyboard_revisions、approvals、prompt_contracts、version_dependencies |
 
 每个文件均有 `.up.sql/.down.sql`，更新 `migrations/embed.go` 的既有嵌入方式即可。生产不自动执行 down。单连接数据库事务中只调用当前 `*sql.Tx`，禁止事务内回到 `db.Query` 死锁；任何联网和等待用户都必须在事务外。
 
