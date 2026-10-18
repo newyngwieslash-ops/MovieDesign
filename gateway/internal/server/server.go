@@ -128,9 +128,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 	if providerService != nil {
 		providerService.Files = files
 	}
-	var deliveries *delivery.Service
+	var deliveries, agentDeliveries *delivery.Service
 	if files != nil {
 		deliveries = delivery.NewService(db, files.Workspace, "user")
+		agentDeliveries = delivery.NewService(db, files.Workspace, "agent")
 	}
 	ev := events.NewService(db)
 	srv := &Server{db: db, events: ev, tasks: tasks.NewService(db, ev, nil)}
@@ -139,6 +140,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 	}
 	if deliveries != nil {
 		deliveries.CompleteTask = srv.tasks.CompleteDelivery
+		agentDeliveries.CompleteTask = srv.tasks.CompleteDelivery
 	}
 	if providerService != nil {
 		srv.tasks.Executor = tasks.ImageExecutor(providerService, deliveries)
@@ -149,7 +151,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		srv.tasks.BillingGate = qs.Billing
 	}
 	srv.turns = agent.NewTurns(db)
-	srv.mcp = designmcp.New(origin, srv.turns, designmcp.Services{Objects: store.Objects{DB: db}, Generation: generation.Service{Providers: providerService, Tasks: srv.tasks}, Tasks: srv.tasks, Delivery: deliveries})
+	srv.mcp = designmcp.New(origin, srv.turns, designmcp.Services{Objects: store.Objects{DB: db}, Generation: generation.Service{Providers: providerService, Tasks: srv.tasks}, Tasks: srv.tasks, Delivery: agentDeliveries})
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")

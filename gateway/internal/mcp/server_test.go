@@ -307,3 +307,78 @@ func TestExecuteDisconnectOnlyStopsWaiting(t *testing.T) {
 		t.Fatal("disconnect cancelled durable generation", task, e)
 	}
 }
+
+func TestMetadataObjectCreateUpdateReplayAndNestedValidation(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	objects := store.Objects{DB: f.db}
+	raw, e := objects.Mutate(ctx, f.scope.ProjectID, "composition_types", store.Mutation{RequestID: "type", Action: "create", Value: json.RawMessage(`{"label":"Metadata"}`)})
+	if e != nil {
+		t.Fatal(e)
+	}
+	var typ map[string]any
+	json.Unmarshal(raw, &typ)
+	listed, e := f.client.ListTools(ctx, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, tool := range listed.Tools {
+		if tool.Name == "design_composition_edit" || tool.Name == "design_resource_edit" {
+			b, _ := json.Marshal(tool.InputSchema)
+			var schema map[string]any
+			json.Unmarshal(b, &schema)
+			value := schema["properties"].(map[string]any)["value"].(map[string]any)
+			if value["type"] != "object" {
+				t.Errorf("%s value schema must describe object: %s", tool.Name, b)
+			}
+		}
+	}
+	composition := ""
+	for _, kind := range []string{"composition", "resource"} {
+		value := map[string]any{"name": "Initial", "type_id": typ["id"]}
+		if kind == "resource" {
+			value = map[string]any{"composition_id": composition, "description": "Initial"}
+		}
+		body := map[string]any{"requestId": kind + "-create", "action": "create", "value": value}
+		wire, _ := json.Marshal(body)
+		created := call(t, f.client, "design_"+kind+"_edit", string(wire))
+		id, ok := created["id"].(string)
+		if !ok {
+			t.Fatalf("valid %s create rejected: %v", kind, created)
+		}
+		if kind == "composition" {
+			composition = id
+		}
+		if replay := call(t, f.client, "design_"+kind+"_edit", string(wire)); replay["id"] != id {
+			t.Fatal("create replay changed identity", replay)
+		}
+		field := "name"
+		if kind == "resource" {
+			field = "description"
+		}
+		body = map[string]any{"requestId": kind + "-update", "action": "update", "id": id, "value": map[string]any{field: "Updated"}}
+		wire, _ = json.Marshal(body)
+		updated := call(t, f.client, "design_"+kind+"_edit", string(wire))
+		if updated[field] != "Updated" {
+			t.Fatal("update failed", updated)
+		}
+		if replay := call(t, f.client, "design_"+kind+"_edit", string(wire)); replay[field] != "Updated" || replay["id"] != id {
+			t.Fatal("update replay failed", replay)
+		}
+		body["value"] = map[string]any{field: "Changed"}
+		wire, _ = json.Marshal(body)
+		if r := call(t, f.client, "design_"+kind+"_edit", string(wire)); r["error"] == nil {
+			t.Fatal("changed request identity replayed", r)
+		}
+		body["requestId"] = kind + "-invalid"
+		body["value"] = map[string]any{field: "Bad", "unknown": true}
+		wire, _ = json.Marshal(body)
+		if r := call(t, f.client, "design_"+kind+"_edit", string(wire)); r["error"] == nil {
+			t.Fatal("unknown nested field accepted", r)
+		}
+		got := call(t, f.client, "design_"+kind+"_get", fmt.Sprintf(`{"id":%q}`, id))
+		if got[field] != "Updated" {
+			t.Fatal("rejected input changed stored metadata", got)
+		}
+	}
+}

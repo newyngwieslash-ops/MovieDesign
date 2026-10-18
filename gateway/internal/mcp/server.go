@@ -17,6 +17,7 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
 	"net/http"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -123,7 +124,8 @@ func business(value any, err error) *sdk.CallToolResult {
 	return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(raw)}}, StructuredContent: value}
 }
 func add[I any](s *Server, server *sdk.Server, scope agent.ToolScope, name, description string, call func(context.Context, I, []byte) (any, error)) {
-	schema, e := jsonschema.For[I](nil)
+	// Public RawMessage fields carry JSON objects, never Go byte-array data.
+	schema, e := jsonschema.For[I](&jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{reflect.TypeFor[json.RawMessage](): {Type: "object"}}})
 	if e != nil {
 		panic(e)
 	}
