@@ -20,6 +20,7 @@ type Host struct {
 	client         *http.Client
 	active         View
 	fingerprint    string
+	tools          []string
 }
 type Bootstrap struct {
 	Password string `json:"password"`
@@ -46,7 +47,7 @@ func fingerprint(v View, version string) string {
 
 // The native parent creates a private ACL directory before giving this path to the
 // gateway. Only DPAPI ciphertext crosses disk; native consumes and removes it.
-func NewHost(s *Settings, dir string) (*Host, error) {
+func NewHost(s *Settings, dir string, connections ...MCPConnection) (*Host, error) {
 	v, version, err := s.Read(context.Background())
 	if err != nil {
 		return nil, err
@@ -55,7 +56,11 @@ func NewHost(s *Settings, dir string) (*Host, error) {
 	if v.Config != nil {
 		c = *v.Config
 	}
-	config, err := BuildConfig(c, MCPConnection{})
+	m := MCPConnection{}
+	if len(connections) > 0 {
+		m = connections[0]
+	}
+	config, err := BuildConfig(c, m)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +84,7 @@ func NewHost(s *Settings, dir string) (*Host, error) {
 	if err = encrypted.Put("launch", string(raw)); err != nil {
 		return nil, err
 	}
-	return &Host{password: password, base: "http://127.0.0.1:4096", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}, active: v, fingerprint: fingerprint(v, version)}, nil
+	return &Host{password: password, base: "http://127.0.0.1:4096", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}, tools: m.Tools, active: v, fingerprint: fingerprint(v, version)}, nil
 }
 func (h *Host) read(ctx context.Context, path string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", h.base+path, nil)
@@ -123,12 +128,16 @@ func (h *Host) readyError(ctx context.Context) error {
 	if err != nil {
 		return errors.New("运行时配置加载未完成")
 	}
-	if verifyPermissions(raw) != nil {
+	if verifyPermissions(raw, h.tools...) != nil {
 		return errors.New("运行时权限校验未通过")
 	}
 	return nil
 }
-func verifyPermissions(raw []byte) error {
+func verifyPermissions(raw []byte, tools ...string) error {
+	allowed := map[string]bool{}
+	for _, tool := range tools {
+		allowed[tool] = true
+	}
 	var agents []struct {
 		Name       string                                         `json:"name"`
 		Permission []struct{ Permission, Pattern, Action string } `json:"permission"`
@@ -151,6 +160,7 @@ func verifyPermissions(raw []byte) error {
 			return errors.New("default deny absent")
 		}
 		question := false
+		granted := map[string]bool{}
 		for _, r := range a.Permission[last+1:] {
 			if r.Action == "deny" {
 				continue
@@ -159,10 +169,19 @@ func verifyPermissions(raw []byte) error {
 				question = true
 				continue
 			}
+			if a.Name == "build" && allowed[r.Permission] && r.Pattern == "*" && r.Action == "allow" {
+				granted[r.Permission] = true
+				continue
+			}
 			return errors.New("unapproved effective permission")
 		}
 		if a.Name == "build" {
 			found = question
+			for _, tool := range tools {
+				if !granted[tool] {
+					return errors.New("MCP permission missing")
+				}
+			}
 		}
 	}
 	if !found {

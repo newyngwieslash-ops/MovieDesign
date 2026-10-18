@@ -95,6 +95,15 @@ func (s *Service) Query(ctx context.Context, p, id string) (TaskView, error) {
 // ReplaySubmission lets capability admission replay an original public request
 // before looking up mutable providers/capabilities. A miss authorizes no work.
 func (s *Service) ReplaySubmission(ctx context.Context, p, key string, wire []byte) (TaskView, bool, error) {
+	return s.ReplaySubmissionOperation(ctx, p, key, wire, "")
+}
+func submissionOperation(op string) string {
+	if op == "mcp" {
+		return "tasks.submit.mcp"
+	}
+	return "tasks.submit"
+}
+func (s *Service) ReplaySubmissionOperation(ctx context.Context, p, key string, wire []byte, operation string) (TaskView, bool, error) {
 	var v TaskView
 	if e := scope(p, key); e != nil {
 		return v, false, e
@@ -104,7 +113,7 @@ func (s *Service) ReplaySubmission(ctx context.Context, p, key string, wire []by
 		return v, false, invalid("Invalid original wire input")
 	}
 	var input, state, receipt string
-	e = s.DB.QueryRowContext(ctx, "SELECT input_json,state,coalesce(response_json,'') FROM write_requests WHERE project_id=? AND operation='tasks.submit' AND request_id=?", p, key).Scan(&input, &state, &receipt)
+	e = s.DB.QueryRowContext(ctx, "SELECT input_json,state,coalesce(response_json,'') FROM write_requests WHERE project_id=? AND operation=? AND request_id=?", p, submissionOperation(operation), key).Scan(&input, &state, &receipt)
 	if errors.Is(e, sql.ErrNoRows) {
 		return v, false, nil
 	}
@@ -345,7 +354,7 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 			return v, invalid("Invalid original wire input")
 		}
 	}
-	result, e := store.WriteRequest(ctx, s.DB, store.Scope{ProjectID: p, Operation: "tasks.submit", RequestID: i.RequestID}, identity, func(tx *sql.Tx) ([]byte, error) {
+	result, e := store.WriteRequest(ctx, s.DB, store.Scope{ProjectID: p, Operation: submissionOperation(i.Operation), RequestID: i.RequestID}, identity, func(tx *sql.Tx) ([]byte, error) {
 		if e := validateInput(i); e != nil {
 			return nil, e
 		}

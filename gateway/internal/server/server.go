@@ -7,6 +7,8 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/agent"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/generation"
+	designmcp "github.com/newyngwieslash-ops/MovieDesign/gateway/internal/mcp"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
@@ -39,6 +41,8 @@ func reject(w http.ResponseWriter, status int, code, message string) {
 }
 
 type Server struct {
+	mcp   *designmcp.Server
+	turns *agent.Turns
 	http.Handler
 	workspace              *workspace.Workspace
 	db                     *sql.DB
@@ -60,6 +64,9 @@ func (s *Server) BeginShutdown() {
 	s.mu.Unlock()
 	s.tasks.Stop()
 	s.events.Close()
+	if s.mcp != nil {
+		_ = s.mcp.CloseEpoch("")
+	}
 }
 func (s *Server) Close() error {
 	s.BeginShutdown()
@@ -102,6 +109,10 @@ func New(origin string, db *sql.DB, workspaceRoot string) (*Server, error) {
 	srv := newHandler(origin, db, workspace.NewService(db, ws), providers.NewService(db, secrets)).(*Server)
 	srv.workspace = ws
 	if db != nil {
+		if err = srv.turns.Recover(context.Background()); err != nil {
+			srv.Close()
+			return nil, err
+		}
 		if err = srv.tasks.Recover(context.Background()); err != nil {
 			srv.Close()
 			return nil, err
@@ -137,6 +148,8 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 	if providerService != nil {
 		srv.tasks.BillingGate = qs.Billing
 	}
+	srv.turns = agent.NewTurns(db)
+	srv.mcp = designmcp.New(origin, srv.turns, designmcp.Services{Objects: store.Objects{DB: db}, Generation: generation.Service{Providers: providerService, Tasks: srv.tasks}, Tasks: srv.tasks, Delivery: deliveries})
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -171,6 +184,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID, Range")
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == "/mcp" {
+			srv.mcp.ServeHTTP(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/agent/") {

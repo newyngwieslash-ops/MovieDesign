@@ -1,9 +1,8 @@
 package server
 
 import (
-	"encoding/json"
 	"errors"
-	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/generation"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
@@ -13,20 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 )
-
-type generationRequest struct {
-	RequestID    string          `json:"requestId"`
-	SessionID    string          `json:"session_id,omitempty"`
-	CapabilityID string          `json:"capability_id"`
-	Prompt       string          `json:"prompt"`
-	Params       map[string]any  `json:"params"`
-	References   []string        `json:"references"`
-	Count        *int            `json:"count,omitempty"`
-	Output       delivery.Output `json:"output"`
-	QuoteID      *string         `json:"quote_id,omitempty"`
-}
 
 func generationMethod(path, method string) bool {
 	return (path == "/api/generate/image" || path == "/api/generate/estimate" || path == "/api/generate/mask" || path == "/api/v3/capabilities/get") && method == "POST" || (path == "/api/v3/capabilities" || path == "/api/knowledge/providers/openai-images.md") && method == "GET"
@@ -74,126 +60,23 @@ func serveGenerate(w http.ResponseWriter, r *http.Request, ps *providers.Service
 		reject(w, 400, "invalid_input", "Invalid generation body")
 		return
 	}
-	request, e := store.DecodeValue[generationRequest](raw)
+	request, e := store.DecodeValue[generation.Request](raw)
 	if e != nil {
 		reject(w, 400, "invalid_input", "Invalid generation schema")
 		return
 	}
-	estimate := r.URL.Path == "/api/generate/estimate"
-	if estimate {
-		previous, found, err := ps.ReplayQuote(r.Context(), p, request.RequestID, raw)
-		if err != nil {
-			generationError(w, err)
-			return
-		}
-		if found {
-			respond(w, 200, previous)
-			return
-		}
+	result, e := (generation.Service{Providers: ps, Tasks: ts}).Admit(r.Context(), p, request, raw, r.URL.Path == "/api/generate/estimate", "")
+	if e != nil {
+		generationError(w, e)
+		return
+	}
+	if result.Quote != nil {
+		respond(w, 200, result.Quote)
 	} else {
-		previous, found, err := ts.ReplaySubmission(r.Context(), p, request.RequestID, raw)
-		if err != nil {
-			generationError(w, err)
-			return
-		}
-		if found {
-			respond(w, 202, map[string]string{"task_id": previous.ID})
-			return
-		}
+		respond(w, 202, map[string]string{"task_id": result.Task.ID})
 	}
-	var fields map[string]json.RawMessage
-	json.Unmarshal(raw, &fields)
-	for _, key := range []string{"prompt", "params", "references", "output", "count", "quote_id", "session_id"} {
-		if b, ok := fields[key]; ok && string(b) == "null" {
-			reject(w, 400, "invalid_input", key+" cannot be null")
-			return
-		}
-	}
-	count := 1
-	if request.Params == nil {
-		request.Params = map[string]any{}
-	}
-	if request.References == nil {
-		request.References = []string{}
-	}
-	if request.Count != nil {
-		count = *request.Count
-	}
-	if !strings.HasPrefix(request.CapabilityID, "image:") || len(request.CapabilityID) <= 6 {
-		reject(w, 400, "invalid_input", "Expected an explicit image capability ID")
-		return
-	}
-	f, e := ps.Resolve(strings.TrimPrefix(request.CapabilityID, "image:"))
-	if e != nil {
-		generationError(w, e)
-		return
-	}
-	cap := providers.ImageCapability(f.Config)
-	if f.Config.Kind != "image" {
-		reject(w, 400, "invalid_input", "Unsupported image capability")
-		return
-	}
-	output, e := json.Marshal(request.Output)
-	if e != nil {
-		generationError(w, e)
-		return
-	}
-	input := providers.GenerationInput{ProjectID: p, Prompt: request.Prompt, Params: request.Params, References: request.References, Count: count, Output: output}
-	if e = providers.Validate(cap, input); e != nil {
-		generationError(w, e)
-		return
-	}
-	input.Assets, e = ps.FreezeReferences(r.Context(), p, input, f)
-	if e != nil {
-		generationError(w, e)
-		return
-	}
-	params, _ := json.Marshal(request.Params)
-	task := tasks.Input{RequestID: request.RequestID, SessionID: request.SessionID, CapabilityID: request.CapabilityID, Prompt: request.Prompt, Params: params, Output: request.Output, Count: count, Assets: input.Assets, Provider: f, OriginalWire: raw}
-	for i, id := range request.References {
-		task.References = append(task.References, tasks.Reference{AssetID: id, Role: providers.ReferenceRole(cap, i)})
-	}
-	if e = ts.ValidateAdmission(r.Context(), p, task); e != nil {
-		generationError(w, e)
-		return
-	}
-	quote, e := providers.Estimate(input, f)
-	if e != nil {
-		generationError(w, e)
-		return
-	}
-	if estimate {
-		if request.QuoteID != nil {
-			reject(w, 400, "invalid_input", "Estimate does not accept quote_id")
-			return
-		}
-		quote, e = ps.SaveQuote(r.Context(), p, request.RequestID, raw, input, f)
-		if e != nil {
-			generationError(w, e)
-			return
-		}
-		respond(w, 200, quote)
-		return
-	}
-	if request.QuoteID != nil {
-		saved, err := ps.QuoteBinding(r.Context(), p, *request.QuoteID)
-		if err != nil {
-			generationError(w, err)
-			return
-		}
-		if saved.Quote.InputHash != quote.InputHash || saved.Quote.ExpiresAt <= time.Now().UnixMilli() {
-			reject(w, 409, "waiting_user", "Quote expired or input/configuration changed; estimate again")
-			return
-		}
-		task.QuoteID = saved.Quote.QuoteID
-	}
-	result, e := ts.Submit(r.Context(), p, task)
-	if e != nil {
-		generationError(w, e)
-		return
-	}
-	respond(w, 202, map[string]string{"task_id": result.ID})
 }
+
 func serveCapabilities(w http.ResponseWriter, r *http.Request, s *providers.Service) {
 	if r.URL.Path == "/api/knowledge/providers/openai-images.md" {
 		if r.URL.RawQuery != "" {

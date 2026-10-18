@@ -68,7 +68,7 @@ func BuildConfig(c LLMConfig, m MCPConnection) ([]byte, error) {
 			}
 			permission[tool] = "allow"
 		}
-		config["mcp"] = map[string]any{"design": map[string]any{"type": "remote", "url": m.URL, "oauth": false, "headers": map[string]string{"Origin": m.Origin, "Authorization": "Bearer " + m.Token}}}
+		config["mcp"] = map[string]any{"design": map[string]any{"type": "remote", "url": m.URL, "oauth": false, "timeout": 86400000, "headers": map[string]string{"Origin": m.Origin, "Authorization": "Bearer " + m.Token}}}
 	} else if len(m.Tools) > 0 || m.Token != "" || m.Origin != "" {
 		return nil, ErrInvalid
 	}

@@ -19,11 +19,12 @@ func (s *Server) StartAgentHost(dir string, preparationFailed bool) error {
 		return nil
 	}
 	s.agentBootstrap = dir
-	h, err := agent.NewHost(s.llm, dir)
+	h, err := agent.NewHost(s.llm, dir, s.mcp.Connection())
 	if err != nil {
 		return err
 	}
 	s.agentHost = h
+	s.turns.Abort = h.Abort
 	return nil
 }
 func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +55,12 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) {
 			settings, _, err = s.llm.Read(r.Context())
 			value = agent.Status{Configured: settings.Config != nil, Message: "agent 配置目录准备失败；请检查应用数据目录权限后重启。工作区仍可使用。"}
 		} else {
-			value = s.agentHost.Status(r.Context(), s.llm, s.agentBootstrap)
+			status := s.agentHost.Status(r.Context(), s.llm, s.agentBootstrap)
+			status.ToolsReady = status.HostReady && s.agentHost.ToolsConnected(r.Context()) && s.mcp.CatalogReady()
+			if status.ToolsReady {
+				status.Message = "受管运行时与工具连接已就绪；聊天推理尚未开放。"
+			}
+			value = status
 		}
 	} else if r.Method == "GET" {
 		value, _, err = s.llm.Read(r.Context())

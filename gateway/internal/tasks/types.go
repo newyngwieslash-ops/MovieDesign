@@ -30,6 +30,7 @@ type Reference struct {
 	Role      string `json:"role"`
 }
 type Input struct {
+	Operation    string                     `json:"-"`
 	RequestID    string                     `json:"requestId"`
 	SessionID    string                     `json:"session_id,omitempty"`
 	CapabilityID string                     `json:"capability_id"`

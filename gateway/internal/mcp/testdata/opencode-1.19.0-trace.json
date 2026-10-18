@@ -1,0 +1,508 @@
+{
+  "budget_count": 3,
+  "model_requests": 2,
+  "native_events": [
+    {
+      "id": "evt_14ed054ae0013ke5TVu98qW6EL",
+      "properties": {
+        "part": {
+          "id": "prt_14ed0519e0013teva2PGS8iAdL",
+          "messageID": "msg_14ed05195001vX06OjHqfjumqT",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "text": "Run the local fixture tools.",
+          "type": "text"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323638446
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed059d000164PkhF3a7l3po5",
+      "properties": {
+        "part": {
+          "id": "prt_14ed059d00013EpbCOgDX3Ln1v",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "type": "step-start"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639760
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed059d600119ubP5pyodhoDK",
+      "properties": {
+        "part": {
+          "callID": "native_parallel_a",
+          "id": "prt_14ed059d6001lwc0q3OmDLIfqn",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "state": {
+            "input": {},
+            "raw": "",
+            "status": "pending"
+          },
+          "tool": "design_design_capability_list",
+          "type": "tool"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639766
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed059e6001xk4QhDuV6cyGMz",
+      "properties": {
+        "part": {
+          "callID": "native_parallel_a",
+          "id": "prt_14ed059d6001lwc0q3OmDLIfqn",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "state": {
+            "input": {},
+            "status": "running",
+            "time": {
+              "start": 1792323639782
+            }
+          },
+          "tool": "design_design_capability_list",
+          "type": "tool"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639782
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed059eb001OrZ0pH4Blgjh5r",
+      "properties": {
+        "part": {
+          "callID": "native_parallel_b",
+          "id": "prt_14ed059eb001e6EytH2LZ9CDFE",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "state": {
+            "input": {},
+            "raw": "",
+            "status": "pending"
+          },
+          "tool": "design_design_composition_search",
+          "type": "tool"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639787
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed059f3001xXR4qL0FK3jdu0",
+      "properties": {
+        "part": {
+          "callID": "native_parallel_b",
+          "id": "prt_14ed059eb001e6EytH2LZ9CDFE",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "state": {
+            "input": {},
+            "status": "running",
+            "time": {
+              "start": 1792323639795
+            }
+          },
+          "tool": "design_design_composition_search",
+          "type": "tool"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639795
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed059f7001fPj9ct86zgwoqN",
+      "properties": {
+        "part": {
+          "callID": "native_question",
+          "id": "prt_14ed059f7001IAF01Z9wwQilB0",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "state": {
+            "input": {},
+            "raw": "",
+            "status": "pending"
+          },
+          "tool": "question",
+          "type": "tool"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639799
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05a02001UwG895giSH1Xkj",
+      "properties": {
+        "id": "que_14ed05a01001jqBUhg6OuRhTMO",
+        "questions": [
+          {
+            "header": "Fixture",
+            "options": [
+              {
+                "description": "Finish local fixture",
+                "label": "Continue"
+              }
+            ],
+            "question": "Choose fixture outcome"
+          }
+        ],
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "tool": {
+          "callID": "native_question",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry"
+        }
+      },
+      "type": "question.asked"
+    },
+    {
+      "id": "evt_14ed05a06001yTu1aaV243lW6T",
+      "properties": {
+        "part": {
+          "callID": "native_question",
+          "id": "prt_14ed059f7001IAF01Z9wwQilB0",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "state": {
+            "input": {
+              "questions": [
+                {
+                  "header": "Fixture",
+                  "options": [
+                    {
+                      "description": "Finish local fixture",
+                      "label": "Continue"
+                    }
+                  ],
+                  "question": "Choose fixture outcome"
+                }
+              ]
+            },
+            "status": "running",
+            "time": {
+              "start": 1792323639814
+            }
+          },
+          "tool": "question",
+          "type": "tool"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639814
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05a110014uBvia1iSw0Hkq",
+      "properties": {
+        "part": {
+          "callID": "native_parallel_b",
+          "id": "prt_14ed059eb001e6EytH2LZ9CDFE",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "state": {
+            "input": {},
+            "metadata": {
+              "truncated": false
+            },
+            "output": "{\"items\":[],\"coverage\":{\"total\":0,\"next_offset\":0,\"exhausted\":true}}",
+            "status": "completed",
+            "time": {
+              "end": 1792323639825,
+              "start": 1792323639795
+            },
+            "title": ""
+          },
+          "tool": "design_design_composition_search",
+          "type": "tool"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639825
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05a19001lmiO0c0DcagiZG",
+      "properties": {
+        "part": {
+          "callID": "native_parallel_a",
+          "id": "prt_14ed059d6001lwc0q3OmDLIfqn",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "state": {
+            "input": {},
+            "metadata": {
+              "truncated": false
+            },
+            "output": "{\"capabilities\":[{\"id\":\"image:local\",\"operation\":\"image\",\"protocol\":\"openai-images\",\"model_id\":\"fixture\",\"knowledgeCard\":\"knowledge/providers/openai-images.md\",\"paramSchema\":{\"type\":\"object\",\"properties\":{\"background\":{\"type\":\"string\",\"enum\":[\"auto\",\"opaque\",\"transparent\"]},\"moderation\":{\"type\":\"string\",\"enum\":[\"auto\",\"low\"]},\"output_compression\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100},\"output_format\":{\"type\":\"string\",\"enum\":[\"png\",\"jpeg\"]},\"quality\":{\"type\":\"string\",\"enum\":[\"auto\",\"low\",\"medium\",\"high\"]},\"safety_identifier\":{\"type\":\"string\",\"maxLength\":128},\"size\":{\"type\":\"string\",\"enum\":[\"1024x1024\"]}},\"additionalProperties\":false},\"constraints\":{\"max_prompt_characters\":32000,\"max_image_bytes\":20971520,\"max_pixels\":16777216},\"max_prompt_bytes\":65536,\"max_count\":2,\"max_references\":2,\"sizes\":[\"1024x1024\"],\"edit\":true,\"duration_seconds\":[],\"audio\":false}],\"coverage\":{\"total\":1,\"next_offset\":1,\"exhausted\":true}}",
+            "status": "completed",
+            "time": {
+              "end": 1792323639833,
+              "start": 1792323639782
+            },
+            "title": ""
+          },
+          "tool": "design_design_capability_list",
+          "type": "tool"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639833
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05a49001EkVMRaAbMuZvHc",
+      "properties": {
+        "part": {
+          "callID": "native_question",
+          "id": "prt_14ed059f7001IAF01Z9wwQilB0",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "state": {
+            "input": {
+              "questions": [
+                {
+                  "header": "Fixture",
+                  "options": [
+                    {
+                      "description": "Finish local fixture",
+                      "label": "Continue"
+                    }
+                  ],
+                  "question": "Choose fixture outcome"
+                }
+              ]
+            },
+            "metadata": {
+              "answers": [
+                [
+                  "Continue"
+                ]
+              ],
+              "truncated": false
+            },
+            "output": "User has answered your questions: \"Choose fixture outcome\"=\"Continue\". You can now continue with the user's answers in mind.",
+            "status": "completed",
+            "time": {
+              "end": 1792323639881,
+              "start": 1792323639814
+            },
+            "title": "Asked 1 question"
+          },
+          "tool": "question",
+          "type": "tool"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639881
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05a50001WfmAM0l9OeEkxJ",
+      "properties": {
+        "part": {
+          "cost": 0,
+          "id": "prt_14ed05a4f001M0knEXOyCAkyz1",
+          "messageID": "msg_14ed054c4001k2tpmZxKWtJzry",
+          "reason": "tool-calls",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "tokens": {
+            "cache": {
+              "read": 0,
+              "write": 0
+            },
+            "input": 0,
+            "output": 0,
+            "reasoning": 0
+          },
+          "type": "step-finish"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639887
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05aa3001z1KPHnzEttyQnX",
+      "properties": {
+        "part": {
+          "id": "prt_14ed05aa3001R29qMy3387rU5T",
+          "messageID": "msg_14ed05a600013RCGBsa2hzmnkK",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "type": "step-start"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639971
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05aa6001bAQwqSUh6k0BR7",
+      "properties": {
+        "part": {
+          "id": "prt_14ed05aa6001HTv5uFxaSC0wYo",
+          "messageID": "msg_14ed05a600013RCGBsa2hzmnkK",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "text": "",
+          "time": {
+            "start": 1792323639974
+          },
+          "type": "text"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639974
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05aab001iG46X2amaaTUfT",
+      "properties": {
+        "part": {
+          "id": "prt_14ed05aa6001HTv5uFxaSC0wYo",
+          "messageID": "msg_14ed05a600013RCGBsa2hzmnkK",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "text": "Local fixture complete.",
+          "time": {
+            "end": 1792323639979,
+            "start": 1792323639974
+          },
+          "type": "text"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639979
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05ab0001jgcSwPg3Oxt3R7",
+      "properties": {
+        "part": {
+          "cost": 0,
+          "id": "prt_14ed05aaf001NVmOfZnhKmKODC",
+          "messageID": "msg_14ed05a600013RCGBsa2hzmnkK",
+          "reason": "stop",
+          "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+          "tokens": {
+            "cache": {
+              "read": 0,
+              "write": 0
+            },
+            "input": 0,
+            "output": 0,
+            "reasoning": 0
+          },
+          "type": "step-finish"
+        },
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD",
+        "time": 1792323639984
+      },
+      "type": "message.part.updated"
+    },
+    {
+      "id": "evt_14ed05abb002lX5DMAi50OaBLJ",
+      "properties": {
+        "sessionID": "ses_eb12fb092ffeBRNpTgjXIeXkQD"
+      },
+      "type": "session.idle"
+    }
+  ],
+  "rpc": [
+    {
+      "id": 0,
+      "jsonrpc": "2.0",
+      "method": "initialize",
+      "params": {
+        "capabilities": {
+          "roots": {}
+        },
+        "clientInfo": {
+          "name": "opencode",
+          "version": "1.19.0"
+        },
+        "protocolVersion": "2025-11-25"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "notifications/initialized"
+    },
+    {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "method": "tools/list"
+    },
+    {
+      "id": 0,
+      "jsonrpc": "2.0",
+      "method": "initialize",
+      "params": {
+        "capabilities": {
+          "roots": {}
+        },
+        "clientInfo": {
+          "name": "opencode",
+          "version": "1.19.0"
+        },
+        "protocolVersion": "2025-11-25"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "notifications/initialized"
+    },
+    {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "method": "tools/list"
+    },
+    {
+      "id": 2,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "_meta": {
+          "progressToken": 2
+        },
+        "arguments": {},
+        "name": "design_capability_list"
+      }
+    },
+    {
+      "id": 3,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "_meta": {
+          "progressToken": 3
+        },
+        "arguments": {},
+        "name": "design_composition_search"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "notifications/cancelled",
+      "params": {
+        "reason": "AbortError: The operation was aborted.",
+        "requestId": 2
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "notifications/cancelled",
+      "params": {
+        "reason": "AbortError: The operation was aborted.",
+        "requestId": 3
+      }
+    }
+  ],
+  "version": "1.19.0"
+}

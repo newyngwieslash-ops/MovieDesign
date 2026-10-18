@@ -63,3 +63,13 @@ func TestPortConflictStatusDoesNotContactUnrelatedHost(t *testing.T) {
 		}
 	}
 }
+
+func TestExactMCPPermissionsRequiredForReadiness(t *testing.T) {
+	raw := []byte(`[{"name":"build","permission":[{"permission":"*","pattern":"*","action":"deny"},{"permission":"question","pattern":"*","action":"allow"},{"permission":"design_design_execute","pattern":"*","action":"allow"}]}]`)
+	if e := verifyPermissions(raw, "design_design_execute"); e != nil {
+		t.Fatal(e)
+	}
+	if verifyPermissions(raw) == nil || verifyPermissions(raw, "design_design_execute", "design_design_task_wait") == nil {
+		t.Fatal("unexpected/missing MCP grant accepted")
+	}
+}
