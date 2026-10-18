@@ -71,16 +71,18 @@ type Headers struct {
 	Project      string `json:"OpenAI-Project,omitempty"`
 }
 type Config struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	Kind       string     `json:"kind"`
-	Protocol   string     `json:"protocol"`
-	BaseURL    string     `json:"base_url"`
-	ModelID    string     `json:"model_id"`
-	Enabled    bool       `json:"enabled"`
-	Headers    Headers    `json:"headers"`
-	Capability Capability `json:"capability"`
-	Pricing    *Pricing   `json:"pricing"`
+	TextContext int        `json:"text_context,omitempty"`
+	TextOutput  int        `json:"text_output,omitempty"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Kind        string     `json:"kind"`
+	Protocol    string     `json:"protocol"`
+	BaseURL     string     `json:"base_url"`
+	ModelID     string     `json:"model_id"`
+	Enabled     bool       `json:"enabled"`
+	Headers     Headers    `json:"headers"`
+	Capability  Capability `json:"capability"`
+	Pricing     *Pricing   `json:"pricing"`
 }
 type View struct {
 	Config     Config `json:"config"`
@@ -125,7 +127,7 @@ func ValidateConfig(c Config) error {
 	if !identifier.MatchString(c.ID) || len(c.ID) > 128 || strings.TrimSpace(c.Name) == "" || len(c.Name) > 160 || strings.TrimSpace(c.ModelID) == "" || len(c.ModelID) > 256 {
 		return invalid("Invalid identity, name or model")
 	}
-	if c.Kind != "image" && c.Kind != "video" || c.Kind == "image" && c.Protocol != "openai-images" || c.Kind == "video" && c.Protocol != "ark-video" {
+	if c.Kind != "image" && c.Kind != "video" && c.Kind != "llm" || c.Kind == "image" && c.Protocol != "openai-images" || c.Kind == "video" && c.Protocol != "ark-video" || c.Kind == "llm" && (c.Protocol != "openai-compatible" && c.Protocol != "openai" && c.Protocol != "anthropic" || c.TextContext < 1024 || c.TextContext > 2000000 || c.TextOutput < 1 || c.TextOutput >= c.TextContext) {
 		return invalid("Unsupported kind/protocol; LLM is configured through opencode")
 	}
 	if err := ValidateBaseURL(c.BaseURL); err != nil {
@@ -159,14 +161,14 @@ func ValidateConfig(c Config) error {
 	if c.Kind == "image" && (len(cap.DurationSeconds) > 0 || cap.Audio) || c.Kind == "video" && (cap.Edit || cap.MaxCount != 1) {
 		return invalid("Capability not supported by protocol template")
 	}
-	if err := validateDeclaration(c); err != nil {
+	if err := validateDeclaration(c); c.Kind != "llm" && err != nil {
 		return err
 	}
 	if p := c.Pricing; p != nil {
 		if !regexp.MustCompile(`^[A-Z]{3}$`).MatchString(p.Currency) || p.MinorUnitScale < 0 || p.MinorUnitScale > 6 || p.UnitAmount < 0 || p.UnitAmount > 1e12 || p.CreditNumerator < 0 || p.CreditNumerator > 1e9 || p.CreditDenominator < 1 || p.CreditDenominator > 1e9 || p.EffectiveAt < 0 || strings.TrimSpace(p.Source) == "" || len(p.Source) > 200 || strings.TrimSpace(p.Version) == "" || len(p.Version) > 100 {
 			return invalid("Invalid pricing declaration")
 		}
-		if c.Kind == "image" && p.Unit != "image" || c.Kind == "video" && p.Unit != "second" {
+		if c.Kind == "image" && p.Unit != "image" || c.Kind == "video" && p.Unit != "second" || c.Kind == "llm" && p.Unit != "token" {
 			return invalid("Unsupported price unit")
 		}
 	}
@@ -260,6 +262,9 @@ func (s *Service) Execute(ctx context.Context, raw []byte) (Receipt, error) {
 		}
 		if err = ValidateConfig(*m.Config); err != nil {
 			return empty, err
+		}
+		if m.Config.Kind == "llm" || m.Config.TextContext != 0 || m.Config.TextOutput != 0 {
+			return empty, invalid("LLM is configured only through agent settings")
 		}
 		if m.Key != nil && (m.RemoveKey || len(*m.Key) < 1 || len(*m.Key) > 8192 || strings.IndexFunc(*m.Key, func(r rune) bool { return r < 33 || r > 126 }) >= 0) {
 			return empty, invalid("Invalid key or removal combination")

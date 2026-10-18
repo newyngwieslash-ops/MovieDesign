@@ -34,7 +34,7 @@ func TestGenerateAdmissionQuoteReplayAndBillingGate(t *testing.T) {
 	}
 	ps := providers.NewService(db, secrets)
 	posts := 0
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	remote := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		posts++
 		t.Error("billing gate leaked POST")
 		w.WriteHeader(500)

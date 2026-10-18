@@ -12,7 +12,23 @@ import (
 // One atomic Delivery batch owns all slots for an attempt. Its request identity
 // derives from the first opaque output (itself task+attempt+slot unique).
 func collectImages(s *providers.Service, d *delivery.Service) func(context.Context, Attempt) (Outcome, error) {
+	return collectOutputs(s, d, func(ctx context.Context, a Attempt, keys []string) ([]string, error) {
+		var result providers.ProviderResult
+		if e := json.Unmarshal(a.Result, &result); e != nil {
+			return nil, e
+		}
+		return s.CollectImages(ctx, a.ProjectID, result, a.Provider, keys)
+	})
+}
+func collectOutputs(s *providers.Service, d *delivery.Service, collect func(context.Context, Attempt, []string) ([]string, error)) func(context.Context, Attempt) (Outcome, error) {
 	return func(ctx context.Context, a Attempt) (Outcome, error) {
+		d := d
+		if a.Input.Actor == "agent" {
+			agentDelivery := delivery.NewService(s.DB, s.Files.Workspace, "agent")
+			agentDelivery.CompleteTask = d.CompleteTask
+			agentDelivery.Notify = d.Notify
+			d = agentDelivery
+		}
 		failed := func(e error) (Outcome, error) {
 			problem := &Problem{Source: "delivery", Code: "COLLECTION_IO", Message: "Saved result collection was interrupted; retry collection", Retryable: true}
 			var collection *providers.CollectionError
@@ -20,10 +36,6 @@ func collectImages(s *providers.Service, d *delivery.Service) func(context.Conte
 				problem.Code, problem.Message, problem.Retryable = collection.Code, collection.Message, collection.Retryable
 			}
 			return Outcome{Status: Failed, Problem: problem}, nil
-		}
-		var result providers.ProviderResult
-		if e := json.Unmarshal(a.Result, &result); e != nil {
-			return failed(e)
 		}
 		request := delivery.Request{Output: a.Input.Output}
 		keys := make([]string, len(a.Input.Output.Resources))
@@ -45,7 +57,7 @@ func collectImages(s *providers.Service, d *delivery.Service) func(context.Conte
 		if exists > 0 {
 			receipt, e = d.Recover(ctx, a.ProjectID, request.RequestID)
 		} else {
-			paths, err := s.CollectImages(ctx, a.ProjectID, result, a.Provider, keys)
+			paths, err := collect(ctx, a, keys)
 			if err != nil {
 				return failed(err)
 			}

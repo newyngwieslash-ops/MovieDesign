@@ -5,6 +5,18 @@ import (
 	"os"
 )
 
+func heldFilePath(f *os.File) (string, error) {
+	buf := make([]uint16, 32768)
+	n, e := windows.GetFinalPathNameByHandle(windows.Handle(f.Fd()), &buf[0], uint32(len(buf)), 0)
+	if e != nil {
+		return "", e
+	}
+	if n >= uint32(len(buf)) {
+		return "", invalid("Managed media path exceeds limit")
+	}
+	return windows.UTF16ToString(buf[:n]), nil
+}
+
 func fileIdentity(f *os.File) (int64, int64, error) {
 	var i windows.ByHandleFileInformation
 	e := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &i)

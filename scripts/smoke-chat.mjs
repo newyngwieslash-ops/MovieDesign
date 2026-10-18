@@ -12,7 +12,7 @@ const click=async(text,scope='document')=>{await wait(`(()=>{const b=[...${scope
 const input=(selector,value)=>evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});Object.getOwnPropertyDescriptor(${selector.startsWith('textarea')?'HTMLTextAreaElement':'HTMLInputElement'}.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
 const key=async(key,modifiers=0)=>{const code=key===' '?'Space':key,vk=({Enter:13,Backspace:8,Delete:46,ArrowDown:40,ArrowUp:38,Tab:9,' ':32})[key];await call('Input.dispatchKeyEvent',{type:'keyDown',key,code,modifiers,windowsVirtualKeyCode:vk,nativeVirtualKeyCode:vk,...(key==='Enter'?{text:'\r',unmodifiedText:'\r'}:key===' '?{text:' ',unmodifiedText:' '}:{})});await call('Input.dispatchKeyEvent',{type:'keyUp',key,code,modifiers,windowsVirtualKeyCode:vk,nativeVirtualKeyCode:vk});};
 const get=(p,path)=>evaluate(`fetch('http://127.0.0.1:8001${path}${path.includes('?')?'&':'?'}project_id=${p}').then(r=>r.json())`);
-const writes=()=>requests.filter(r=>r.method==='POST'&&r.url.startsWith('http://127.0.0.1:8001/api/'));
+const writes=()=>requests.filter(r=>r.method==='POST'&&r.url.startsWith('http://127.0.0.1:8001/api/')&&new URL(r.url).pathname!=='/api/canvas/content');
 let fixture,modelRequests=[],releaseHold,expected;
 async function supplier(listenPort=0){
  fixture=createServer(async(req,res)=>{

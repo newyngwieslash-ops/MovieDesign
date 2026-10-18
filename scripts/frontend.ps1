@@ -1,5 +1,6 @@
 param([ValidateSet('dev', 'build')][string]$Mode = 'build')
 $ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'build-media-tools.ps1')
 & (Join-Path $PSScriptRoot 'build-opencode.ps1')
 & (Join-Path $PSScriptRoot 'build-gateway.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Gateway preparation failed.' }

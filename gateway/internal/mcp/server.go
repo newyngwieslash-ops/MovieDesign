@@ -14,8 +14,10 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/generation"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
 	"net/http"
 	"reflect"
 	"sync"
@@ -23,6 +25,9 @@ import (
 )
 
 type Services struct {
+	Files      *workspace.Service
+	Questions  *questions.Service
+	FFprobe    string
 	Objects    store.Objects
 	Generation generation.Service
 	Tasks      *tasks.Service

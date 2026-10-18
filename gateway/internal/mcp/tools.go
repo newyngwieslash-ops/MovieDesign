@@ -13,7 +13,7 @@ import (
 	"slices"
 )
 
-var names = []string{"design_capability_list", "design_capability_get", "design_execute", "design_deliver", "design_task_query", "design_task_wait", "design_task_resolve", "design_composition_search", "design_composition_get", "design_composition_edit", "design_resource_get", "design_resource_edit"}
+var names = []string{"design_capability_list", "design_capability_get", "design_execute", "design_deliver", "design_task_query", "design_task_wait", "design_task_resolve", "design_composition_search", "design_composition_get", "design_composition_edit", "design_resource_get", "design_resource_edit", "design_read", "design_analyse_media", "design_document_write", "design_project_rules", "design_voice_search", "design_image_search"}
 
 func Names() []string { return slices.Clone(names) }
 func NativeNames() []string {
@@ -55,7 +55,9 @@ func invalid(message string) error {
 	return &store.DomainError{Status: 400, Code: "invalid_input", Message: message}
 }
 func (s *Server) register(server *sdk.Server, scope agent.ToolScope) {
-	add(s, server, scope, "design_execute", "Execute image capability and wait through billing; always declare output and stable requestId.", func(ctx context.Context, i executeInput, raw []byte) (any, error) {
+	s.documents(server, scope)
+	s.catalog(server, scope)
+	add(s, server, scope, "design_execute", "Execute image or configured-LLM text capability and wait through billing; always declare output and stable requestId.", func(ctx context.Context, i executeInput, raw []byte) (any, error) {
 		r, e := s.services.Generation.Admit(ctx, scope.ProjectID, generation.Request{RequestID: i.RequestID, SessionID: scope.SessionID, CapabilityID: i.CapabilityID, Prompt: i.Prompt, Params: i.Params, References: i.References, Count: i.Count, Output: i.Output, QuoteID: i.QuoteID}, raw, false, "mcp")
 		if e != nil {
 			return nil, e
@@ -84,7 +86,7 @@ func (s *Server) register(server *sdk.Server, scope agent.ToolScope) {
 		}
 		return s.services.Tasks.Resolve(ctx, scope.ProjectID, i.TaskID, tasks.ResolveInput{RequestID: i.RequestID, Action: i.Action, ExpectedRevision: i.ExpectedRevision})
 	})
-	add(s, server, scope, "design_capability_list", "List configured image capabilities with complete pagination coverage.", func(ctx context.Context, i pageInput, _ []byte) (any, error) {
+	add(s, server, scope, "design_capability_list", "List configured image and text capabilities with complete pagination coverage.", func(ctx context.Context, i pageInput, _ []byte) (any, error) {
 		caps, e := s.capabilities(ctx)
 		if e != nil {
 			return nil, e
@@ -99,14 +101,14 @@ func (s *Server) register(server *sdk.Server, scope agent.ToolScope) {
 		end := min(start+i.Limit, len(caps))
 		return map[string]any{"capabilities": caps[start:end], "coverage": store.Coverage{Total: len(caps), NextOffset: end, Exhausted: end == len(caps)}}, nil
 	})
-	add(s, server, scope, "design_capability_get", "Get one configured image capability, schema and provider knowledge card.", func(ctx context.Context, i getInput, _ []byte) (any, error) {
+	add(s, server, scope, "design_capability_get", "Get one configured capability, schema and provider knowledge card.", func(ctx context.Context, i getInput, _ []byte) (any, error) {
 		caps, e := s.capabilities(ctx)
 		if e != nil {
 			return nil, e
 		}
 		for _, cap := range caps {
 			if cap.ID == i.ID {
-				return map[string]any{"capability": cap, "knowledge": providers.ImageKnowledgeCard}, nil
+				return map[string]any{"capability": cap, "knowledge": providers.KnowledgeCard(cap.Operation)}, nil
 			}
 		}
 		return nil, providers.ErrNotFound
@@ -139,18 +141,5 @@ func (s *Server) register(server *sdk.Server, scope agent.ToolScope) {
 	}
 }
 func (s *Server) capabilities(ctx context.Context) ([]providers.Capability, error) {
-	caps := []providers.Capability{}
-	if s.services.Generation.Providers == nil {
-		return caps, nil
-	}
-	items, e := s.services.Generation.Providers.List(ctx)
-	if e != nil {
-		return nil, e
-	}
-	for _, v := range items {
-		if v.Config.Enabled && v.Config.Kind == "image" {
-			caps = append(caps, providers.ImageCapability(v.Config))
-		}
-	}
-	return caps, nil
+	return s.services.Generation.Capabilities(ctx)
 }

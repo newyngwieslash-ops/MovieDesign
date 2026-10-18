@@ -9,11 +9,12 @@ import (
 )
 
 type LLMConfig struct {
-	Protocol string `json:"protocol"`
-	BaseURL  string `json:"base_url"`
-	ModelID  string `json:"model_id"`
-	Context  int    `json:"context"`
-	Output   int    `json:"output"`
+	Pricing  *providers.Pricing `json:"pricing,omitempty"`
+	Protocol string             `json:"protocol"`
+	BaseURL  string             `json:"base_url"`
+	ModelID  string             `json:"model_id"`
+	Context  int                `json:"context"`
+	Output   int                `json:"output"`
 }
 type MCPConnection struct {
 	URL, Origin, Token string
@@ -23,10 +24,16 @@ type MCPConnection struct {
 var ErrInvalid = errors.New("invalid LLM configuration")
 
 func Validate(c LLMConfig) error {
+	if c.Pricing != nil {
+		raw, _ := json.Marshal(c)
+		if _, e := providers.TextProvider(raw, ""); e != nil {
+			return ErrInvalid
+		}
+	}
 	if c.Protocol != "openai-compatible" && c.Protocol != "openai" && c.Protocol != "anthropic" {
 		return ErrInvalid
 	}
-	if providers.ValidateBaseURL(c.BaseURL) != nil || strings.ContainsAny(c.BaseURL+c.ModelID, "{}\r\n") || strings.TrimSpace(c.ModelID) == "" || len(c.ModelID) > 256 || c.Context < 1024 || c.Context > 2000000 || c.Output < 1 || c.Output > c.Context {
+	if providers.ValidateBaseURL(c.BaseURL) != nil || strings.ContainsAny(c.BaseURL+c.ModelID, "{}\r\n") || strings.TrimSpace(c.ModelID) == "" || len(c.ModelID) > 256 || c.Context < 1024 || c.Context > 2000000 || c.Output < 1 || c.Output >= c.Context {
 		return ErrInvalid
 	}
 	return nil
@@ -44,7 +51,8 @@ func BuildConfig(c LLMConfig, m MCPConnection) ([]byte, error) {
 	external := map[string]string{"*": "deny", "{env:MOVIEDESIGN_TRUNCATE_GLOB}": "deny"}
 	permission["external_directory"] = external
 	config := map[string]any{"$schema": "https://opencode.ai/config.json", "permission": permission, "plugin": []string{}, "autoupdate": false, "share": "disabled", "lsp": false, "formatter": false, "watcher": map[string]any{"ignore": []string{"**"}}, "enabled_providers": []string{"moviedesign"}, "compaction": map[string]any{"auto": false}}
-	agents := map[string]any{"build": map[string]any{"permission": permission}}
+	agents := map[string]any{"build": map[string]any{"permission": permission, "prompt": mediaPrompt}}
+	agents["text"] = map[string]any{"mode": "primary", "description": "Tools-disabled document generation", "prompt": "按用户提供的原文要求生成最终文档正文。只输出正文，不调用任何工具。", "permission": map[string]any{"*": "deny", "external_directory": external}}
 	for _, name := range []string{"plan", "general", "explore"} {
 		agents[name] = map[string]any{"disable": true}
 	}

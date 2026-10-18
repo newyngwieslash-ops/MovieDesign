@@ -31,11 +31,12 @@ type Service struct {
 	stopping    bool
 	work        sync.WaitGroup
 	active      atomic.Int64
+	textSlot    chan struct{}
 }
 
 func NewService(db *sql.DB, e *events.Service, executor *Executor) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Service{DB: db, Events: e, Executor: executor, ctx: ctx, cancel: cancel}
+	return &Service{DB: db, Events: e, Executor: executor, ctx: ctx, cancel: cancel, textSlot: make(chan struct{}, 1)}
 }
 func (s *Service) begin() error {
 	s.mu.Lock()

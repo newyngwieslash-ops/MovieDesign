@@ -29,3 +29,16 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Pinned source references: [raw interpolation](https://github.com/anomalyco/opencode/blob/v1.19.0/packages/opencode/src/config/variable.ts#L30-L38), [configuration discovery](https://github.com/anomalyco/opencode/blob/v1.19.0/packages/opencode/src/config/config.ts), [owned global roots](https://github.com/anomalyco/opencode/blob/v1.19.0/packages/core/src/global.ts), [effective agent permissions](https://github.com/anomalyco/opencode/blob/v1.19.0/packages/opencode/src/agent/agent.ts), [SDK Go requirement](https://github.com/modelcontextprotocol/go-sdk/blob/v1.4.1/go.mod), and [SDK advisory / fixed 1.4.1](https://github.com/modelcontextprotocol/go-sdk/security/advisories/GHSA-89xv-2j6f-qhc8). These are source facts, separate from the saved live `/doc` schema and opt-in runtime checks in `gateway/internal/agent/runtime_test.go`.
+
+## Public media probe distribution (M5.5)
+
+- FFmpeg/ffprobe **9.0.2**, Gyan Windows x64 essentials static public distribution, GPL v3.
+- Publisher release: https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2
+- Pinned archive: https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip
+- Archive SHA256: `60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba`.
+- Extracted ffprobe.exe SHA256: `f0d36ecbbdd3bcfac3efa078c96c7271c2e68b3810595552ac3b7f17e9a65c52`.
+- Upstream source recorded in the publisher README: https://github.com/FFmpeg/FFmpeg/commit/946fcce07b ; publisher build details: https://www.gyan.dev/ffmpeg/builds/ . The archive's LICENSE and complete README/build configuration are bundled unchanged beside ffprobe under `media/`.
+
+`scripts/build-media-tools.ps1` verifies the archive SHA256 before extracting exactly ffprobe.exe/LICENSE/README.txt. It uses .NET SHA256/ZIP APIs to work in the Tauri Windows PowerShell build hook. No original application binary is used. `tauri.conf.json` bundles these resources; gateway resolves only its adjacent media/ffprobe.exe. Invocation uses exec.CommandContext (no shell), a held managed leaf plus ancestor chain, 15s timeout, 1MiB output cap, 64MiB maximum single allocation, 8MiB probe data and 10s analysis budget. Only file protocol and mov/matroska/webm/mp3/wav/ogg/flac demuxers are allowed; playlist/concat disguised as mp4 are refused. These are per-operation/per-allocation bounds, not a claim of an OS process-total memory sandbox.
+
+M5.5 supersedes the historical M5.1/M5.2 'unadvertised tools' notes: production now advertises exactly 18 design tools plus native question; text session tools are empty. Owned pinned-runtime loopback supplier tests prove protocol/lifecycle integration only. No credential-backed real LLM/provider inference was executed.

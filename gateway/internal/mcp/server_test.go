@@ -144,7 +144,7 @@ func TestOfficialClientCatalogOriginTokenScopeAndForty(t *testing.T) {
 			t.Fatal("trusted scope leaked", string(raw))
 		}
 	}
-	want := []string{"design_capability_get", "design_capability_list", "design_composition_edit", "design_composition_get", "design_composition_search", "design_deliver", "design_execute", "design_resource_edit", "design_resource_get", "design_task_query", "design_task_resolve", "design_task_wait"}
+	want := []string{"design_analyse_media", "design_capability_get", "design_capability_list", "design_composition_edit", "design_composition_get", "design_composition_search", "design_deliver", "design_document_write", "design_execute", "design_image_search", "design_project_rules", "design_read", "design_resource_edit", "design_resource_get", "design_task_query", "design_task_resolve", "design_task_wait", "design_voice_search"}
 	slices.Sort(names)
 	if !slices.Equal(names, want) {
 		t.Fatal(names)
@@ -238,8 +238,11 @@ func TestExecuteAdmissionBillingWaitCrossProjectAndReplay(t *testing.T) {
 	if e != nil || task.Status != tasks.WaitingUser {
 		t.Fatal(task, e)
 	}
-	if _, e = f.tasks.Resolve(ctx, f.scope.ProjectID, id, tasks.ResolveInput{RequestID: "cancel", Action: "cancel", ExpectedRevision: task.Revision}); e != nil {
-		t.Fatal(e)
+	if r := call(t, f.client, "design_task_query", fmt.Sprintf(`{"taskId":%q}`, id)); r["status"] != "waiting_user" {
+		t.Fatal(r)
+	}
+	if r := call(t, f.client, "design_task_resolve", fmt.Sprintf(`{"requestId":"cancel","taskId":%q,"action":"cancel","expected_revision":%d}`, id, task.Revision)); r["status"] != "cancelled" {
+		t.Fatal(r)
 	}
 	select {
 	case r := <-result:

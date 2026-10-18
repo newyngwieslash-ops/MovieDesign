@@ -51,7 +51,7 @@ func TestGenerationDelivery(t *testing.T) {
 			var posts, downloads atomic.Int32
 			entered, release := make(chan struct{}), make(chan struct{})
 			var remote *httptest.Server
-			remote = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			remote = providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == "POST" {
 					posts.Add(1)
 					if cancelTarget {

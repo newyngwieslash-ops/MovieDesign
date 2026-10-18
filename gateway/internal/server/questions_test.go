@@ -34,7 +34,7 @@ func TestQuestionBillingHTTPGate(t *testing.T) {
 			defer ws.Close()
 			ps := providers.NewService(db, nil)
 			var posts atomic.Int32
-			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			remote := providerTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				posts.Add(1)
 				if mode == "numeric" {
 					b, _ := io.ReadAll(r.Body)

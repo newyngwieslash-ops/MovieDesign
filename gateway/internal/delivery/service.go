@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
 )
@@ -26,6 +27,7 @@ type Service struct {
 	origin       string
 	fault        func(string) error
 	CompleteTask func(context.Context, *sql.Tx, string, string, int) error
+	Notify       func()
 }
 
 func NewService(db *sql.DB, w *workspace.Workspace, origin string) *Service {
@@ -631,6 +633,22 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 		}
 	}
 	raw, _ := json.Marshal(r)
+	items := make([]store.DeliveredItem, 0, len(r.Delivery.Versions))
+	for _, v := range r.Delivery.Versions {
+		items = append(items, store.DeliveredItem{ResourceID: v.ResourceID, VersionID: v.VersionID, OutputKey: v.Key})
+	}
+	intent := ""
+	if pl.Sources[0].Task != nil {
+		if e = tx.QueryRowContext(ctx, "SELECT request_id FROM tasks WHERE id=?", pl.Sources[0].Task.TaskID).Scan(&intent); e != nil {
+			return Receipt{}, e
+		}
+	}
+	if e = (store.Canvas{DB: s.db}).PlaceDelivery(ctx, tx, p, key, pl.CompositionID, intent, items); e != nil {
+		return Receipt{}, e
+	}
+	if e = events.Append(ctx, tx, p, "", "", "canvas_changed", []byte(`{}`)); e != nil {
+		return Receipt{}, e
+	}
 	_, e = tx.ExecContext(ctx, "UPDATE deliveries SET stage='completed',status='completed',receipt=? WHERE project_id=? AND request_id=?", string(raw), p, key)
 	if e != nil {
 		return Receipt{}, e
@@ -640,5 +658,8 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 		return Receipt{}, e
 	}
 	e = tx.Commit()
+	if e == nil && s.Notify != nil {
+		s.Notify()
+	}
 	return r, e
 }

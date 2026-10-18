@@ -33,6 +33,24 @@ type Relay struct {
 	key, token, origin string
 	client             *http.Client
 	mu                 sync.Mutex
+	textMu             sync.Mutex
+	textScopes         map[string]string
+}
+
+func (r *Relay) bindText(id, native string) func() {
+	r.textMu.Lock()
+	if r.textScopes == nil {
+		r.textScopes = map[string]string{}
+	}
+	r.textScopes[native] = id
+	r.textMu.Unlock()
+	return func() { r.textMu.Lock(); delete(r.textScopes, native); r.textMu.Unlock() }
+}
+func inferenceTable(s ToolScope) string {
+	if s.Epoch == "text" {
+		return "text_inference_requests"
+	}
+	return "inference_requests"
 }
 
 func newRelay(db *sql.DB, c LLMConfig, key, origin string) (*Relay, error) {
@@ -64,16 +82,30 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	scope := r.Turns.Current()
+	r.textMu.Lock()
+	textID := r.textScopes[req.Header.Get("X-Opencode-Session-Id")]
+	r.textMu.Unlock()
+	if textID != "" {
+		scope = ToolScope{TurnID: textID, NativeSessionID: req.Header.Get("X-Opencode-Session-Id"), Epoch: "text"}
+	}
 	if scope.TurnID == "" || req.Header.Get("X-Opencode-Session-Id") != scope.NativeSessionID {
 		fail()
 		return
 	}
 	var cancelling int
-	if e := r.DB.QueryRowContext(req.Context(), "SELECT count(*) FROM chat_dispatch WHERE turn_id=? AND state='cancelling'", scope.TurnID).Scan(&cancelling); e != nil || cancelling > 0 {
+	check := "SELECT count(*) FROM chat_dispatch WHERE turn_id=? AND state='cancelling'"
+	if textID != "" {
+		check = "SELECT count(*) FROM text_requests r JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND (r.state<>'active' OR t.status='cancelled')"
+	}
+	if e := r.DB.QueryRowContext(req.Context(), check, scope.TurnID).Scan(&cancelling); e != nil || cancelling > 0 {
 		fail()
 		return
 	}
-	release, e := r.Turns.Acquire(scope)
+	release := func() {}
+	var e error
+	if textID == "" {
+		release, e = r.Turns.Acquire(scope)
+	}
 	if e != nil {
 		fail()
 		return
@@ -100,9 +132,46 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	digest := sha256.Sum256(canonical)
 	fingerprint := hex.EncodeToString(digest[:])
 	results := resultIDs(operation, body)
+	if textID != "" {
+		var toolList []any
+		if b := body["tools"]; len(b) > 0 && (json.Unmarshal(b, &toolList) != nil || len(toolList) > 0) {
+			fail()
+			return
+		}
+		if len(results) > 0 {
+			fail()
+			return
+		}
+		limit := body["max_tokens"]
+		if operation == "responses" {
+			limit = body["max_output_tokens"]
+		}
+		if len(body["max_completion_tokens"]) > 0 {
+			limit = body["max_completion_tokens"]
+		}
+		var tokens int
+		if json.Unmarshal(limit, &tokens) != nil || tokens < 1 || tokens > r.config.Output || len(canonical) > r.config.Context-r.config.Output {
+			fail()
+			return
+		}
+	}
 	// ponytail: one inference at a time, matching the application's single owned turn.
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if textID != "" {
+		r.textMu.Lock()
+		active := r.textScopes[scope.NativeSessionID] == textID
+		r.textMu.Unlock()
+		if !active {
+			fail()
+			return
+		}
+	}
+	// A queued model request may outlive cancellation or text-scope retirement.
+	if e := r.DB.QueryRowContext(req.Context(), check, scope.TurnID).Scan(&cancelling); e != nil || cancelling > 0 {
+		fail()
+		return
+	}
 	ctx := context.Background()
 	step, e := r.admit(ctx, scope, fingerprint, results)
 	if e != nil {
@@ -144,11 +213,17 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	state := "completed"
+	if textID != "" && len(ids) > 0 {
+		e = errors.New("tools forbidden in text scope")
+	}
 	if e != nil {
 		state = "unknown"
+		if response != nil && response.StatusCode >= 400 && response.StatusCode < 500 {
+			state = "rejected"
+		}
 	}
 	encoded, _ := json.Marshal(ids)
-	if _, saveErr := r.DB.ExecContext(ctx, "UPDATE inference_requests SET state=?,tool_ids_json=? WHERE turn_id=? AND step=?", state, string(encoded), scope.TurnID, step); saveErr != nil || e != nil {
+	if _, saveErr := r.DB.ExecContext(ctx, "UPDATE "+inferenceTable(scope)+" SET state=?,tool_ids_json=? WHERE turn_id=? AND step=?", state, string(encoded), scope.TurnID, step); saveErr != nil || e != nil {
 		if r.Turns.Abort != nil {
 			abortCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = r.Turns.Abort(abortCtx, scope.NativeSessionID)
@@ -170,8 +245,11 @@ func (r *Relay) admit(ctx context.Context, s ToolScope, fingerprint string, resu
 	defer tx.Rollback()
 	var step int
 	var state, allowed, used string
-	e = tx.QueryRowContext(ctx, "SELECT step,state,tool_ids_json,result_ids_json FROM inference_requests WHERE turn_id=? ORDER BY step DESC LIMIT 1", s.TurnID).Scan(&step, &state, &allowed, &used)
+	e = tx.QueryRowContext(ctx, "SELECT step,state,tool_ids_json,result_ids_json FROM "+inferenceTable(s)+" WHERE turn_id=? ORDER BY step DESC LIMIT 1", s.TurnID).Scan(&step, &state, &allowed, &used)
 	if e == nil {
+		if s.Epoch == "text" {
+			return 0, ErrScope
+		}
 		if state != "completed" {
 			return 0, ErrScope
 		}
@@ -198,7 +276,7 @@ func (r *Relay) admit(ctx context.Context, s ToolScope, fingerprint string, resu
 	}
 	step++
 	encoded, _ := json.Marshal(results)
-	if _, e = tx.ExecContext(ctx, "INSERT INTO inference_requests(turn_id,step,fingerprint,state,result_ids_json,created_at)VALUES(?,?,?,'forwarding',?,?)", s.TurnID, step, fingerprint, string(encoded), time.Now().UnixMilli()); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO "+inferenceTable(s)+"(turn_id,step,fingerprint,state,result_ids_json,created_at)VALUES(?,?,?,'forwarding',?,?)", s.TurnID, step, fingerprint, string(encoded), time.Now().UnixMilli()); e != nil {
 		return 0, e
 	}
 	return step, tx.Commit()

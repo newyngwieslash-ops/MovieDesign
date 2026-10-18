@@ -3,8 +3,16 @@ package agent
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
+
+func TestMediaPromptMatchesCanonicalSource(t *testing.T) {
+	b, e := os.ReadFile("../../../agent/media-agent.md")
+	if e != nil || strings.ReplaceAll(string(b), "\r\n", "\n") != strings.ReplaceAll(mediaPrompt, "\r\n", "\n") {
+		t.Fatal("rebuild generated native prompt from canonical source", e)
+	}
+}
 
 func TestConfigDeniesUnknownToolsAndOnlyAllowsExactMCPNames(t *testing.T) {
 	c := LLMConfig{Protocol: "openai-compatible", BaseURL: "http://127.0.0.1:11434/v1", ModelID: "local-model", Context: 32000, Output: 4096}

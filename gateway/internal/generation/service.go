@@ -25,12 +25,34 @@ type Request struct {
 }
 
 type Service struct {
-	Providers *providers.Service
-	Tasks     *tasks.Service
+	TextProvider func(context.Context) (providers.FrozenProvider, error)
+	Providers    *providers.Service
+	Tasks        *tasks.Service
 }
 type Result struct {
 	Task  tasks.TaskView
 	Quote *providers.Quote
+}
+
+func (s Service) Capabilities(ctx context.Context) ([]providers.Capability, error) {
+	caps := []providers.Capability{}
+	if s.Providers != nil {
+		items, e := s.Providers.List(ctx)
+		if e != nil {
+			return nil, e
+		}
+		for _, item := range items {
+			if item.Config.Enabled && item.Config.Kind == "image" {
+				caps = append(caps, providers.ImageCapability(item.Config))
+			}
+		}
+	}
+	if s.TextProvider != nil {
+		if f, e := s.TextProvider(ctx); e == nil {
+			caps = append(caps, providers.TextCapability(f.Config))
+		}
+	}
+	return caps, nil
 }
 
 func invalid(message string) error {
@@ -82,15 +104,28 @@ func (s Service) Admit(ctx context.Context, p string, r Request, wire []byte, es
 	if r.References == nil {
 		r.References = []string{}
 	}
-	if !strings.HasPrefix(r.CapabilityID, "image:") || len(r.CapabilityID) <= 6 {
+	isText := r.CapabilityID == "text:configured-llm"
+	if !isText && (!strings.HasPrefix(r.CapabilityID, "image:") || len(r.CapabilityID) <= 6) {
 		return result, invalid("Expected an explicit image capability ID")
 	}
-	f, e := s.Providers.Resolve(strings.TrimPrefix(r.CapabilityID, "image:"))
+	var f providers.FrozenProvider
+	var e error
+	if isText {
+		if s.TextProvider == nil {
+			return result, invalid("Text runtime unavailable")
+		}
+		f, e = s.TextProvider(ctx)
+	} else {
+		f, e = s.Providers.Resolve(strings.TrimPrefix(r.CapabilityID, "image:"))
+	}
 	if e != nil {
 		return result, e
 	}
 	cap := providers.ImageCapability(f.Config)
-	if f.Config.Kind != "image" {
+	if isText {
+		cap = providers.TextCapability(f.Config)
+	}
+	if f.Config.Kind != "image" && !isText {
 		return result, invalid("Unsupported image capability")
 	}
 	output, e := json.Marshal(r.Output)
@@ -98,15 +133,26 @@ func (s Service) Admit(ctx context.Context, p string, r Request, wire []byte, es
 		return result, e
 	}
 	input := providers.GenerationInput{ProjectID: p, Prompt: r.Prompt, Params: r.Params, References: r.References, Count: count, Output: output}
-	if e = providers.Validate(cap, input); e != nil {
+	if isText {
+		e = providers.ValidateText(input, f)
+	} else {
+		e = providers.Validate(cap, input)
+	}
+	if e != nil {
 		return result, e
 	}
-	input.Assets, e = s.Providers.FreezeReferences(ctx, p, input, f)
+	if !isText {
+		input.Assets, e = s.Providers.FreezeReferences(ctx, p, input, f)
+	}
 	if e != nil {
 		return result, e
 	}
 	params, _ := json.Marshal(r.Params)
 	task := tasks.Input{RequestID: r.RequestID, SessionID: r.SessionID, CapabilityID: r.CapabilityID, Prompt: r.Prompt, Params: params, Output: r.Output, Count: count, Assets: input.Assets, Provider: f, OriginalWire: wire, Operation: operation}
+	task.Actor = "user"
+	if operation == "mcp" {
+		task.Actor = "agent"
+	}
 	for i, id := range r.References {
 		task.References = append(task.References, tasks.Reference{AssetID: id, Role: providers.ReferenceRole(cap, i)})
 	}

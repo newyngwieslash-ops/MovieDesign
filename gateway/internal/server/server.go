@@ -13,6 +13,7 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -149,11 +150,15 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		srv.llm = &agent.Settings{DB: db, Secrets: providerService.Secrets}
 	}
 	if deliveries != nil {
+		deliveries.Notify = ev.Notify
+		agentDeliveries.Notify = ev.Notify
 		deliveries.CompleteTask = srv.tasks.CompleteDelivery
 		agentDeliveries.CompleteTask = srv.tasks.CompleteDelivery
 	}
 	if providerService != nil {
-		srv.tasks.Executor = tasks.ImageExecutor(providerService, deliveries)
+		srv.tasks.Executor = tasks.InstallText(tasks.ImageExecutor(providerService, deliveries), providerService, deliveries, func(ctx context.Context, a tasks.Attempt) (tasks.Outcome, error) { return srv.agentHost.Text(ctx, a) }, func(ctx context.Context, a tasks.Attempt) (tasks.Outcome, error) {
+			return srv.agentHost.QueryText(ctx, a)
+		})
 	}
 	qs := questions.NewService(db, srv.tasks, ev)
 	srv.tasks.LateResult = qs.LateResult
@@ -162,7 +167,9 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 	}
 	srv.turns = agent.NewTurns(db)
 	srv.chat = agent.NewChat(db, srv.turns, ev, qs)
-	srv.mcp = designmcp.New(origin, srv.turns, designmcp.Services{Objects: store.Objects{DB: db}, Generation: generation.Service{Providers: providerService, Tasks: srv.tasks}, Tasks: srv.tasks, Delivery: agentDeliveries})
+	generationService := generation.Service{Providers: providerService, Tasks: srv.tasks, TextProvider: func(ctx context.Context) (providers.FrozenProvider, error) { return srv.agentHost.TextProvider(ctx) }}
+	executable, _ := os.Executable()
+	srv.mcp = designmcp.New(origin, srv.turns, designmcp.Services{Objects: store.Objects{DB: db}, Generation: generationService, Tasks: srv.tasks, Delivery: agentDeliveries, Files: files, Questions: qs, FFprobe: filepath.Join(filepath.Dir(executable), "media", "ffprobe.exe")})
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -228,7 +235,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 			return
 		}
 		if generationRoute(r.URL.Path) {
-			serveGenerate(w, r, providerService, srv.tasks)
+			serveGenerate(w, r, generationService)
 			return
 		}
 		if taskRoute(r.URL.Path) {

@@ -69,6 +69,18 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 	}
 	defer s.end()
 	ctx := s.ctx
+	var capability string
+	if e := s.DB.QueryRowContext(ctx, "SELECT json_extract(frozen_input_json,'$.capability_id') FROM tasks WHERE id=? AND project_id=?", id, p).Scan(&capability); e != nil {
+		return e
+	}
+	if capability == "text:configured-llm" {
+		select {
+		case s.textSlot <- struct{}{}:
+			defer func() { <-s.textSlot }()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	tx, e := s.DB.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -334,7 +346,7 @@ func (s *Service) Recover(_ context.Context) error {
 		if !started {
 			continue
 		}
-		if a.UpstreamID != "" && s.Executor != nil && s.Executor.Query != nil {
+		if (a.UpstreamID != "" || a.Provider.Config.Kind == "llm") && s.Executor != nil && s.Executor.Query != nil {
 			out, queryErr := s.Executor.Query(ctx, a)
 			if e = s.finish(a, out, queryErr); e != nil {
 				return e

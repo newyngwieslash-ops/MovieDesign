@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
+& (Join-Path $PSScriptRoot 'build-media-tools.ps1')
+$env:MOVIEDESIGN_FFPROBE_TEST_BINARY = Join-Path $projectRoot 'desktop/src-tauri/binaries/media/ffprobe.exe'
 Push-Location (Join-Path $projectRoot 'gateway')
 try {
     & go test ./...

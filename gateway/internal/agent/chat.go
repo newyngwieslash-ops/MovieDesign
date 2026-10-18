@@ -318,6 +318,9 @@ func (c *Chat) run() {
 			var input ChatInput
 			_ = json.Unmarshal([]byte(raw), &input)
 			parts := []any{map[string]string{"type": "text", "text": input.Text}}
+			if rules, e := c.Questions.ReadRules(c.ctx, p); e == nil && rules.Content != "" {
+				parts = append(parts, map[string]string{"type": "text", "text": "当前项目已批准的长期规则：\n" + rules.Content})
+			}
 			if len(input.References) > 0 || len(input.Annotations) > 0 {
 				data, _ := json.Marshal(struct {
 					References  []string          `json:"references"`

@@ -4,12 +4,18 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/agent"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
+	"image"
+	"image/png"
 	"io"
 	"net"
 	"net/http"
@@ -28,7 +34,9 @@ import (
 
 // Actual pinned native process, actual model HTTP/SSE transport, synthetic owned
 // model responses only. This is NOT real credential/provider inference acceptance.
-func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
+func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) { runNativeTools(t, false) }
+func TestPinnedNativeMediaTextBillingRulesCanvas(t *testing.T)    { runNativeTools(t, true) }
+func runNativeTools(t *testing.T, extended bool) {
 	binary := os.Getenv("MOVIEDESIGN_OPENCODE_TEST_BINARY")
 	if binary == "" {
 		t.Skip("set verified project binary for native fixture")
@@ -67,7 +75,7 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 			traceMu.Lock()
 			rpcTrace = append(rpcTrace, rpc)
 			traceMu.Unlock()
-			if rpc["method"] == "tools/call" {
+			if rpc["method"] == "tools/call" && !extended {
 				if simultaneous.Add(1) == 2 {
 					close(both)
 				}
@@ -110,7 +118,26 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 			fmt.Fprintf(w, "data: %s\n\n", b)
 			w.(http.Flusher).Flush()
 		}
-		if n == 1 {
+		if extended && n != 1 {
+			if n == 2 {
+				if tools, _ := body["tools"].([]any); len(tools) != 0 {
+					t.Errorf("text native tools leaked: %v", tools)
+				}
+				emit(map[string]any{"role": "assistant", "content": "# Native text document"}, nil)
+				emit(map[string]any{}, "stop")
+			} else if n == 3 || n == 4 {
+				name, args := "design_design_project_rules", `{"action":"save","requestId":"native-rules","content":"人物名字保持一致","expectedRevision":null}`
+				if n == 4 {
+					name = "design_design_execute"
+					args = `{"requestId":"native-image","capabilityId":"image:local","prompt":"synthetic image","params":{},"references":[],` + output + `}`
+				}
+				emit(map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": fmt.Sprint("step", n), "type": "function", "function": map[string]any{"name": name, "arguments": args}}}}, nil)
+				emit(map[string]any{}, "tool_calls")
+			} else {
+				emit(map[string]any{"role": "assistant", "content": "Local complete"}, nil)
+				emit(map[string]any{}, "stop")
+			}
+		} else if n == 1 {
 			var exposed []string
 			for _, tool := range body["tools"].([]any) {
 				exposed = append(exposed, tool.(map[string]any)["function"].(map[string]any)["name"].(string))
@@ -132,13 +159,19 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 					t.Errorf("native effective tool absent: %s; got %v", want, exposed)
 				}
 			}
-			question := `{"questions":[{"header":"Fixture","question":"Choose fixture outcome","options":[{"label":"Continue","description":"Finish local fixture"}]}]}`
-			emit(map[string]any{"role": "assistant", "tool_calls": []any{
-				map[string]any{"index": 0, "id": "native_parallel_a", "type": "function", "function": map[string]any{"name": "design_design_capability_list", "arguments": "{}"}},
-				map[string]any{"index": 1, "id": "native_parallel_b", "type": "function", "function": map[string]any{"name": "design_design_composition_search", "arguments": "{}"}},
-				map[string]any{"index": 2, "id": "native_question", "type": "function", "function": map[string]any{"name": "question", "arguments": question}},
-			}}, nil)
-			emit(map[string]any{}, "tool_calls")
+			if extended {
+				args := `{"requestId":"native-text","capabilityId":"text:configured-llm","prompt":"Write a document","params":{},"references":[],` + output + `}`
+				emit(map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": "nested-text", "type": "function", "function": map[string]any{"name": "design_design_execute", "arguments": args}}}}, nil)
+				emit(map[string]any{}, "tool_calls")
+			} else {
+				question := `{"questions":[{"header":"Fixture","question":"Choose fixture outcome","options":[{"label":"Continue","description":"Finish local fixture"}]}]}`
+				emit(map[string]any{"role": "assistant", "tool_calls": []any{
+					map[string]any{"index": 0, "id": "native_parallel_a", "type": "function", "function": map[string]any{"name": "design_design_capability_list", "arguments": "{}"}},
+					map[string]any{"index": 1, "id": "native_parallel_b", "type": "function", "function": map[string]any{"name": "design_design_composition_search", "arguments": "{}"}},
+					map[string]any{"index": 2, "id": "native_question", "type": "function", "function": map[string]any{"name": "question", "arguments": question}},
+				}}, nil)
+				emit(map[string]any{}, "tool_calls")
+			}
 		} else {
 			emit(map[string]any{"role": "assistant", "content": "Local fixture complete."}, nil)
 			emit(map[string]any{}, "stop")
@@ -152,7 +185,7 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 		t.Fatal(e)
 	}
 	settings := &agent.Settings{DB: f.db, Secrets: secrets}
-	input, _ := json.Marshal(map[string]any{"requestId": "native-relay", "action": "save", "config": agent.LLMConfig{Protocol: "openai-compatible", BaseURL: model.URL + "/v1", ModelID: "fixture-model", Context: 32000, Output: 4096}, "key": "synthetic-fixture-key"})
+	input, _ := json.Marshal(map[string]any{"requestId": "native-relay", "action": "save", "config": agent.LLMConfig{Protocol: "openai-compatible", BaseURL: model.URL + "/v1", ModelID: "fixture-model", Context: 32000, Output: 4096, Pricing: &providers.Pricing{Currency: "USD", Unit: "token", UnitAmount: 1, MinorUnitScale: 6, CreditNumerator: 1, CreditDenominator: 1, Source: "synthetic upper bound", Version: "v1"}}, "key": "synthetic-fixture-key"})
 	if _, e = settings.Execute(ctx, input); e != nil {
 		t.Fatal(e)
 	}
@@ -163,6 +196,30 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 	host.Relay.Turns = f.server.Turns
 	f.server.Turns.Abort = host.Abort
 	inference = host.Relay
+	qs := questions.NewService(f.db, f.tasks, f.tasks.Events)
+	if extended {
+		var imagePosts atomic.Int32
+		imageSupplier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			imagePosts.Add(1)
+			var b bytes.Buffer
+			png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 8, 6)))
+			json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]string{"b64_json": base64.StdEncoding.EncodeToString(b.Bytes())}}})
+		}))
+		defer imageSupplier.Close()
+		defer func() {
+			if imagePosts.Load() != 1 {
+				t.Errorf("image posts=%d", imagePosts.Load())
+			}
+		}()
+		f.db.Exec("UPDATE provider_configs SET config_json=json_set(config_json,'$.base_url',?) WHERE id='local'", imageSupplier.URL)
+		d := delivery.NewService(f.db, f.providers.Files.Workspace, "agent")
+		d.CompleteTask = f.tasks.CompleteDelivery
+		f.tasks.Executor = tasks.InstallText(tasks.ImageExecutor(f.providers, d), f.providers, d, host.Text, host.QueryText)
+		f.server.services.Generation.TextProvider = host.TextProvider
+		f.server.services.Delivery = d
+		f.server.services.Files = f.providers.Files
+		f.server.services.Questions = qs
+	}
 	bootstrapStore, e := providers.OpenSecrets(filepath.Join(owned, "bootstrap"))
 	if e != nil {
 		t.Fatal(e)
@@ -284,6 +341,8 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 	if _, e = request("POST", "/session/"+session.ID+"/prompt_async", map[string]any{"agent": "build", "parts": []any{map[string]any{"type": "text", "text": "Run the local fixture tools."}}}); e != nil {
 		t.Fatal(e)
 	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 	var question agent.NativeQuestion
 	var nativeTrace []map[string]any
 	done := false
@@ -291,6 +350,21 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			t.Fatal("native trace timeout", ctx.Err())
+		case <-ticker.C:
+			if extended {
+				cards, e := qs.List(ctx, scope.ProjectID, scope.SessionID)
+				if e != nil {
+					t.Fatal(e)
+				}
+				for _, card := range cards {
+					if card.State == "pending" {
+						_, e = qs.Reply(ctx, scope.ProjectID, card.ID, questions.HumanReply{RequestID: "human-" + card.ID, SessionID: scope.SessionID, ExpectedRevision: card.Revision, Answers: [][]string{{card.Questions[0].Options[0].Label}}})
+						if e != nil {
+							t.Fatal(e)
+						}
+					}
+				}
+			}
 		case event := <-eventChannel:
 			kind, _ := event["type"].(string)
 			if kind == "message.part.updated" || kind == "question.asked" || kind == "session.idle" {
@@ -323,7 +397,7 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 					t.Fatal(e)
 				}
 			}
-			if kind == "session.idle" && question.ID != "" {
+			if kind == "session.idle" && (question.ID != "" || extended && requests.Load() == 5) {
 				done = true
 			}
 		}
@@ -333,7 +407,11 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 	if count != 3 {
 		t.Fatal("parallel tools/question/replay budget", count)
 	}
-	if requests.Load() != 2 {
+	expectedRequests := int32(2)
+	if extended {
+		expectedRequests = 5
+	}
+	if requests.Load() != expectedRequests {
 		t.Fatal("unexpected model request/retry count", requests.Load())
 	}
 	traceMu.Lock()
@@ -349,8 +427,39 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 			}
 		}
 	}
-	if calls != 2 {
+	expectedCalls := 2
+	if extended {
+		expectedCalls = 3
+	}
+	if calls != expectedCalls {
 		t.Fatal("MCP executions", calls)
+	}
+	if extended {
+		doc, e := (store.Canvas{DB: f.db}).Document(ctx, scope.ProjectID)
+		if e != nil || len(doc.Nodes) != 2 {
+			t.Fatalf("actual Canvas nodes %v %v", doc, e)
+		}
+		var completed, versions int
+		f.db.QueryRow("SELECT count(*) FROM tasks WHERE status='completed'").Scan(&completed)
+		f.db.QueryRow("SELECT count(*) FROM versions").Scan(&versions)
+		if completed != 2 || versions != 2 {
+			t.Fatalf("tasks=%d versions=%d", completed, versions)
+		}
+		var agents, receipts int
+		f.db.QueryRow("SELECT count(*) FROM versions WHERE origin='agent'").Scan(&agents)
+		f.db.QueryRow("SELECT count(*) FROM question_receipts WHERE actor='human'").Scan(&receipts)
+		if agents != 2 || receipts != 3 {
+			t.Fatalf("actor/billing/rules receipt mismatch: agent=%d human=%d", agents, receipts)
+		}
+		rules, e := qs.ReadRules(ctx, scope.ProjectID)
+		if e != nil || rules.Content != "人物名字保持一致" {
+			t.Fatal(rules, e)
+		}
+		for _, node := range doc.Nodes {
+			if node["activeItem"] == nil {
+				t.Fatal("Canvas has no real Version", node)
+			}
+		}
 	}
 	if !f.server.CatalogReady() {
 		t.Fatal("native catalog handshake absent")
@@ -369,6 +478,10 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 		if e = os.WriteFile(path, trace, 0600); e != nil {
 			t.Fatal(e)
 		}
+	}
+	if extended {
+		t.Log("actual pinned native 1.19.0: nested text tools=0, exact 18+question catalog, 2 human billing receipts, human rules receipt, one image POST, 2 completed tasks/Versions/Canvas nodes; synthetic supplier only")
+		return
 	}
 	t.Log("actual pinned native 1.19.0: two parallel MCP calls + native question, model HTTP requests=2, durable budget=3; question event replay retains one card; RPC IDs do not contain native call IDs; no real inference")
 }

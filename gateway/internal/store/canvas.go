@@ -829,6 +829,20 @@ func checkCanvasPairs(ctx context.Context, tx *sql.Tx, v any) error {
 	return nil
 }
 func (c Canvas) Execute(ctx context.Context, p string, input []byte) (out CanvasReceipt, err error) {
+	tx, e := c.DB.BeginTx(ctx, nil)
+	if e != nil {
+		return out, domainError(e)
+	}
+	defer tx.Rollback()
+	out, e = c.ExecuteTx(ctx, tx, p, input)
+	if e != nil {
+		return out, e
+	}
+	return out, domainError(tx.Commit())
+}
+
+// ExecuteTx shares the exact command validator/journal with atomic Delivery publication.
+func (c Canvas) ExecuteTx(ctx context.Context, tx *sql.Tx, p string, input []byte) (out CanvasReceipt, err error) {
 	canonical, e := CanonicalJSON(input)
 	if e != nil {
 		return out, canvasInvalid(e.Error())
@@ -848,11 +862,7 @@ func (c Canvas) Execute(ctx context.Context, p string, input []byte) (out Canvas
 		return out, canvasInvalid("Invalid request")
 	}
 	key := m["requestId"].(string)
-	tx, e := c.DB.BeginTx(ctx, nil)
-	if e != nil {
-		return out, domainError(e)
-	}
-	defer tx.Rollback()
+
 	if e = requireProject(ctx, tx, p); e != nil {
 		return out, domainError(e)
 	}
@@ -919,7 +929,7 @@ func (c Canvas) Execute(ctx context.Context, p string, input []byte) (out Canvas
 			}
 		}
 	}
-	return out, domainError(tx.Commit())
+	return out, nil
 }
 func checkCanvasReference(ctx context.Context, tx *sql.Tx, kind, id string) error {
 	var n int

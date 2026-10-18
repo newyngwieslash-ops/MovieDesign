@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"math/big"
@@ -14,6 +15,7 @@ import (
 )
 
 type Quote struct {
+	Basis            string `json:"basis,omitempty"`
 	QuoteID          string `json:"quote_id"`
 	Currency         string `json:"currency"`
 	EstimatedAmount  int64  `json:"estimated_amount"`
@@ -35,18 +37,26 @@ func Estimate(in GenerationInput, f FrozenProvider) (Quote, error) {
 	if e := ValidateConfig(f.Config); e != nil {
 		return q, e
 	}
-	if e := Validate(ImageCapability(f.Config), in); e != nil {
+	validate := Validate(ImageCapability(f.Config), in)
+	if f.Config.Kind == "llm" {
+		validate = ValidateText(in, f)
+	}
+	if e := validate; e != nil {
 		return q, e
 	}
 	p := f.Config.Pricing
-	if p == nil || p.Unit != "image" || p.EffectiveAt > time.Now().Unix() {
+	if p == nil || (p.Unit != "image" && !(f.Config.Kind == "llm" && p.Unit == "token")) || p.EffectiveAt > time.Now().Unix() {
 		return q, invalid("A current explicit image price is required; unknown price cannot be free")
+	}
+	adapter := "openai-images-m4.3-v1"
+	if f.Config.Kind == "llm" {
+		adapter = "opencode-text-m5.5-v1"
 	}
 	raw, e := json.Marshal(struct {
 		Input          GenerationInput `json:"input"`
 		Provider       FrozenProvider  `json:"provider"`
 		AdapterVersion string          `json:"adapter_version"`
-	}{in, f, "openai-images-m4.3-v1"})
+	}{in, f, adapter})
 	if e != nil {
 		return q, invalid("Invalid quote input")
 	}
@@ -56,13 +66,20 @@ func Estimate(in GenerationInput, f FrozenProvider) (Quote, error) {
 	}
 	hash := sha256.Sum256(raw)
 	amount := p.UnitAmount * int64(in.Count)
+	if f.Config.Kind == "llm" {
+		amount = p.UnitAmount * int64(f.Config.TextContext)
+	}
 	credits := new(big.Int).Mul(big.NewInt(amount), big.NewInt(p.CreditNumerator))
 	credits.Add(credits, big.NewInt(p.CreditDenominator-1))
 	credits.Div(credits, big.NewInt(p.CreditDenominator))
 	if !credits.IsInt64() {
 		return q, invalid("Credit estimate overflow")
 	}
-	return Quote{QuoteID: uuid.NewString(), Currency: p.Currency, EstimatedAmount: amount, MinorUnitScale: p.MinorUnitScale, EstimatedCredits: credits.Int64(), ExpiresAt: time.Now().Add(5 * time.Minute).UnixMilli(), InputHash: hex.EncodeToString(hash[:]), Source: p.Source, Version: p.Version}, nil
+	q = Quote{QuoteID: uuid.NewString(), Currency: p.Currency, EstimatedAmount: amount, MinorUnitScale: p.MinorUnitScale, EstimatedCredits: credits.Int64(), ExpiresAt: time.Now().Add(5 * time.Minute).UnixMilli(), InputHash: hex.EncodeToString(hash[:]), Source: p.Source, Version: p.Version}
+	if f.Config.Kind == "llm" {
+		q.Basis = fmt.Sprintf("保守估算：上下文上限 %d token × 声明的单 token 最高价；输出最多 %d token。不是供应商实测费用。", f.Config.TextContext, f.Config.TextOutput)
+	}
+	return q, nil
 }
 func (s *Service) ReplayQuote(ctx context.Context, p, id string, wire []byte) (Quote, bool, error) {
 	var q Quote

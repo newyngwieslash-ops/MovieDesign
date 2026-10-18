@@ -30,6 +30,7 @@ type Info struct {
 	Custom   bool     `json:"custom,omitempty"`
 }
 type Question struct {
+	Rules           *RulesChange     `json:"rules,omitempty"`
 	NativeSendState string           `json:"native_send_state,omitempty"`
 	ID              string           `json:"id"`
 	ProjectID       string           `json:"project_id"`
@@ -158,13 +159,22 @@ func currentQuote(ctx context.Context, tx *sql.Tx, p string, i tasks.Input) (pro
 	}
 	var raw, version string
 	var deleted bool
-	e = tx.QueryRowContext(ctx, "SELECT config_json,credential_version,deleted FROM provider_configs WHERE id=?", i.Provider.Config.ID).Scan(&raw, &version, &deleted)
+	if i.Provider.Config.Kind == "llm" {
+		e = tx.QueryRowContext(ctx, "SELECT config_json,credential_version FROM llm_settings WHERE id=1").Scan(&raw, &version)
+	} else {
+		e = tx.QueryRowContext(ctx, "SELECT config_json,credential_version,deleted FROM provider_configs WHERE id=?", i.Provider.Config.ID).Scan(&raw, &version, &deleted)
+	}
 	if e != nil {
 		return providers.Quote{}, in, fail(409, "Provider is no longer available")
 	}
 	var f providers.FrozenProvider
 	f.CredentialVersion = version
-	if e = json.Unmarshal([]byte(raw), &f.Config); e != nil {
+	if i.Provider.Config.Kind == "llm" {
+		f, e = providers.TextProvider([]byte(raw), version)
+	} else {
+		e = json.Unmarshal([]byte(raw), &f.Config)
+	}
+	if e != nil {
 		return providers.Quote{}, in, e
 	}
 	frozen, _ := json.Marshal(i.Provider)
@@ -454,6 +464,17 @@ func (s *Service) Reply(ctx context.Context, p, id string, i HumanReply) (Receip
 			return nil, e
 		}
 		receipt = Receipt{ID: uuid.NewString(), QuestionID: id, RequestID: i.RequestID, State: q.State, Answers: i.Answers, Revision: q.Revision, TaskID: q.TaskID}
+		if q.Kind == "project_rules" && !i.Reject {
+			if q.Rules == nil {
+				return nil, fail(409, "Rule proposal missing")
+			}
+			if e = checkRules(ctx, tx, p, *q.Rules); e != nil {
+				return nil, e
+			}
+			if _, e = tx.ExecContext(ctx, "INSERT INTO project_rules(project_id,content,receipt_id)VALUES(?,?,?) ON CONFLICT(project_id) DO UPDATE SET content=excluded.content,receipt_id=excluded.receipt_id", p, q.Rules.Content, receipt.ID); e != nil {
+				return nil, e
+			}
+		}
 		b, _ := json.Marshal(receipt)
 		if _, e = tx.ExecContext(ctx, "INSERT INTO question_receipts(id,question_id,request_id,actor,response_json,created_at)VALUES(?,?,?,'human',?,?)", receipt.ID, id, i.RequestID, string(b), time.Now().UnixMilli()); e != nil {
 			return nil, e

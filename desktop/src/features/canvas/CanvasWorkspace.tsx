@@ -1,8 +1,8 @@
 import {GenerationComposer,type Generation} from '../tasks/GenerationComposer';
 import {useTasks} from '../tasks/TaskCenter';
-import {completedPatch} from '../tasks/tasks';
+import {subscribeEvents} from '../../events';
 import {useCallback,useEffect,useRef,useState,type PointerEvent} from 'react';
-import {useQuery} from '@tanstack/react-query';
+import {useQuery,useQueryClient} from '@tanstack/react-query';
 import {allPages,api,APIError,newRequestID} from '../../gateway';
 import {CanvasNode,type CanvasAsset,type CanvasVersion} from './CanvasNode';
 import {emptyDocument,patch,pendingKey,readPending,visibleNodes,worldPosition,type CanvasDocument,type Command,type Content,type Node,type Pending,type Receipt,type View} from './canvas';
@@ -12,6 +12,7 @@ export function CanvasWorkspace({projectID,onEdit}:{projectID?:string;onEdit?:(i
  return <PersistentCanvas key={projectID} projectID={projectID} onEdit={onEdit??(()=>{})}/>;
 }
 function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string)=>void}) {
+ const queryClient=useQueryClient();
  const [document,setDocument]=useState<CanvasDocument>(emptyDocument),current=useRef(document);
  const [ready,setReady]=useState(false),[error,setError]=useState(''),[busy,setBusy]=useState(false),lock=useRef(false),alive=useRef(true);
  const [pending,setPending]=useState<Pending|null>(null),[storageError,setStorageError]=useState('');
@@ -25,6 +26,7 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
  const compositions=useQuery({queryKey:['project',projectID,'compositions','all',200],queryFn:({signal})=>allPages<{id:string;name:string}>(projectID,'/api/compositions',signal)});
  const accept=useCallback((next:CanvasDocument)=>{if(alive.current&&next.revision>=current.current.revision){current.current=next;setDocument(next)}},[]);
  const refresh=useCallback(async()=>{const d=await api<CanvasDocument>(projectID,'/api/canvas/nodes');accept(d);if(alive.current)setReady(true)},[accept,projectID]);
+ useEffect(()=>{const load=()=>{void refresh().catch(e=>{if(alive.current)setError(e.message)});void queryClient.invalidateQueries({queryKey:['project',projectID]})};try{return subscribeEvents(projectID,event=>{if(event.type==='canvas_changed')load()},load)}catch(e){setError((e as Error).message)}},[projectID,refresh,queryClient]);
  useEffect(()=>{alive.current=true;try{setPending(readPending(localStorage.getItem(pendingKey(projectID)),projectID));const raw=localStorage.getItem(`moviedesign.canvas.view.${projectID}`);if(raw){const v=JSON.parse(raw);if([v.x,v.y,v.scale].every(Number.isFinite)&&v.scale>=.1&&v.scale<=4)setView(v)}}catch(e){setStorageError((e as Error).message)}void refresh().catch(e=>{if(alive.current)setError(e.message)});return()=>{alive.current=false;gesture.current=null}},[projectID,refresh]);
  useEffect(()=>{const element=surface.current;if(!element)return;const resize=new ResizeObserver(([entry])=>setExtent({width:entry.contentRect.width,height:entry.contentRect.height}));resize.observe(element);return()=>resize.disconnect()},[]);
  useEffect(()=>{try{localStorage.setItem(`moviedesign.canvas.view.${projectID}`,JSON.stringify(view))}catch(e){setError((e as Error).message)}},[projectID,view]);
@@ -58,7 +60,7 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
   const p:Pending={schema:1,projectID,body:JSON.stringify({requestId:`generation-${input.requestId}`,expectedRevision:current.current.revision,command:{type:'canvas.patch',nodes,edges:[]}})};
   localStorage.setItem(pendingKey(projectID),JSON.stringify(p));setPending(p);if(!await send(p))throw Error('画布结果待确认');
  }
- useEffect(()=>{if(!ready||pending||busy||storageError||gesture.current)return;const command=completedPatch(current.current,tasks.data??[]);if(command)commit(command)},[tasks.data,ready,pending,busy,storageError,document.revision]);
+ useEffect(()=>{if(tasks.data)void refresh().catch(e=>{if(alive.current)setError(e.message)})},[tasks.data,refresh]);
  const rendered=preview?{...document,nodes:{...document.nodes,[preview.id]:preview}}:document;
  const visible=visibleNodes(rendered,view,extent.width,extent.height);
  const compositionIDs=[...new Set(visible.flatMap(n=>n.kind==='composition'?[n.compositionId]:[]))].sort();

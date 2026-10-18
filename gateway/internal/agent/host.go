@@ -12,16 +12,20 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 type Host struct {
-	Relay          *Relay
-	password, base string
-	client         *http.Client
-	active         View
-	fingerprint    string
-	tools          []string
+	textMu            sync.Mutex
+	textSession       string
+	Relay             *Relay
+	password, base    string
+	client            *http.Client
+	active            View
+	fingerprint       string
+	credentialVersion string
+	tools             []string
 }
 type Bootstrap struct {
 	Password string `json:"password"`
@@ -107,7 +111,7 @@ func NewHost(s *Settings, dir string, connections ...MCPConnection) (*Host, erro
 	if err = encrypted.Put("launch", string(raw)); err != nil {
 		return nil, err
 	}
-	return &Host{Relay: relay, password: password, base: "http://127.0.0.1:4096", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}, tools: m.Tools, active: v, fingerprint: fingerprint(v, version)}, nil
+	return &Host{Relay: relay, credentialVersion: version, password: password, base: "http://127.0.0.1:4096", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}, tools: m.Tools, active: v, fingerprint: fingerprint(v, version)}, nil
 }
 func (h *Host) read(ctx context.Context, path string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", h.base+path, nil)
@@ -170,7 +174,7 @@ func verifyPermissions(raw []byte, tools ...string) error {
 	}
 	found := false
 	for _, a := range agents {
-		if a.Name != "build" && a.Name != "summary" && a.Name != "title" && a.Name != "compaction" {
+		if a.Name != "build" && a.Name != "summary" && a.Name != "title" && a.Name != "compaction" && a.Name != "text" {
 			return errors.New("unapproved agent")
 		}
 		last := -1

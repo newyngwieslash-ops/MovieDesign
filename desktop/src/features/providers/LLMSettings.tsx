@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { APIError, api, newRequestID } from '../../gateway';
 import { preparePending, readPending, replayPending, type PendingProvider } from './recovery';
 
-type Config = { protocol: string; base_url: string; model_id: string; context: number; output: number };
+type Pricing = {currency: string; unit: 'token'; unit_amount: number; minor_unit_scale: number; credit_numerator: number; credit_denominator: number; source: string; version: string; effective_at: number};
+type Config = { protocol: string; base_url: string; model_id: string; context: number; output: number; pricing?: Pricing | null };
 type View = { config: Config | null; has_key: boolean };
 type Receipt = { settings: View; probe?: { message: string } };
 type Status = { host_ready: boolean; tools_ready: boolean; active: Config | null; pending_changes: boolean; message: string };
@@ -39,7 +40,16 @@ export function LLMSettings({ ready }: { ready: boolean }) {
       <label>LLM Base URL<input type="url" required value={config.base_url} onChange={e => set('base_url', e.target.value)} /></label>
       <label>LLM Model ID<input required maxLength={256} value={config.model_id} onChange={e => set('model_id', e.target.value)} /></label>
       <label>上下文 token 上限<input type="number" min={1024} max={2000000} required value={config.context} onChange={e => set('context', +e.target.value)} /></label>
-      <label>输出 token 上限<input type="number" min={1} max={config.context} required value={config.output} onChange={e => set('output', +e.target.value)} /></label>
+      <label>输出 token 上限<input type="number" min={1} max={config.context - 1} required value={config.output} onChange={e => set('output', +e.target.value)} /></label>
+      <label><input type="checkbox" checked={!!config.pricing} onChange={e => set('pricing', e.target.checked ? {currency:'USD',unit:'token',unit_amount:0,minor_unit_scale:6,credit_numerator:1,credit_denominator:1,source:'用户声明',version:'1',effective_at:Math.floor(Date.now()/1000)} : null)} />声明文本生成价格（未知价格不能提交生成）</label>
+      {config.pricing && <>
+        <p>按上下文 token 上限保守估算。每 token 价格应覆盖输入和输出中较高的单价；免费本地模型需明确填写 0。</p>
+        <label>币种<input required pattern="[A-Z]{3}" value={config.pricing.currency} onChange={e => set('pricing',{...config.pricing!,currency:e.target.value})} /></label>
+        <label>单 token 最高价（整数最小货币单位）<input required type="number" min={0} max={1000000000} step={1} value={config.pricing.unit_amount} onChange={e => set('pricing',{...config.pricing!,unit_amount:+e.target.value})} /></label>
+        <label>货币小数位（6 表示百万分之一）<input required type="number" min={0} max={6} value={config.pricing.minor_unit_scale} onChange={e => set('pricing',{...config.pricing!,minor_unit_scale:+e.target.value})} /></label>
+        <label>报价来源<input required maxLength={200} value={config.pricing.source} onChange={e => set('pricing',{...config.pricing!,source:e.target.value})} /></label>
+        <label>报价版本<input required maxLength={100} value={config.pricing.version} onChange={e => set('pricing',{...config.pricing!,version:e.target.value})} /></label>
+      </>}
       <label>LLM API 密钥（留空保留）<input type="password" autoComplete="new-password" disabled={remove} value={key} onChange={e => setKey(e.target.value)} /></label>
       <label><input type="checkbox" checked={remove} onChange={e => { setRemove(e.target.checked); setKey(''); }} />移除保存的 LLM 密钥</label>
       <button type="submit">保存 LLM 连接</button><button type="button" onClick={() => void send(JSON.stringify({ requestId: newRequestID(), action: 'probe' }))}>免费测试已保存 LLM 连接</button>

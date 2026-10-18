@@ -5,7 +5,7 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/generation"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
-	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
+
 	"io"
 	"net/http"
 	"net/url"
@@ -15,7 +15,7 @@ import (
 )
 
 func generationMethod(path, method string) bool {
-	return (path == "/api/generate/image" || path == "/api/generate/estimate" || path == "/api/generate/mask" || path == "/api/v3/capabilities/get") && method == "POST" || (path == "/api/v3/capabilities" || path == "/api/knowledge/providers/openai-images.md") && method == "GET"
+	return (path == "/api/generate/image" || path == "/api/generate/text" || path == "/api/generate/estimate" || path == "/api/generate/mask" || path == "/api/v3/capabilities/get") && method == "POST" || (path == "/api/v3/capabilities" || path == "/api/knowledge/providers/openai-images.md" || path == "/api/knowledge/providers/text.md") && method == "GET"
 }
 func generationRoute(path string) bool {
 	return generationMethod(path, "GET") || generationMethod(path, "POST")
@@ -31,7 +31,8 @@ func generationError(w http.ResponseWriter, e error) {
 	}
 	objectError(w, e)
 }
-func serveGenerate(w http.ResponseWriter, r *http.Request, ps *providers.Service, ts *tasks.Service) {
+func serveGenerate(w http.ResponseWriter, r *http.Request, service generation.Service) {
+	ps := service.Providers
 	w.Header().Set("Cache-Control", "no-store")
 	if !generationMethod(r.URL.Path, r.Method) {
 		reject(w, 405, "invalid_input", "Method not allowed")
@@ -42,7 +43,7 @@ func serveGenerate(w http.ResponseWriter, r *http.Request, ps *providers.Service
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/v3/capabilities") || strings.HasPrefix(r.URL.Path, "/api/knowledge/") {
-		serveCapabilities(w, r, ps)
+		serveCapabilities(w, r, service)
 		return
 	}
 	q, e := scopedQuery(r, "project_id")
@@ -65,7 +66,11 @@ func serveGenerate(w http.ResponseWriter, r *http.Request, ps *providers.Service
 		reject(w, 400, "invalid_input", "Invalid generation schema")
 		return
 	}
-	result, e := (generation.Service{Providers: ps, Tasks: ts}).Admit(r.Context(), p, request, raw, r.URL.Path == "/api/generate/estimate", "")
+	if r.URL.Path == "/api/generate/text" && request.CapabilityID != "text:configured-llm" || r.URL.Path == "/api/generate/image" && !strings.HasPrefix(request.CapabilityID, "image:") {
+		reject(w, 400, "invalid_input", "Capability does not match generation route")
+		return
+	}
+	result, e := service.Admit(r.Context(), p, request, raw, r.URL.Path == "/api/generate/estimate", "")
 	if e != nil {
 		generationError(w, e)
 		return
@@ -77,26 +82,24 @@ func serveGenerate(w http.ResponseWriter, r *http.Request, ps *providers.Service
 	}
 }
 
-func serveCapabilities(w http.ResponseWriter, r *http.Request, s *providers.Service) {
-	if r.URL.Path == "/api/knowledge/providers/openai-images.md" {
+func serveCapabilities(w http.ResponseWriter, r *http.Request, s generation.Service) {
+	if r.URL.Path == "/api/knowledge/providers/openai-images.md" || r.URL.Path == "/api/knowledge/providers/text.md" {
 		if r.URL.RawQuery != "" {
 			reject(w, 400, "invalid_input", "Knowledge card accepts no query")
 			return
 		}
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-		w.Write([]byte(providers.ImageKnowledgeCard))
+		card := providers.ImageKnowledgeCard
+		if strings.HasSuffix(r.URL.Path, "/text.md") {
+			card = providers.TextKnowledgeCard
+		}
+		w.Write([]byte(card))
 		return
 	}
-	items, e := s.List(r.Context())
+	caps, e := s.Capabilities(r.Context())
 	if e != nil {
 		generationError(w, e)
 		return
-	}
-	caps := []providers.Capability{}
-	for _, v := range items {
-		if v.Config.Enabled && v.Config.Kind == "image" {
-			caps = append(caps, providers.ImageCapability(v.Config))
-		}
 	}
 	if r.URL.Path == "/api/v3/capabilities/get" {
 		if r.URL.RawQuery != "" {
@@ -150,8 +153,8 @@ func serveCapabilities(w http.ResponseWriter, r *http.Request, s *providers.Serv
 			return
 		}
 	}
-	if len(q["operation"]) > 0 && !slices.Contains(q["operation"], "image") {
-		caps = []providers.Capability{}
+	if len(q["operation"]) > 0 {
+		caps = slices.DeleteFunc(caps, func(c providers.Capability) bool { return !slices.Contains(q["operation"], c.Operation) })
 	}
 	offset, limit := 0, 50
 	for k, target := range map[string]*int{"offset": &offset, "limit": &limit} {
