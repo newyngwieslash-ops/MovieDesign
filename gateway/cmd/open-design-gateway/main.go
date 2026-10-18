@@ -70,6 +70,12 @@ func run() (runErr error) {
 		return err
 	}
 	defer handler.Close()
+	if bootstrap := os.Getenv("MOVIEDESIGN_AGENT_BOOTSTRAP"); bootstrap != "" {
+		if err = handler.StartAgentHost(bootstrap); err != nil {
+			_ = os.WriteFile(filepath.Join(bootstrap, "error.txt"), []byte("start_failed"), 0600)
+			slog.Error("agent_bootstrap_failed")
+		}
+	}
 	httpServer := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	errorsCh := make(chan error, 2)
 	go func() { errorsCh <- httpServer.Serve(listener) }()

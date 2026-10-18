@@ -1,0 +1,735 @@
+{
+  "config": {
+    "additionalProperties": false,
+    "properties": {
+      "$schema": {
+        "type": "string"
+      },
+      "agent": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/AgentConfig"
+        },
+        "properties": {
+          "build": {
+            "$ref": "#/components/schemas/AgentConfig"
+          },
+          "compaction": {
+            "$ref": "#/components/schemas/AgentConfig"
+          },
+          "explore": {
+            "$ref": "#/components/schemas/AgentConfig"
+          },
+          "general": {
+            "$ref": "#/components/schemas/AgentConfig"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/AgentConfig"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/AgentConfig"
+          },
+          "title": {
+            "$ref": "#/components/schemas/AgentConfig"
+          }
+        },
+        "type": "object"
+      },
+      "attachment": {
+        "$ref": "#/components/schemas/AttachmentConfig"
+      },
+      "autoshare": {
+        "type": "boolean"
+      },
+      "autoupdate": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "enum": [
+              "notify"
+            ],
+            "type": "string"
+          }
+        ],
+        "description": "Check for new versions and show an update notice. Updates are never installed automatically; run /update or `opencode upgrade`. Set to false to disable update checks. true and 'notify' behave the same"
+      },
+      "command": {
+        "additionalProperties": {
+          "additionalProperties": false,
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "subtask": {
+              "type": "boolean"
+            },
+            "template": {
+              "type": "string"
+            },
+            "variant": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "template"
+          ],
+          "type": "object"
+        },
+        "type": "object"
+      },
+      "compaction": {
+        "additionalProperties": false,
+        "properties": {
+          "auto": {
+            "type": "boolean"
+          },
+          "preserve_recent_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prune": {
+            "type": "boolean"
+          },
+          "reserved": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tail_turns": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "default_agent": {
+        "type": "string"
+      },
+      "disabled_providers": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "enabled_providers": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "enterprise": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "experimental": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_tool": {
+            "type": "boolean"
+          },
+          "continue_loop_on_deny": {
+            "type": "boolean"
+          },
+          "disable_paste_summary": {
+            "type": "boolean"
+          },
+          "mcp_timeout": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "openTelemetry": {
+            "type": "boolean"
+          },
+          "policies": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigV2ExperimentalPolicy"
+            },
+            "type": "array"
+          },
+          "primary_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "formatter": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "disabled": {
+                  "type": "boolean"
+                },
+                "environment": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "extensions": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "type": "object"
+          }
+        ],
+        "description": "Enable or configure formatters. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides."
+      },
+      "instructions": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "layout": {
+        "$ref": "#/components/schemas/LayoutConfig"
+      },
+      "logLevel": {
+        "$ref": "#/components/schemas/LogLevel"
+      },
+      "lsp": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "disabled": {
+                      "enum": [
+                        true
+                      ],
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "disabled"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "command": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "disabled": {
+                      "type": "boolean"
+                    },
+                    "env": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "extensions": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "initialization": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "command"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "type": "object"
+          }
+        ],
+        "description": "Enable or configure LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides."
+      },
+      "mcp": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/McpLocalConfig"
+            },
+            {
+              "$ref": "#/components/schemas/McpRemoteConfig"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "type": "object"
+      },
+      "mode": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/AgentConfig"
+        },
+        "properties": {
+          "build": {
+            "$ref": "#/components/schemas/AgentConfig"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/AgentConfig"
+          }
+        },
+        "type": "object"
+      },
+      "model": {
+        "type": "string"
+      },
+      "permission": {
+        "$ref": "#/components/schemas/PermissionConfig"
+      },
+      "plugin": {
+        "items": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object"
+                }
+              ],
+              "type": "array"
+            }
+          ]
+        },
+        "type": "array"
+      },
+      "provider": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/ProviderConfig"
+        },
+        "type": "object"
+      },
+      "reference": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/components/schemas/ConfigV2ReferenceGit"
+            },
+            {
+              "$ref": "#/components/schemas/ConfigV2ReferenceLocal"
+            }
+          ]
+        },
+        "type": "object"
+      },
+      "references": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/components/schemas/ConfigV2ReferenceGit"
+            },
+            {
+              "$ref": "#/components/schemas/ConfigV2ReferenceLocal"
+            }
+          ]
+        },
+        "type": "object"
+      },
+      "server": {
+        "$ref": "#/components/schemas/ServerConfig"
+      },
+      "share": {
+        "enum": [
+          "manual",
+          "auto",
+          "disabled"
+        ],
+        "type": "string"
+      },
+      "shell": {
+        "type": "string"
+      },
+      "skills": {
+        "additionalProperties": false,
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "small_model": {
+        "type": "string"
+      },
+      "snapshot": {
+        "type": "boolean"
+      },
+      "subagent_depth": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "tool_output": {
+        "additionalProperties": false,
+        "properties": {
+          "max_bytes": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "max_lines": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "tools": {
+        "additionalProperties": {
+          "type": "boolean"
+        },
+        "type": "object"
+      },
+      "username": {
+        "type": "string"
+      },
+      "watcher": {
+        "additionalProperties": false,
+        "properties": {
+          "ignore": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "type": "object"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/config": {
+      "get": {
+        "description": "Retrieve the current OpenCode configuration settings and preferences.",
+        "operationId": "config.get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              }
+            },
+            "description": "Get config info"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Get configuration",
+        "tags": [
+          "config"
+        ]
+      },
+      "patch": {
+        "description": "Update OpenCode configuration settings and preferences.",
+        "operationId": "config.update",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Config"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              }
+            },
+            "description": "Successfully updated config"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "BadRequest | InvalidRequestError"
+          }
+        },
+        "summary": "Update configuration",
+        "tags": [
+          "config"
+        ]
+      }
+    },
+    "/global/health": {
+      "get": {
+        "description": "Get health information about the OpenCode server.",
+        "operationId": "global.health",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Health information",
+                  "properties": {
+                    "healthy": {
+                      "enum": [
+                        true
+                      ],
+                      "type": "boolean"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "healthy",
+                    "version"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Health information"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Get health",
+        "tags": [
+          "global"
+        ]
+      }
+    },
+    "/question/{requestID}/reply": {
+      "post": {
+        "description": "Provide answers to a question request from the AI assistant.",
+        "operationId": "question.reply",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestID",
+            "required": true,
+            "schema": {
+              "pattern": "^que",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "directory",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "answers": {
+                    "description": "User answers in order of questions (each answer is an array of selected labels)",
+                    "items": {
+                      "$ref": "#/components/schemas/QuestionAnswer"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "answers"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Question answered successfully",
+                  "type": "boolean"
+                }
+              }
+            },
+            "description": "Question answered successfully"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "BadRequest | InvalidRequestError"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuestionNotFoundError"
+                }
+              }
+            },
+            "description": "QuestionNotFoundError"
+          }
+        },
+        "summary": "Reply to question request",
+        "tags": [
+          "question"
+        ]
+      }
+    }
+  },
+  "version": "1.19.0"
+}

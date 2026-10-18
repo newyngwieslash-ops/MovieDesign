@@ -14,7 +14,7 @@ pnpm install --frozen-lockfile
 pnpm desktop:dev
 ```
 
-Tauri 自动先构建 gateway，再启动 Vite。只运行 `pnpm dev` 不会启动桌面壳；浏览器预览会显示缺少本地桥的错误，这是预期行为。
+Tauri 自动先构建 gateway，下载并校验固定 OpenCode 1.19.0 应用专用 binary，再启动 Vite。首次构建需要访问官方 GitHub Release；缓存归项目 `.tools/` 所有，不修改全局 opencode。只运行 `pnpm dev` 不会启动桌面壳。
 
 ## 验证与构建
 
@@ -28,7 +28,7 @@ pnpm desktop:build
 pnpm tauri build
 ```
 
-`desktop:build` 输出可运行的生产程序到 `desktop/src-tauri/target/release/`，运行时必须保留同目录的 `open-design-gateway.exe`。NSIS 安装包位于该目录下的 `bundle/nsis/`。
+`desktop:build` 输出可运行的生产程序到 `desktop/src-tauri/target/release/`，运行时必须保留同目录的 `open-design-gateway.exe` 与 `moviedesign-opencode.exe`。NSIS 安装包位于该目录下的 `bundle/nsis/`。
 
 `scripts/check.ps1` 运行 Go 测试/vet、编辑器/画布及恢复检查、前端类型检查/生产构建、Rust 测试和 gateway 进程冒烟。测试数据保留于忽略提交的 `.runtime/`，便于检查数据库和日志。
 
@@ -47,6 +47,10 @@ pnpm tauri build
 原生协议验证使用 `./scripts/smoke-desktop.ps1 -Mode release -Smoke generation`；设置与卡片分别使用 `-Smoke providers`、`-Smoke questions`。这些脚本使用隔离数据和本地协议 fixture；真实供应商调用及验收范围见里程碑记录。
 
 ## 运行数据与故障诊断
+
+M5.1 在供应商设置中提供独立 LLM 连接：自定义 OpenAI Chat Completions 兼容、OpenAI Responses、Anthropic Messages。填写 Base URL、模型 ID 和 token 上限；API 密钥仅写入 DPAPI。保存后重新启动应用生效，界面同时显示当前模型与待生效状态。免费测试只读取已保存的模型列表，Anthropic 只校验本地配置；不会自动推理。LLM host 就绪与尚未注册的媒体工具分别显示，聊天和工具轮次将在后续 M5 任务接续。
+
+`./scripts/smoke-desktop.ps1 -Mode release -Smoke agent` 验证真实 WebView 的 LLM 设置、模型列表本地 fixture、密钥回执恢复、重启及两个 owned child 的退出。固定 agent 端口为 `127.0.0.1:4096`，随机 Basic 密码仅在原生进程与 gateway 之间传递；前端只访问 gateway。隔离配置/home/cache/temp、会话 data/state 和日志都位于 `agent-host/`，不读用户 opencode 配置或凭据。来源和许可见 [第三方依赖](docs/third-party.md)。
 
 默认数据目录由 Tauri 的 `app_data_dir` 决定（应用标识 `io.github.newyngwieslash-ops.moviedesign`）。测试可通过 `MOVIEDESIGN_DATA_DIR` 指定独立目录。
 

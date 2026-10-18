@@ -21,6 +21,7 @@ pub struct Gateway {
     stdin: Option<ChildStdin>,
     responses: Receiver<String>,
     connection: Connection,
+    agent: Option<crate::opencode::Opencode>,
 }
 
 impl Gateway {
@@ -34,6 +35,7 @@ impl Gateway {
                 port: None,
                 error: None,
             },
+            agent: None,
         };
         let result = (|| -> Result<(), String> {
             fs::create_dir_all(data_dir.join("logs")).map_err(|e| e.to_string())?;
@@ -53,6 +55,11 @@ impl Gateway {
                 "http://tauri.localhost"
             };
             let mut command = Command::new(sidecar);
+            gateway.agent = Some(crate::opencode::Opencode::prepare(data_dir)?);
+            command.env(
+                "MOVIEDESIGN_AGENT_BOOTSTRAP",
+                &gateway.agent.as_ref().unwrap().directory,
+            );
             command
                 .arg("--data-dir")
                 .arg(data_dir)
@@ -100,6 +107,9 @@ impl Gateway {
                 return Err("本地服务尚未就绪".into());
             }
             gateway.connection.port = Some(8001);
+            if let Some(agent) = gateway.agent.as_mut() {
+                let _ = agent.start();
+            }
             Ok(())
         })();
         if let Err(error) = result {
@@ -129,6 +139,9 @@ impl Gateway {
     }
 
     pub fn connection(&mut self) -> Connection {
+        if let Some(agent) = self.agent.as_mut() {
+            agent.poll();
+        }
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -148,6 +161,10 @@ impl Gateway {
     }
 
     pub fn shutdown(&mut self) {
+        // Stop the owned model runtime before draining the gateway. No PID/port-wide termination.
+        if let Some(mut agent) = self.agent.take() {
+            agent.shutdown();
+        }
         if let Some(mut child) = self.child.take() {
             if let Some(mut stdin) = self.stdin.take() {
                 let _ = writeln!(

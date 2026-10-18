@@ -1,4 +1,5 @@
 mod gateway;
+mod opencode;
 
 use std::sync::Mutex;
 use tauri::Manager;

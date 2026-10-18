@@ -19,7 +19,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "externalBin": ["binaries/open-design-gateway"],
+    "externalBin": ["binaries/open-design-gateway", "binaries/moviedesign-opencode"],
+    "resources": { "../../docs/third-party.md": "licenses/third-party.md" },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
   }
 }

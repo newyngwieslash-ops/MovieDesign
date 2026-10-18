@@ -1,6 +1,7 @@
 import { pendingStorageKey, preparePending, readPending, replayPending, type PendingProvider } from './recovery';
 import { useEffect, useState } from 'react';
 import { APIError, api, newRequestID } from '../../gateway';
+import { LLMSettings } from './LLMSettings';
 
 type Capability = { paramSchema?: Record<string,unknown>; reference_roles?: string[]; constraints?: Record<string,unknown>; max_prompt_bytes: number; max_count: number; max_references: number; sizes: string[]; edit: boolean; duration_seconds: number[]; audio: boolean };
 type Pricing = { currency: string; unit: string; unit_amount: number; minor_unit_scale: number; credit_numerator: number; credit_denominator: number; source: string; version: string; effective_at: number };
@@ -108,5 +109,6 @@ export function ProviderSettings({ ready }: { ready: boolean }) {
       </>}
       <button type="submit">保存供应商</button>
     </fieldset></form></div>
+    <LLMSettings ready={ready} />
   </section>;
 }

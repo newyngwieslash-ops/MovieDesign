@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/agent"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
@@ -39,14 +40,17 @@ func reject(w http.ResponseWriter, status int, code, message string) {
 
 type Server struct {
 	http.Handler
-	workspace *workspace.Workspace
-	db        *sql.DB
-	tasks     *tasks.Service
-	events    *events.Service
-	mu        sync.Mutex
-	stopping  bool
-	requests  sync.WaitGroup
-	active    atomic.Int64
+	workspace      *workspace.Workspace
+	db             *sql.DB
+	tasks          *tasks.Service
+	events         *events.Service
+	mu             sync.Mutex
+	stopping       bool
+	requests       sync.WaitGroup
+	active         atomic.Int64
+	llm            *agent.Settings
+	agentHost      *agent.Host
+	agentBootstrap string
 }
 
 func (s *Server) BeginShutdown() {
@@ -118,6 +122,9 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 	}
 	ev := events.NewService(db)
 	srv := &Server{db: db, events: ev, tasks: tasks.NewService(db, ev, nil)}
+	if providerService != nil {
+		srv.llm = &agent.Settings{DB: db, Secrets: providerService.Secrets}
+	}
 	if deliveries != nil {
 		deliveries.CompleteTask = srv.tasks.CompleteDelivery
 	}
@@ -155,7 +162,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
+			allowed := agentMethod(r.URL.Path, method) || questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
@@ -163,6 +170,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID, Range")
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/agent/") {
+			srv.serveAgent(w, r)
 			return
 		}
 		if r.URL.Path == "/api/events" {

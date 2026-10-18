@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": { "*": "deny", "question": "allow" },
+  "enabled_providers": ["moviedesign"],
+  "plugin": [],
+  "autoupdate": false,
+  "share": "disabled",
+  "lsp": false,
+  "formatter": false,
+  "compaction": { "auto": false }
+}
