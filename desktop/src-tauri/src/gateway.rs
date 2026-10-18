@@ -55,11 +55,19 @@ impl Gateway {
                 "http://tauri.localhost"
             };
             let mut command = Command::new(sidecar);
-            gateway.agent = Some(crate::opencode::Opencode::prepare(data_dir)?);
-            command.env(
-                "MOVIEDESIGN_AGENT_BOOTSTRAP",
-                &gateway.agent.as_ref().unwrap().directory,
-            );
+            // These are private launch-state inputs, never inherited from the shell.
+            command.env_remove("MOVIEDESIGN_AGENT_BOOTSTRAP");
+            command.env_remove("MOVIEDESIGN_AGENT_PREPARE_FAILED");
+            match crate::opencode::Opencode::prepare(data_dir) {
+                Ok(agent) => {
+                    command.env("MOVIEDESIGN_AGENT_BOOTSTRAP", &agent.directory);
+                    gateway.agent = Some(agent);
+                }
+                Err(_) => {
+                    // Failed ACL/profile preparation forbids model startup, not the workspace.
+                    command.env("MOVIEDESIGN_AGENT_PREPARE_FAILED", "1");
+                }
+            }
             command
                 .arg("--data-dir")
                 .arg(data_dir)

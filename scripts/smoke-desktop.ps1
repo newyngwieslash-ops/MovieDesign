@@ -1,4 +1,4 @@
-param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2', 'editor', 'editor-product', 'canvas', 'providers', 'questions', 'generation', 'agent')][string]$Smoke = 'm1')
+param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2', 'editor', 'editor-product', 'canvas', 'providers', 'questions', 'generation', 'agent', 'agent-prepare')][string]$Smoke = 'm1')
 $ErrorActionPreference = 'Stop'
 if ($Smoke -eq 'editor' -and $Mode -ne 'debug') { throw 'Editor Canvas harness requires -Mode debug and the existing Vite dev server.' }
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -32,8 +32,26 @@ function Stop-OwnedDesktop($owned) {
     if (Get-NetTCPConnection -State Listen -LocalPort 8001 -ErrorAction SilentlyContinue) { throw 'Gateway port was not released.' }
     if (Get-NetTCPConnection -State Listen -LocalPort 4096 -ErrorAction SilentlyContinue) { throw 'OpenCode port was not released.' }
 }
+$unrelatedPrepare = $null
+if ($Smoke -eq 'agent-prepare') {
+    Set-Content -LiteralPath (Join-Path $runDir 'agent-host') -Value 'controlled unusable agent profile'
+    $unrelatedPrepare = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 4096)
+    $unrelatedPrepare.Start()
+}
 $process = [System.Diagnostics.Process]::Start($info)
 try {
+    if ($Smoke -eq 'agent-prepare') {
+        & node (Join-Path $PSScriptRoot 'smoke-agent-prepare.mjs') $debugPort $runDir $origin
+        if ($LASTEXITCODE -ne 0) { throw 'Agent preparation failure isolation smoke failed.' }
+        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($process.Id)" | Where-Object Name -In @('open-design-gateway.exe','moviedesign-opencode.exe'))
+        if ($children.Count -ne 1 -or $children[0].Name -ne 'open-design-gateway.exe') { throw 'Preparation failure did not prevent model child launch.' }
+        if ($unrelatedPrepare.Pending()) { throw 'Preparation failure contacted unrelated 4096 listener.' }
+        if (-not $process.CloseMainWindow() -or -not $process.WaitForExit(10000)) { throw 'Preparation-failure desktop did not exit normally.' }
+        if (Get-Process -Id $children[0].ProcessId -ErrorAction SilentlyContinue) { throw 'Owned gateway survived.' }
+        if (-not $unrelatedPrepare.Server.IsBound) { throw 'Unrelated listener was stopped.' }
+        Write-Output "Agent preparation failure isolated; gateway health/M4 reads available; no model child/contact; normal exit: $runDir"
+        return
+    }
     $scriptName = if ($Smoke -eq 'agent') { 'smoke-agent.mjs' } elseif ($Smoke -eq 'generation') { 'smoke-generation.mjs' } elseif ($Smoke -eq 'questions') { 'smoke-questions.mjs' } elseif ($Smoke -eq 'providers') { 'smoke-providers.mjs' } elseif ($Smoke -eq 'canvas') { 'smoke-canvas.mjs' } elseif ($Smoke -in @('editor', 'editor-product')) { 'smoke-editor.mjs' } elseif ($Smoke -eq 'm2') { 'smoke-m2.mjs' } else { 'smoke-desktop.mjs' }
     $phase = if ($Smoke -eq 'editor-product') { 'product' } else { 'initial' }
     & node (Join-Path $PSScriptRoot $scriptName) $debugPort $runDir $origin $phase
@@ -80,4 +98,5 @@ try {
         foreach ($ownedChild in $ownedChildren) { $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($ownedChild.ProcessId)"; if ($current -and $current.ParentProcessId -eq $process.Id -and $current.CreationDate -eq $ownedChild.CreationDate) { Stop-Process -Id $ownedChild.ProcessId } }
     }
     $process.Dispose()
+    if ($unrelatedPrepare) { $unrelatedPrepare.Stop() }
 }

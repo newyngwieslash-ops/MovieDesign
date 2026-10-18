@@ -20,7 +20,15 @@ func TestLLMSettingsAreTypedWriteOnlyRecoverableAndOriginGuarded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := newHandler("http://tauri.localhost", db, nil, providers.NewService(db, secrets))
+	h := newHandler("http://tauri.localhost", db, nil, providers.NewService(db, secrets)).(*Server)
+	// Native preparation failure has no usable bootstrap directory and must not
+	// initialize a model host or prevent ordinary gateway reads.
+	if err := h.StartAgentHost(filepath.Join(dir, "unusable"), true); err != nil {
+		t.Fatal(err)
+	}
+	if h.agentHost != nil {
+		t.Fatal("failed preparation created model host")
+	}
 	call := func(method, path, body, origin string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		if origin != "" {
@@ -29,6 +37,17 @@ func TestLLMSettingsAreTypedWriteOnlyRecoverableAndOriginGuarded(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		return w
+	}
+	for i := 0; i < 3; i++ {
+		w := call("GET", "/api/agent/status", "", "http://tauri.localhost")
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "agent 配置目录准备失败") {
+			t.Fatal("preparation error missing", w.Body.String())
+		}
+	}
+	for _, path := range []string{"/api/health", "/api/projects?offset=0&limit=50", "/api/providers"} {
+		if w := call("GET", path, "", "http://tauri.localhost"); w.Code != 200 {
+			t.Fatal("ordinary read unavailable", path, w.Code)
+		}
 	}
 	raw := `{"requestId":"llm-1","action":"save","config":{"protocol":"openai-compatible","base_url":"http://127.0.0.1:11434/v1","model_id":"test","context":32000,"output":4096},"key":"synthetic-LLM-secret"}`
 	for _, origin := range []string{"", "null", "https://evil.example"} {

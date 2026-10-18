@@ -13,7 +13,11 @@ import (
 func agentMethod(path, method string) bool {
 	return (path == "/api/agent/settings" && (method == "GET" || method == "POST")) || (path == "/api/agent/settings/receipt" || path == "/api/agent/status") && method == "GET"
 }
-func (s *Server) StartAgentHost(dir string) error {
+func (s *Server) StartAgentHost(dir string, preparationFailed bool) error {
+	s.agentPreparationFailed = preparationFailed
+	if preparationFailed || dir == "" {
+		return nil
+	}
 	s.agentBootstrap = dir
 	h, err := agent.NewHost(s.llm, dir)
 	if err != nil {
@@ -45,7 +49,13 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) {
 		reject(w, 400, "invalid_input", "Agent settings accept no query")
 		return
 	} else if r.URL.Path == "/api/agent/status" {
-		value = s.agentHost.Status(r.Context(), s.llm, s.agentBootstrap)
+		if s.agentPreparationFailed {
+			var settings agent.View
+			settings, _, err = s.llm.Read(r.Context())
+			value = agent.Status{Configured: settings.Config != nil, Message: "agent 配置目录准备失败；请检查应用数据目录权限后重启。工作区仍可使用。"}
+		} else {
+			value = s.agentHost.Status(r.Context(), s.llm, s.agentBootstrap)
+		}
 	} else if r.Method == "GET" {
 		value, _, err = s.llm.Read(r.Context())
 	} else {

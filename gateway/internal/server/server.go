@@ -40,17 +40,18 @@ func reject(w http.ResponseWriter, status int, code, message string) {
 
 type Server struct {
 	http.Handler
-	workspace      *workspace.Workspace
-	db             *sql.DB
-	tasks          *tasks.Service
-	events         *events.Service
-	mu             sync.Mutex
-	stopping       bool
-	requests       sync.WaitGroup
-	active         atomic.Int64
-	llm            *agent.Settings
-	agentHost      *agent.Host
-	agentBootstrap string
+	workspace              *workspace.Workspace
+	db                     *sql.DB
+	tasks                  *tasks.Service
+	events                 *events.Service
+	mu                     sync.Mutex
+	stopping               bool
+	requests               sync.WaitGroup
+	active                 atomic.Int64
+	llm                    *agent.Settings
+	agentHost              *agent.Host
+	agentBootstrap         string
+	agentPreparationFailed bool
 }
 
 func (s *Server) BeginShutdown() {
