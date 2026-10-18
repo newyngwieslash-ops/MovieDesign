@@ -124,10 +124,12 @@ export function assetReferences(root: DocNode): string[] {
 | design_project_rules | 持久项目规则；写入需显式用户要求的结构化回执 |
 | design_voice_search / image_search | 真实本地素材索引或已配置供应商目录；返回真实ID与来源 |
 
-- [ ] 每行至少一个工具级成功和拒绝用例；对生成/投递再覆盖重放。MCP与HTTP同一对象/任务产生同一结果，不允许工具内另写SQL事务或另一份状态转换。
-- [ ] 使用Go图像标准库解码尺寸；视频/音频ffprobe通过明确argv、受管路径、超时启动，不走shell。构建脚本锁定分发版本及许可证，不能调用原应用私有二进制。文档读写拒绝任意路径；知识卡只读受管参考资料。
-- [ ] 补齐`POST /api/generate/text`：复用tasks的202受理、冻结输入、计费卡、事件和delivery，将所配LLM通过受管opencode独立文本session产生的最终文本保存为文档Version。该session的专用配置禁用全部工具，包括question/MCP；不占用media-agent轮次队列，否则design_execute(text)同步等待会死锁。最多一个文本任务执行，其余文本任务排队，MCP作用域仍仅绑定media-agent；由main注入text执行函数避免tasks与agent互相import。测试嵌套execute(text)完成且工具调用数0，以及401、宽限窗后受理、空结果、取消、unknown不重发、文档落库；模型未提供精确计费时按配置token上限报价并明确估算。不能只注册路由返回not_implemented。
-- [ ] 素材搜索初版覆盖本地图片资产和用户登记的真实供应商voice目录；没有目录返回明确空coverage与来源说明。voice目录只存供应商voice ID和描述，不引入第三个语音生成模型。需要远端搜索时只能使用已实现、具备文档与fixture的协议；不能把虚构数据或通用生成API当搜索。该本地优先范围作为相对原云搜索的适配显式登记。
-- [ ] 以analysis-docs/02 §5逐条迁移中文提示词，至少保留：稳定对象身份、独立内容新Resource、同内容修订新Version、派生不等于同Resource、共同出现不合并、成员role不替代身份、跨对象复用不复制身份、源版本血缘、用户授权范围、文档与媒体分阶段、未知结果原请求重放、项目规则仅用户要求。逐条注明对应原文位置。
-- [ ] 提示词要求采用选定技能直到任务完成、按可审阅成果推进、只暂停依赖缺口、真实asset引用、不得验收式自评/自动重生。规则持久化只有human回执允许；agent请求更新只能提出候选卡。
+- [x] 每行至少一个工具级成功和拒绝用例；对生成/投递再覆盖重放。MCP与HTTP同一对象/任务产生同一结果，不允许工具内另写SQL事务或另一份状态转换。
+- [x] 使用Go图像标准库解码尺寸；视频/音频ffprobe通过明确argv、受管路径、超时启动，不走shell。构建脚本锁定分发版本及许可证，不能调用原应用私有二进制。文档读写拒绝任意路径；知识卡只读受管参考资料。
+- [x] 补齐`POST /api/generate/text`：复用tasks的202受理、冻结输入、计费卡、事件和delivery，将所配LLM通过受管opencode独立文本session产生的最终文本保存为文档Version。该session的专用配置禁用全部工具，包括question/MCP；不占用media-agent轮次队列，否则design_execute(text)同步等待会死锁。最多一个文本任务执行，其余文本任务排队，MCP作用域仍仅绑定media-agent；由main注入text执行函数避免tasks与agent互相import。测试嵌套execute(text)完成且工具调用数0，以及401、宽限窗后受理、空结果、取消、unknown不重发、文档落库；模型未提供精确计费时按配置token上限报价并明确估算。不能只注册路由返回not_implemented。
+- [x] 素材搜索初版覆盖本地图片资产和用户登记的真实供应商voice目录；没有目录返回明确空coverage与来源说明。voice目录只存供应商voice ID和描述，不引入第三个语音生成模型。需要远端搜索时只能使用已实现、具备文档与fixture的协议；不能把虚构数据或通用生成API当搜索。该本地优先范围作为相对原云搜索的适配显式登记。
+- [x] 以analysis-docs/02 §5逐条迁移中文提示词，至少保留：稳定对象身份、独立内容新Resource、同内容修订新Version、派生不等于同Resource、共同出现不合并、成员role不替代身份、跨对象复用不复制身份、源版本血缘、用户授权范围、文档与媒体分阶段、未知结果原请求重放、项目规则仅用户要求。逐条注明对应原文位置。
+- [x] 提示词要求采用选定技能直到任务完成、按可审阅成果推进、只暂停依赖缺口、真实asset引用、不得验收式自评/自动重生。规则持久化只有human回执允许；agent请求更新只能提出候选卡。
 - [ ] `./scripts/check.ps1`及smoke-chat验证真实LLM→工具→billing卡→图像→版本→画布；无LLM凭据标未执行，不能通过模拟对话宣布M5完成。提交 `feat(M5.5): complete design tools and media agent contracts`，推送M5。
+
+M5.5 工程任务在904f314通过独立规格/质量复审。最终全量与生产构建、原生模拟供应商矩阵及同资源候选/重启回归通过；真实LLM与付费图像调用仍未执行，末项真实验收不勾选。按总计划§6继续独立工程工作；整M5门禁和推送另记。

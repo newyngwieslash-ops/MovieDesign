@@ -1,8 +1,8 @@
 # MovieDesign
 
-本地优先的 AI 设计工作台，使用 Tauri 2 + React 19 + Go 1.25 + SQLite；opencode 在 M5 接入。
+本地优先的 AI 设计工作台，使用 Tauri 2 + React 19 + Go 1.25 + SQLite + opencode。
 
-当前已实现 **M1–M4 工程功能**：项目与素材库、版本血缘、幂等投递、八图形编辑与标注、持久画布，以及自定义图像/视频连接设置、图像生成与标注修复、费用确认卡、任务中心和 SSE 恢复。画布支持图像、视频、音频和只读文本；同一图像修订保存为同一 Resource 的新 Version。M4 已通过工程检查与独立整阶段审查，真实凭据支持的图像生成/修复验收仍未执行；已通过的本地协议 fixture 与生产窗口验证不代表真实模型效果或费用验收。opencode/聊天、分镜流水线、视频生成与签名更新由 M5–M7 接续。
+**M1–M4 已通过工程检查与独立整阶段审查**：项目、素材库、版本血缘、幂等投递、八图形编辑与标注、持久画布、自定义连接、图像生成与修复、费用卡和任务中心。M5 已接入受管 opencode、TipTap 聊天、资产引用、结构化问题、18项 design 工具与独立文本任务，当前正在独立审查修复。分镜流水线、视频执行和签名更新仍由 M6–M7 接续。真实凭据支持的 LLM/图像/视频验收未执行；本地协议 fixture 与生产窗口验证不代表真实模型效果或费用验收。
 
 ## Windows x64 开发
 
@@ -28,7 +28,7 @@ pnpm desktop:build
 pnpm tauri build
 ```
 
-`desktop:build` 输出可运行的生产程序到 `desktop/src-tauri/target/release/`，运行时必须保留同目录的 `open-design-gateway.exe` 与 `moviedesign-opencode.exe`。NSIS 安装包位于该目录下的 `bundle/nsis/`。
+`desktop:build` 输出可运行的生产程序到 `desktop/src-tauri/target/release/`，运行时必须保留同目录的 `open-design-gateway.exe`、`moviedesign-opencode.exe` 及 `media/` 资源。首次构建也会下载并校验固定 ffprobe 与许可文件。NSIS 安装包位于该目录下的 `bundle/nsis/`。
 
 `scripts/check.ps1` 运行 Go 测试/vet、编辑器/画布及恢复检查、前端类型检查/生产构建、Rust 测试和 gateway 进程冒烟。测试数据保留于忽略提交的 `.runtime/`，便于检查数据库和日志。
 
@@ -48,9 +48,13 @@ pnpm tauri build
 
 ## 运行数据与故障诊断
 
-M5.1 在供应商设置中提供独立 LLM 连接：自定义 OpenAI Chat Completions 兼容、OpenAI Responses、Anthropic Messages。填写 Base URL、模型 ID 和 token 上限；API 密钥仅写入 DPAPI。保存后重新启动应用生效，界面同时显示当前模型与待生效状态。免费测试只读取已保存的模型列表，Anthropic 只校验本地配置；不会自动推理。LLM host 就绪与尚未注册的媒体工具分别显示，聊天和工具轮次将在后续 M5 任务接续。
+供应商设置提供独立 LLM 连接：OpenAI Chat Completions 兼容、OpenAI Responses、Anthropic Messages。填写 Base URL、模型 ID 和 token 上限；API 密钥仅写入 DPAPI。保存后重启生效，界面分别显示当前模型和待生效配置。免费测试只读取模型列表，Anthropic 只校验本地配置，不自动推理。文本生成另需明确估算价格，并经过费用卡；未知价格不能执行。
+
+聊天支持 TipTap 资产引用、标注、排队与撤回、流式消息和人工问题卡。原生文件和命令工具禁用，媒体 agent 只允许18项 design 工具与 question；每轮最多40次工具调用。文本生成使用独立的零工具 session。未知结果保留原请求身份，重启不自动重发；取消聊天不隐式取消已经受理的生成任务。
 
 `./scripts/smoke-desktop.ps1 -Mode release -Smoke agent` 验证真实 WebView 的 LLM 设置、模型列表本地 fixture、密钥回执恢复、重启及两个 owned child 的退出。固定 agent 端口为 `127.0.0.1:4096`，随机 Basic 密码仅在原生进程与 gateway 之间传递；前端只访问 gateway。隔离配置/home/cache/temp、会话 data/state 和日志都位于 `agent-host/`，不读用户 opencode 配置或凭据。来源和许可见 [第三方依赖](docs/third-party.md)。
+
+`-Smoke tools` 验证实际 opencode 与独立文本、人工费用/规则卡及画布投递；`-Smoke chat-fix` 验证草稿、队列竞态和重启恢复。它们使用本地合成供应商；Responses/Anthropic 的原生推理及真实供应商调用仍未验收。实际审查结论与当前构建对应证据以里程碑记录为准。
 
 默认数据目录由 Tauri 的 `app_data_dir` 决定（应用标识 `io.github.newyngwieslash-ops.moviedesign`）。测试可通过 `MOVIEDESIGN_DATA_DIR` 指定独立目录。
 
