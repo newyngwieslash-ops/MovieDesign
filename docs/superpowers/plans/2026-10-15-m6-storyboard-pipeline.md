@@ -39,11 +39,13 @@ M6.1 在b859a62通过独立规格/质量复审；全量/原生方法注入证据
 
 **Interfaces:** `SaveStoryboard(ctx,scope,requestId,pipelineID,expectedRevision,Storyboard)(Revision,error)`；`Storyboard{Panels,Shots,Timeline}`结构化字段对应原文层级。时间统一整数毫秒，不把UI时间字符串存为真值。document_write增加显式typed document参数并在适配表登记；通用文档仍按原入口写入。
 
-- [ ] 测试Panel引用缺失、shot区间反向/越界、timeline覆盖缺口、重复ID、时长不一致、并发编辑CAS冲突；文本中“已批准”不能创建approval。原文未要求所有Panel均匀分布，校验不得自行加艺术限制。
-- [ ] 先从05篇原结构固定字段、单位和必需关系，保存可机读schema到docs/contracts，不引入新的公开生成协议。`storyboard_revisions`唯一键`(pipeline_id,revision)`，保存结构化内容、semantic_hash、document_version_id、created_at；revision不可覆盖。
-- [ ] 每次有效Panel/Shot/Timeline改变保存新revision；无实质修改的幂等重放返回旧revision。保存新revision、置prompt_status=pending、失效下游批准/待提交合同在一个事务提交；已有运行任务保留其冻结revision，不能被后台编辑偷换输入。
-- [ ] 渲染确定性`storyboard_review.md`，通过document_write→delivery产生文档Version和画布文档内容；相同分镜修订沿用同Resource，项目对象身份不随文档标题改变。Markdown手工编辑作为新候选内容，必须结构化校验后才能成为有效分镜revision。
-- [ ] UI展示revision、批准状态、Panel→Shot→Timeline及变更；不能只放聊天摘要。`go -C gateway test ./internal/pipeline -run TestStoryboard -v`与真实WebView编辑/重启恢复通过，提交 `feat(M6.2): persist semantic storyboard revisions`。
+- [x] 测试Panel引用缺失、shot区间反向/越界、timeline覆盖缺口、重复ID、时长不一致、并发编辑CAS冲突；文本中“已批准”不能创建approval。原文未要求所有Panel均匀分布，校验不得自行加艺术限制。
+- [x] 先从05篇原结构固定字段、单位和必需关系，保存可机读schema到docs/contracts，不引入新的公开生成协议。`storyboard_revisions`唯一键`(pipeline_id,revision)`，保存结构化内容、semantic_hash、document_version_id、created_at；revision不可覆盖。
+- [x] 每次有效Panel/Shot/Timeline改变保存新revision；无实质修改的幂等重放返回旧revision。保存新revision、置prompt_status=pending、失效下游批准/待提交合同在一个事务提交；已有运行任务保留其冻结revision，不能被后台编辑偷换输入。
+- [x] 渲染确定性`storyboard_review.md`，通过document_write→delivery产生文档Version和画布文档内容；相同分镜修订沿用同Resource，项目对象身份不随文档标题改变。Markdown手工编辑作为新候选内容，必须结构化校验后才能成为有效分镜revision。
+- [x] UI展示revision、批准状态、Panel→Shot→Timeline及变更；不能只放聊天摘要。`go -C gateway test ./internal/pipeline -run TestStoryboard -v`与真实WebView编辑/重启恢复通过，提交 `feat(M6.2): persist semantic storyboard revisions`。
+
+M6.2 engineering gate approved at070886c after two bounded recovery-validation fixes. Current component20/20 and type/build pass; full/native evidence is qualified pre-frontend-fix4c3580c. True provider calls remain unexecuted.
 
 ### Task M6.3：revision 绑定批准与失效传播
 
