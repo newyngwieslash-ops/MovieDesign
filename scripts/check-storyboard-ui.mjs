@@ -27,3 +27,24 @@ test('duplicate nodes cannot overwrite an uncertain intent',async()=>{const map=
 test('late completion cannot clear newer local intent',async()=>{const h=harness();await h.settle();h.edit().props.onClick();await h.settle();h.unmount();h.map.set(key,'newer');h.writes[0].resolve({delivery:{status:'completed'}});await tick();assert.equal(h.map.get(key),'newer')});
 test('storage corruption and denial block effects, show errors, never post',async()=>{for(const h of [harness(new Map([[key,'{']])),harness(new Map(),true)]){await h.settle();assert(h.button('编辑分镜 Markdown').props.disabled);assert(find(h.render(),n=>n.props?.role==='alert'));assert.equal(h.writes.length,0)}});
 test('definite rejection frees only own intent and keeps candidate editable',async()=>{const h=harness();await h.settle();h.edit().props.onClick();await h.settle();h.writes[0].reject(new h.APIError(400));await h.settle();assert(!h.map.has(key));assert(!h.button('校验并保存新 revision').props.disabled)});
+test('malformed nested frozen bodies fail closed before replay and retain exact evidence',async t=>{
+ const source=harness();await source.settle();source.edit().props.onClick();await source.settle();source.writes[0].reject(Error('unknown'));await source.settle();const original=source.map.get(key);
+ for(const [name,change] of Object.entries({
+  'missing composition':b=>delete b.output.composition,
+  'null composition type':b=>b.output.composition.type=null,
+  'missing resource name':b=>delete b.output.resources[0].name,
+  'placement key mismatch':b=>b.output.composition.placements[0].key='other',
+  'missing placement role':b=>delete b.output.composition.placements[0].role,
+  'extra typed property':b=>b.typedDocument.approved=true,
+  'missing panel framing':b=>delete b.typedDocument.storyboard.panels[0].framing,
+  'null shot':b=>b.typedDocument.storyboard.shots[0]=null,
+  'unknown panel reference':b=>b.typedDocument.storyboard.shots[0].panelIds=['other'],
+  'missing timeline audio intent':b=>delete b.typedDocument.storyboard.timeline.audioIntent,
+  'Markdown typed disagreement':b=>b.content=b.content.replace('speak','different'),
+  'base version mismatch':b=>b.output.resources[0].baseVersionId='other',
+  'revision mismatch':b=>b.typedDocument.expectedRevision=2,
+ }))await t.test(name,async()=>{
+  const p=JSON.parse(original),b=JSON.parse(p.body);change(b);p.body=JSON.stringify(b);const raw=JSON.stringify(p),h=harness(new Map([[key,raw]]));await h.settle();const retry=h.button('重试原分镜请求');if(retry&&!retry.props.disabled)retry.props.onClick();await h.settle();if(h.writes[0]){h.writes[0].reject(new h.APIError(400));await h.settle()}
+  assert.equal(h.writes.length,0,'corrupt stored body must never POST');assert.equal(h.map.get(key),raw,'retain exact corrupted record');assert(find(h.render(),n=>n.props?.role==='alert'));h.unmount();
+ });source.unmount();
+});

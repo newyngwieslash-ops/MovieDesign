@@ -7,10 +7,37 @@ type Storyboard={panels:Panel[];shots:Shot[];timeline:{durationMs:number;shotIds
 type Revision={pipelineId:string;revision:number;currentRevision:number;storyboard:Storyboard;semanticHash:string;documentVersionId:string;approvalStatus:string;promptStatus:string};
 type Pending={projectID:string;pipelineID:string;versionID:string;revision:number;body:string};
 const key=(project:string,pipeline:string)=>`moviedesign.storyboard.pending.v1.${project}.${pipeline}`;
+function fields(value:unknown,names:string):asserts value is Record<string,unknown> {if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).sort().join(',')!==names)throw Error('Invalid recovery fields')}
+const text=(value:unknown):value is string=>typeof value==='string'&&value.trim().length>0;
+const identifier=(value:unknown):value is string=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(value);
+const milliseconds=(value:unknown)=>Number.isSafeInteger(value)&&Number(value)>=0;
+function storyboardShape(value:unknown):asserts value is Storyboard {
+ fields(value,'panels,shots,timeline');const {panels,shots,timeline}=value;
+ if(!Array.isArray(panels)||!panels.length||!Array.isArray(shots)||!shots.length)throw Error();
+ const ids=new Set<string>(),panelIds=new Set<string>(),shotIds=new Set<string>();
+ for(const p of panels){fields(p,'action,framing,id,timeMs,transition');if(!text(p.id)||ids.has(p.id)||!milliseconds(p.timeMs)||![p.framing,p.action,p.transition].every(text))throw Error();ids.add(p.id);panelIds.add(p.id)}
+ for(const s of shots){fields(s,'endMs,endState,id,narrativeRole,panelIds,startMs,startState');if(!text(s.id)||ids.has(s.id)||!milliseconds(s.startMs)||!milliseconds(s.endMs)||![s.narrativeRole,s.startState,s.endState].every(text)||!Array.isArray(s.panelIds)||!s.panelIds.length||new Set(s.panelIds).size!==s.panelIds.length||!s.panelIds.every(id=>typeof id==='string'&&panelIds.has(id)))throw Error();ids.add(s.id);shotIds.add(s.id)}
+ fields(timeline,'audioIntent,durationMs,shotIds');if(!milliseconds(timeline.durationMs)||!text(timeline.audioIntent)||!Array.isArray(timeline.shotIds)||timeline.shotIds.length!==shots.length||new Set(timeline.shotIds).size!==shots.length||!timeline.shotIds.every(id=>typeof id==='string'&&shotIds.has(id)))throw Error();
+}
+// Compare parsed candidate fields independent of JSON object order; replay keeps
+// the original bytes. Backend remains authoritative for intervals/coverage.
+function sameJSON(a:unknown,b:unknown):boolean {
+ if(a===b)return true;if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
+ const x=a as Record<string,unknown>,y=b as Record<string,unknown>,keys=Object.keys(x);return keys.length===Object.keys(y).length&&keys.every(k=>Object.hasOwn(y,k)&&sameJSON(x[k],y[k]));
+}
 export function readPending(project:string,pipeline:string):Pending|null {
  const raw=localStorage.getItem(key(project,pipeline));if(raw===null)return null;
- try {const p=JSON.parse(raw),b=JSON.parse(p.body),d=b.typedDocument,r=b.output.resources;
-  if(Object.keys(p).sort().join(',')!=='body,pipelineID,projectID,revision,versionID'||p.projectID!==project||p.pipelineID!==pipeline||typeof p.versionID!=='string'||!p.versionID||!Number.isSafeInteger(p.revision)||p.revision<1||typeof p.body!=='string'||Object.keys(b).sort().join(',')!=='content,format,mode,output,requestId,typedDocument'||typeof b.requestId!=='string'||!(/^[A-Za-z0-9_-]{1,128}$/).test(b.requestId)||b.mode!=='replace'||b.format!=='md'||typeof b.content!=='string'||d.kind!=='storyboard'||d.pipelineId!==pipeline||d.expectedRevision!==p.revision||!d.storyboard||!Array.isArray(r)||r.length!==1||r[0].mode!=='new_version'||r[0].baseVersionId!==p.versionID)throw Error();return p;
+ try {const p:unknown=JSON.parse(raw);fields(p,'body,pipelineID,projectID,revision,versionID');
+  if(!identifier(project)||!identifier(pipeline)||p.projectID!==project||p.pipelineID!==pipeline||!identifier(p.versionID)||!Number.isSafeInteger(p.revision)||Number(p.revision)<1||typeof p.body!=='string')throw Error();
+  const b:unknown=JSON.parse(p.body);fields(b,'content,format,mode,output,requestId,typedDocument');
+  if(!identifier(b.requestId)||b.mode!=='replace'||b.format!=='md'||typeof b.content!=='string')throw Error();
+  const d=b.typedDocument;fields(d,'expectedRevision,kind,pipelineId,storyboard');if(d.kind!=='storyboard'||d.pipelineId!==pipeline||d.expectedRevision!==p.revision)throw Error();storyboardShape(d.storyboard);
+  const blocks=Array.from(b.content.matchAll(/```json\n([\s\S]*?)\n```/g));if(blocks.length!==1)throw Error();const candidate:unknown=JSON.parse(blocks[0][1]);storyboardShape(candidate);if(!sameJSON(candidate,d.storyboard))throw Error();
+  const output=b.output;fields(output,'composition,resources');if(!Array.isArray(output.resources)||output.resources.length!==1)throw Error();
+  const resource=output.resources[0];fields(resource,'baseVersionId,key,mode,name');if(resource.key!=='review'||resource.mode!=='new_version'||resource.name!=='storyboard_review.md'||resource.baseVersionId!==p.versionID)throw Error();
+  const composition=output.composition;fields(composition,'name,placements,type');if(!text(composition.name)||Array.from(composition.name).length>256)throw Error();fields(composition.type,'id');if(!identifier(composition.type.id)||!Array.isArray(composition.placements)||composition.placements.length!==1)throw Error();
+  const placement=composition.placements[0];fields(placement,'key,role');if(placement.key!==resource.key||placement.role!=='storyboard')throw Error();
+  return p as Pending;
  }catch{throw Error('分镜恢复记录损坏或归属不匹配；请保留本地数据并停止写入。')}
 }
 export function StoryboardReview({projectID,versionID,text}:{projectID:string;versionID:string;text:string}) {
