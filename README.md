@@ -2,7 +2,7 @@
 
 本地优先的 AI 设计工作台，使用 Tauri 2 + React 19 + Go 1.25 + SQLite；opencode 在 M5 接入。
 
-当前实现 **M1–M3**：项目与素材库、带血缘的不可变版本、可恢复的幂等投递、八图形编辑与区域标注、持久创作画布。画布支持图像、视频、音频和只读文本，以及嵌套画框、布局和版本选择。图像编辑结果保存为同一 Resource 的新版本；重启后可显式继续未确认的保存。供应商配置、AI 生成、对话、分镜流水线与签名更新由 M4–M7 接续，尚未交付。
+当前已实现 **M1–M4 工程功能**：项目与素材库、版本血缘、幂等投递、八图形编辑与标注、持久画布，以及自定义图像/视频连接设置、图像生成与标注修复、费用确认卡、任务中心和 SSE 恢复。画布支持图像、视频、音频和只读文本；同一图像修订保存为同一 Resource 的新 Version。M4 正在整阶段审查，真实凭据支持的图像生成/修复验收仍未执行；已通过的本地协议 fixture 与生产窗口验证不代表真实模型效果或费用验收。opencode/聊天、分镜流水线、视频生成与签名更新由 M5–M7 接续。
 
 ## Windows x64 开发
 
@@ -35,6 +35,16 @@ pnpm tauri build
 真实桌面验证（需要可交互的 Windows 会话）从仓库根目录运行 `./scripts/smoke-desktop.ps1 -Mode release`；开发版使用 `-Mode debug`，先运行 `cargo build --manifest-path desktop/src-tauri/Cargo.toml` 并在另一终端启动 Vite。测试会打开并关闭本次创建的窗口，检查真实 WebView 健康请求、保存截图并确认 sidecar 回收。
 
 生产版完整画布与原生重启检查使用 `./scripts/smoke-desktop.ps1 -Mode release -Smoke canvas`；普通素材导入恢复检查使用 `-Smoke m2`。丰富图形/文字/标注检查使用开发版 `-Smoke editor`、`-Smoke editor-product`，依赖 Vite，不能当作生产版检查。实际结果、协议适配及验证范围见 [里程碑记录](docs/milestones.md) 和 [契约文档](docs/contracts.md)。签名安装包与更新验收留待 M7。
+
+## 图像连接与生成
+
+在“供应商设置”中保存图像连接，选择已实现的 `openai-images` 协议，填写本地或云端 Base URL、model ID、能力和估算价格来源。应用支持已知协议的连接配置，不把任意 HTTP API 当成兼容服务；`ark-video` 视频连接可先保存，实际视频执行在 M7 接入。免费模型列表探测不执行生成，也不证明模型能力已通过验收。
+
+密钥仅在设置时输入，以 Windows DPAPI 加密保存在应用数据目录；读取配置不返回原密钥。MovieDesign 使用 BYOK，费用由供应商收取，不提供充值或钱包。未知价格会阻止生成，明确的零价也需确认卡批准。
+
+选择项目后在画布声明目标、提示词和参考图，点击请求费用确认，再在卡片批准或拒绝。区域标注可创建源尺寸 PNG 蒙版，图像修复沿用选中的源版本及 Resource。取消只停止本地投递，供应商可能继续处理和收费；迟到结果须另行通过采纳卡授权。下载/投递失败只能续收集原结果；未确定的生成结果不会自动重新提交。重启后的“确认原请求”使用原请求身份与内容。
+
+原生协议验证使用 `./scripts/smoke-desktop.ps1 -Mode release -Smoke generation`；设置与卡片分别使用 `-Smoke providers`、`-Smoke questions`。这些脚本使用隔离数据和本地协议 fixture；真实供应商调用及验收范围见里程碑记录。
 
 ## 运行数据与故障诊断
 
