@@ -25,9 +25,8 @@ function sameJSON(a:unknown,b:unknown):boolean {
  if(a===b)return true;if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
  const x=a as Record<string,unknown>,y=b as Record<string,unknown>,keys=Object.keys(x);return keys.length===Object.keys(y).length&&keys.every(k=>Object.hasOwn(y,k)&&sameJSON(x[k],y[k]));
 }
-export function readPending(project:string,pipeline:string):Pending|null {
- const raw=localStorage.getItem(key(project,pipeline));if(raw===null)return null;
- try {const p:unknown=JSON.parse(raw);fields(p,'body,pipelineID,projectID,revision,versionID');
+function validatePending(p:unknown,project:string,pipeline:string):Pending {
+  fields(p,'body,pipelineID,projectID,revision,versionID');
   if(!identifier(project)||!identifier(pipeline)||p.projectID!==project||p.pipelineID!==pipeline||!identifier(p.versionID)||!Number.isSafeInteger(p.revision)||Number(p.revision)<1||typeof p.body!=='string')throw Error();
   const b:unknown=JSON.parse(p.body);fields(b,'content,format,mode,output,requestId,typedDocument');
   if(!identifier(b.requestId)||b.mode!=='replace'||b.format!=='md'||typeof b.content!=='string')throw Error();
@@ -38,7 +37,10 @@ export function readPending(project:string,pipeline:string):Pending|null {
   const composition=output.composition;fields(composition,'name,placements,type');if(!text(composition.name)||Array.from(composition.name).length>256)throw Error();fields(composition.type,'id');if(!identifier(composition.type.id)||!Array.isArray(composition.placements)||composition.placements.length!==1)throw Error();
   const placement=composition.placements[0];fields(placement,'key,role');if(placement.key!==resource.key||placement.role!=='storyboard')throw Error();
   return p as Pending;
- }catch{throw Error('分镜恢复记录损坏或归属不匹配；请保留本地数据并停止写入。')}
+}
+export function readPending(project:string,pipeline:string):Pending|null {
+ const raw=localStorage.getItem(key(project,pipeline));if(raw===null)return null;
+ try{return validatePending(JSON.parse(raw),project,pipeline)}catch{throw Error('分镜恢复记录损坏或归属不匹配；请保留本地数据并停止写入。')}
 }
 export function StoryboardReview({projectID,versionID,text}:{projectID:string;versionID:string;text:string}) {
  const [revision,setRevision]=useState<Revision|null>(null),[error,setError]=useState(''),[draft,setDraft]=useState<string|null>(null),[busy,setBusy]=useState(false),[previous,setPrevious]=useState<Revision|null>(null),[pending,setPending]=useState<Pending|null>(null),[storageError,setStorageError]=useState(false);
@@ -63,7 +65,8 @@ export function StoryboardReview({projectID,versionID,text}:{projectID:string;ve
     const composition=await api<{name:string;type_id:string}>(projectID,`/api/compositions?id=${encodeURIComponent(resource.composition_id)}`);
     if(!current())return;
     const body=JSON.stringify({requestId:newRequestID(),mode:'replace',format:'md',content:draft,typedDocument:{kind:'storyboard',pipelineId:revision.pipelineId,expectedRevision:revision.revision,storyboard},output:{resources:[{key:'review',mode:'new_version',name:'storyboard_review.md',baseVersionId:versionID}],composition:{name:composition.name,type:{id:composition.type_id},placements:[{key:'review',role:'storyboard'}]}}});
-    owned={projectID,pipelineID:revision.pipelineId,versionID,revision:revision.revision,body};updatePending(localStorage,storageKey,null,owned);setPending(owned);
+    try{owned=validatePending({projectID,pipelineID:revision.pipelineId,versionID,revision:revision.revision,body},projectID,revision.pipelineId)}catch{throw Error('分镜候选或输出结构无效；请修正后再保存。')}
+    updatePending(localStorage,storageKey,null,owned);setPending(owned);
    }
    const result=await api<{delivery:{status:string;problem?:{message:string}}}>(projectID,'/api/documents/write',{method:'POST',body:owned!.body});
    if(result.delivery.status==='unknown')throw Error('提交结果未知，请用原请求重试');
