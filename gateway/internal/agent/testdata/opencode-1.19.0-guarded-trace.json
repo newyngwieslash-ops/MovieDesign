@@ -1,0 +1,299 @@
+{
+  "500": {
+    "human_receipt": false,
+    "messages": [
+      {
+        "info": {
+          "id": "msg_fixture1234567890",
+          "sessionID": "ses_eb0f76d60ffeRwYHpkn6mWCNFR",
+          "role": "user",
+          "parentID": "",
+          "finish": "",
+          "error": null,
+          "time": {
+            "completed": 0
+          }
+        },
+        "parts": [
+          {
+            "id": "prt_14f0892c70016QH5rR7Et8bX5f",
+            "sessionID": "ses_eb0f76d60ffeRwYHpkn6mWCNFR",
+            "messageID": "msg_fixture1234567890",
+            "type": "text",
+            "text": "Run the owned fixture.",
+            "callID": "",
+            "tool": "",
+            "state": {
+              "status": ""
+            }
+          }
+        ]
+      },
+      {
+        "info": {
+          "id": "msg_14f089507001FKw5ZhmnNPH08a",
+          "sessionID": "ses_eb0f76d60ffeRwYHpkn6mWCNFR",
+          "role": "assistant",
+          "parentID": "msg_fixture1234567890",
+          "finish": "",
+          "error": {
+            "name": "MessageAbortedError",
+            "data": {
+              "message": "Aborted"
+            }
+          },
+          "time": {
+            "completed": 1792327326070
+          }
+        },
+        "parts": []
+      }
+    ],
+    "redirect_requests": 0,
+    "supplier_requests": 1
+  },
+  "disconnect": {
+    "human_receipt": false,
+    "messages": [
+      {
+        "info": {
+          "id": "msg_fixture1234567890",
+          "sessionID": "ses_eb0f71b28ffep8l1zuyusJULYP",
+          "role": "user",
+          "parentID": "",
+          "finish": "",
+          "error": null,
+          "time": {
+            "completed": 0
+          }
+        },
+        "parts": [
+          {
+            "id": "prt_14f08e4fa001iMcGP756QMQk7E",
+            "sessionID": "ses_eb0f71b28ffep8l1zuyusJULYP",
+            "messageID": "msg_fixture1234567890",
+            "type": "text",
+            "text": "Run the owned fixture.",
+            "callID": "",
+            "tool": "",
+            "state": {
+              "status": ""
+            }
+          }
+        ]
+      },
+      {
+        "info": {
+          "id": "msg_14f08e741001qKcZXhMuwphT2w",
+          "sessionID": "ses_eb0f71b28ffep8l1zuyusJULYP",
+          "role": "assistant",
+          "parentID": "msg_fixture1234567890",
+          "finish": "",
+          "error": {
+            "name": "MessageAbortedError",
+            "data": {
+              "message": "Aborted"
+            }
+          },
+          "time": {
+            "completed": 1792327346699
+          }
+        },
+        "parts": []
+      }
+    ],
+    "redirect_requests": 0,
+    "supplier_requests": 1
+  },
+  "question": {
+    "human_receipt": true,
+    "messages": [
+      {
+        "info": {
+          "id": "msg_fixture1234567890",
+          "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+          "role": "user",
+          "parentID": "",
+          "finish": "",
+          "error": null,
+          "time": {
+            "completed": 0
+          }
+        },
+        "parts": [
+          {
+            "id": "prt_14f09099d001othm3Jc39Cs9s0",
+            "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+            "messageID": "msg_fixture1234567890",
+            "type": "text",
+            "text": "Run the owned fixture.",
+            "callID": "",
+            "tool": "",
+            "state": {
+              "status": ""
+            }
+          }
+        ]
+      },
+      {
+        "info": {
+          "id": "msg_14f090c2a0012czAUJoUNa67uT",
+          "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+          "role": "assistant",
+          "parentID": "msg_fixture1234567890",
+          "finish": "tool-calls",
+          "error": null,
+          "time": {
+            "completed": 1792327356369
+          }
+        },
+        "parts": [
+          {
+            "id": "prt_14f090f4e001l1tuMmK5KQqIdZ",
+            "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+            "messageID": "msg_14f090c2a0012czAUJoUNa67uT",
+            "type": "step-start",
+            "text": "",
+            "callID": "",
+            "tool": "",
+            "state": {
+              "status": ""
+            }
+          },
+          {
+            "id": "prt_14f090f510015CDgsp54tg5l1w",
+            "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+            "messageID": "msg_14f090c2a0012czAUJoUNa67uT",
+            "type": "tool",
+            "text": "",
+            "callID": "native_question",
+            "tool": "question",
+            "state": {
+              "status": "completed"
+            }
+          },
+          {
+            "id": "prt_14f090fca0013EMKGPSFLgcmFX",
+            "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+            "messageID": "msg_14f090c2a0012czAUJoUNa67uT",
+            "type": "step-finish",
+            "text": "",
+            "callID": "",
+            "tool": "",
+            "state": {
+              "status": ""
+            }
+          }
+        ]
+      },
+      {
+        "info": {
+          "id": "msg_14f090fd5001A6CABVE9ovDENG",
+          "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+          "role": "assistant",
+          "parentID": "msg_fixture1234567890",
+          "finish": "stop",
+          "error": null,
+          "time": {
+            "completed": 1792327356451
+          }
+        },
+        "parts": [
+          {
+            "id": "prt_14f091015001DyTXyn9PodMK9T",
+            "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+            "messageID": "msg_14f090fd5001A6CABVE9ovDENG",
+            "type": "step-start",
+            "text": "",
+            "callID": "",
+            "tool": "",
+            "state": {
+              "status": ""
+            }
+          },
+          {
+            "id": "prt_14f0910180017UF5Y0BWMajZt6",
+            "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+            "messageID": "msg_14f090fd5001A6CABVE9ovDENG",
+            "type": "text",
+            "text": "哈哈",
+            "callID": "",
+            "tool": "",
+            "state": {
+              "status": ""
+            }
+          },
+          {
+            "id": "prt_14f09101e001iJ4y2xMfxwXSC8",
+            "sessionID": "ses_eb0f6f684ffeBPXWKTAKALDe3j",
+            "messageID": "msg_14f090fd5001A6CABVE9ovDENG",
+            "type": "step-finish",
+            "text": "",
+            "callID": "",
+            "tool": "",
+            "state": {
+              "status": ""
+            }
+          }
+        ]
+      }
+    ],
+    "redirect_requests": 0,
+    "supplier_requests": 2
+  },
+  "real_inference": "UNEXECUTED",
+  "redirect": {
+    "human_receipt": false,
+    "messages": [
+      {
+        "info": {
+          "id": "msg_fixture1234567890",
+          "sessionID": "ses_eb0f73f34ffeZpJN31D5pPN4aa",
+          "role": "user",
+          "parentID": "",
+          "finish": "",
+          "error": null,
+          "time": {
+            "completed": 0
+          }
+        },
+        "parts": [
+          {
+            "id": "prt_14f08c108001306wbP0u4odo5k",
+            "sessionID": "ses_eb0f73f34ffeZpJN31D5pPN4aa",
+            "messageID": "msg_fixture1234567890",
+            "type": "text",
+            "text": "Run the owned fixture.",
+            "callID": "",
+            "tool": "",
+            "state": {
+              "status": ""
+            }
+          }
+        ]
+      },
+      {
+        "info": {
+          "id": "msg_14f08c3420017feSW8S1ZCsu4N",
+          "sessionID": "ses_eb0f73f34ffeZpJN31D5pPN4aa",
+          "role": "assistant",
+          "parentID": "msg_fixture1234567890",
+          "finish": "",
+          "error": {
+            "name": "MessageAbortedError",
+            "data": {
+              "message": "Aborted"
+            }
+          },
+          "time": {
+            "completed": 1792327337360
+          }
+        },
+        "parts": []
+      }
+    ],
+    "redirect_requests": 0,
+    "supplier_requests": 1
+  },
+  "version": "1.19.0"
+}

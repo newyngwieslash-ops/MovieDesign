@@ -30,22 +30,23 @@ type Info struct {
 	Custom   bool     `json:"custom,omitempty"`
 }
 type Question struct {
-	ID           string           `json:"id"`
-	ProjectID    string           `json:"project_id"`
-	RequestID    string           `json:"requestId,omitempty"`
-	SessionID    string           `json:"session_id"`
-	TaskID       string           `json:"task_id,omitempty"`
-	Kind         string           `json:"kind"`
-	Revision     int64            `json:"revision"`
-	TaskRevision int64            `json:"task_revision,omitempty"`
-	InputHash    string           `json:"input_hash"`
-	State        string           `json:"state"`
-	Questions    []Info           `json:"questions"`
-	Quote        *providers.Quote `json:"quote,omitempty"`
-	Provider     string           `json:"provider,omitempty"`
-	Model        string           `json:"model,omitempty"`
-	Impacts      []string         `json:"impacts,omitempty"`
-	Reason       string           `json:"reason,omitempty"`
+	NativeSendState string           `json:"native_send_state,omitempty"`
+	ID              string           `json:"id"`
+	ProjectID       string           `json:"project_id"`
+	RequestID       string           `json:"requestId,omitempty"`
+	SessionID       string           `json:"session_id"`
+	TaskID          string           `json:"task_id,omitempty"`
+	Kind            string           `json:"kind"`
+	Revision        int64            `json:"revision"`
+	TaskRevision    int64            `json:"task_revision,omitempty"`
+	InputHash       string           `json:"input_hash"`
+	State           string           `json:"state"`
+	Questions       []Info           `json:"questions"`
+	Quote           *providers.Quote `json:"quote,omitempty"`
+	Provider        string           `json:"provider,omitempty"`
+	Model           string           `json:"model,omitempty"`
+	Impacts         []string         `json:"impacts,omitempty"`
+	Reason          string           `json:"reason,omitempty"`
 }
 type HumanReply struct {
 	RequestID        string     `json:"requestId"`
@@ -298,7 +299,7 @@ func (s *Service) List(ctx context.Context, p, session string) ([]Question, erro
 	if session != "" && scope("session", session) != nil {
 		return nil, fail(400, "Invalid session")
 	}
-	rows, e := s.DB.QueryContext(ctx, `SELECT q.question_json,coalesce(p.expires_at,0),coalesce(t.revision,0) FROM questions q LEFT JOIN price_quotes p ON p.id=q.quote_id LEFT JOIN tasks t ON t.id=q.task_id WHERE q.project_id=? AND (?='' OR q.session_id=?) ORDER BY q.created_at,q.rowid`, p, session, session)
+	rows, e := s.DB.QueryContext(ctx, `SELECT q.question_json,coalesce(p.expires_at,0),coalesce(t.revision,0),coalesce(n.send_state,'') FROM questions q LEFT JOIN native_questions n ON n.question_id=q.id LEFT JOIN price_quotes p ON p.id=q.quote_id LEFT JOIN tasks t ON t.id=q.task_id WHERE q.project_id=? AND (?='' OR q.session_id=?) ORDER BY q.created_at,q.rowid`, p, session, session)
 	if e != nil {
 		return nil, e
 	}
@@ -307,14 +308,15 @@ func (s *Service) List(ctx context.Context, p, session string) ([]Question, erro
 	out := []Question{}
 	for rows.Next() {
 		var q Question
-		var raw string
+		var raw, nativeState string
 		var expiry, revision int64
-		if e = rows.Scan(&raw, &expiry, &revision); e != nil {
+		if e = rows.Scan(&raw, &expiry, &revision, &nativeState); e != nil {
 			return nil, e
 		}
 		if e = json.Unmarshal([]byte(raw), &q); e != nil {
 			return nil, e
 		}
+		q.NativeSendState = nativeState
 		if q.State == "pending" {
 			if q.TaskID != "" && revision != q.TaskRevision {
 				q.State = "stale"

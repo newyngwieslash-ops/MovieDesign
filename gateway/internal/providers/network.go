@@ -78,6 +78,11 @@ func NewClient(base string, download bool) (*http.Client, error) {
 	return newClient(base, download, 20*time.Second)
 }
 
+// Inference uses the identical guarded dial/redirect boundary with a bounded stream budget.
+func NewInferenceClient(base string) (*http.Client, error) {
+	return newClient(base, false, 10*time.Minute)
+}
+
 // Image generation gets a bounded ten-minute budget; probes/downloads retain 20s.
 // Both use this identical DNS/address/redirect boundary.
 func newClient(base string, download bool, budget time.Duration) (*http.Client, error) {

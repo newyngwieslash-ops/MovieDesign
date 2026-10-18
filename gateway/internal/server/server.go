@@ -43,6 +43,7 @@ func reject(w http.ResponseWriter, status int, code, message string) {
 type Server struct {
 	mcp   *designmcp.Server
 	turns *agent.Turns
+	chat  *agent.Chat
 	http.Handler
 	workspace              *workspace.Workspace
 	db                     *sql.DB
@@ -62,6 +63,9 @@ func (s *Server) BeginShutdown() {
 	s.mu.Lock()
 	s.stopping = true
 	s.mu.Unlock()
+	if s.chat != nil {
+		s.chat.Stop()
+	}
 	s.tasks.Stop()
 	s.events.Close()
 	if s.mcp != nil {
@@ -71,6 +75,9 @@ func (s *Server) BeginShutdown() {
 func (s *Server) Close() error {
 	s.BeginShutdown()
 	s.requests.Wait()
+	if s.chat != nil {
+		s.chat.Close()
+	}
 	s.tasks.Close()
 	if s.workspace != nil {
 		return s.workspace.Close()
@@ -86,12 +93,15 @@ func (s *Server) Health() Health {
 		h.Status = "stopping"
 	}
 	h.Idle = s.active.Load() == 0 && s.tasks.Active() == 0
+	if s.turns != nil {
+		h.Idle = h.Idle && s.turns.Current().TurnID == ""
+	}
 	h.SafeToSuspend = h.Idle && !stopping
 	if s.db == nil {
 		return h
 	}
 	var pending int
-	e := s.db.QueryRow(`SELECT (SELECT count(*) FROM task_attempts WHERE state IN ('approved','submitting','submitted','running','unknown','collection_pending','collecting','adoption_pending'))+(SELECT count(*) FROM file_operations WHERE stage='prepared')+(SELECT count(*) FROM deliveries WHERE status='unknown')`).Scan(&pending)
+	e := s.db.QueryRow(`SELECT (SELECT count(*) FROM task_attempts WHERE state IN ('approved','submitting','submitted','running','unknown','collection_pending','collecting','adoption_pending'))+(SELECT count(*) FROM file_operations WHERE stage='prepared')+(SELECT count(*) FROM deliveries WHERE status='unknown')+(SELECT count(*) FROM chat_dispatch WHERE terminal=0)`).Scan(&pending)
 	h.SafeToSuspend = h.SafeToSuspend && e == nil && pending == 0
 	return h
 }
@@ -151,6 +161,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		srv.tasks.BillingGate = qs.Billing
 	}
 	srv.turns = agent.NewTurns(db)
+	srv.chat = agent.NewChat(db, srv.turns, ev, qs)
 	srv.mcp = designmcp.New(origin, srv.turns, designmcp.Services{Objects: store.Objects{DB: db}, Generation: generation.Service{Providers: providerService, Tasks: srv.tasks}, Tasks: srv.tasks, Delivery: agentDeliveries})
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Origin")
@@ -178,7 +189,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := agentMethod(r.URL.Path, method) || questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
+			allowed := chatMethod(r.URL.Path, method) || agentMethod(r.URL.Path, method) || questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
@@ -190,6 +201,18 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.URL.Path == "/mcp" {
 			srv.mcp.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/internal/inference/") {
+			if srv.agentHost == nil || srv.agentHost.Relay == nil {
+				reject(w, 503, "upstream", "Inference unavailable")
+				return
+			}
+			srv.agentHost.Relay.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/chat/") {
+			srv.serveChat(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/agent/") {

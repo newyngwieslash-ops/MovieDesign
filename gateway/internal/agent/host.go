@@ -16,6 +16,7 @@ import (
 )
 
 type Host struct {
+	Relay          *Relay
 	password, base string
 	client         *http.Client
 	active         View
@@ -71,6 +72,28 @@ func NewHost(s *Settings, dir string, connections ...MCPConnection) (*Host, erro
 			return nil, errors.New("LLM credential unavailable")
 		}
 	}
+	var relay *Relay
+	if c != (LLMConfig{}) {
+		if m.Origin == "" {
+			return nil, errors.New("private inference origin required")
+		}
+		relay, err = newRelay(s.DB, c, secret, m.Origin)
+		if err != nil {
+			return nil, err
+		}
+		var value map[string]any
+		if err = json.Unmarshal(config, &value); err != nil {
+			return nil, err
+		}
+		provider := value["provider"].(map[string]any)["moviedesign"].(map[string]any)
+		provider["options"].(map[string]any)["baseURL"] = "http://127.0.0.1:8001" + inferencePath
+		provider["models"].(map[string]any)[c.ModelID].(map[string]any)["headers"] = map[string]string{"Origin": m.Origin}
+		config, err = json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		secret = relay.token
+	}
 	token := make([]byte, 32)
 	if _, err = rand.Read(token); err != nil {
 		return nil, err
@@ -84,7 +107,7 @@ func NewHost(s *Settings, dir string, connections ...MCPConnection) (*Host, erro
 	if err = encrypted.Put("launch", string(raw)); err != nil {
 		return nil, err
 	}
-	return &Host{password: password, base: "http://127.0.0.1:4096", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}, tools: m.Tools, active: v, fingerprint: fingerprint(v, version)}, nil
+	return &Host{Relay: relay, password: password, base: "http://127.0.0.1:4096", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}, tools: m.Tools, active: v, fingerprint: fingerprint(v, version)}, nil
 }
 func (h *Host) read(ctx context.Context, path string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", h.base+path, nil)

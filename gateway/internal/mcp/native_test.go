@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/agent"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"io"
 	"net"
@@ -48,7 +49,16 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 	var rpcTrace []map[string]any
 	var simultaneous atomic.Int32
 	both := make(chan struct{})
+	var inference http.Handler
 	gateway := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/inference/") {
+			if inference == nil {
+				w.WriteHeader(503)
+				return
+			}
+			inference.ServeHTTP(w, r)
+			return
+		}
 		if r.Method == "POST" {
 			raw, _ := io.ReadAll(r.Body)
 			r.Body = io.NopCloser(bytes.NewReader(raw))
@@ -136,11 +146,36 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer model.Close()
-	config, e := agent.BuildConfig(agent.LLMConfig{Protocol: "openai-compatible", BaseURL: model.URL + "/v1", ModelID: "fixture-model", Context: 32000, Output: 4096}, f.server.Connection())
+	owned := t.TempDir()
+	secrets, e := providers.OpenSecrets(filepath.Join(owned, "secrets"))
 	if e != nil {
 		t.Fatal(e)
 	}
-	owned := t.TempDir()
+	settings := &agent.Settings{DB: f.db, Secrets: secrets}
+	input, _ := json.Marshal(map[string]any{"requestId": "native-relay", "action": "save", "config": agent.LLMConfig{Protocol: "openai-compatible", BaseURL: model.URL + "/v1", ModelID: "fixture-model", Context: 32000, Output: 4096}, "key": "synthetic-fixture-key"})
+	if _, e = settings.Execute(ctx, input); e != nil {
+		t.Fatal(e)
+	}
+	host, e := agent.NewHost(settings, filepath.Join(owned, "bootstrap"), f.server.Connection())
+	if e != nil {
+		t.Fatal(e)
+	}
+	host.Relay.Turns = f.server.Turns
+	f.server.Turns.Abort = host.Abort
+	inference = host.Relay
+	bootstrapStore, e := providers.OpenSecrets(filepath.Join(owned, "bootstrap"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	launch, e := bootstrapStore.Get("launch")
+	if e != nil {
+		t.Fatal(e)
+	}
+	var bootstrap agent.Bootstrap
+	if e = json.Unmarshal([]byte(launch), &bootstrap); e != nil {
+		t.Fatal(e)
+	}
+	config := []byte(bootstrap.Config)
 	command := exec.Command(binary, "serve", "--hostname", "127.0.0.1", "--port", "4096")
 	command.Dir = owned
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
@@ -151,7 +186,7 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 		command.Env = append(command.Env, key+"="+dir)
 	}
 	glob, _ := json.Marshal(filepath.Join(owned, "XDG_DATA_HOME", "opencode", "tool-output", "*"))
-	command.Env = append(command.Env, "OPENCODE_CONFIG_CONTENT="+string(config), "MOVIEDESIGN_LLM_KEY=synthetic-fixture-key", "MOVIEDESIGN_TRUNCATE_GLOB="+string(glob[1:len(glob)-1]), "OPENCODE_SERVER_PASSWORD=synthetic-fixture-password")
+	command.Env = append(command.Env, "OPENCODE_CONFIG_CONTENT="+string(config), "MOVIEDESIGN_LLM_KEY="+bootstrap.Key, "MOVIEDESIGN_TRUNCATE_GLOB="+string(glob[1:len(glob)-1]), "OPENCODE_SERVER_PASSWORD="+bootstrap.Password)
 	for _, flag := range []string{"OPENCODE_PURE", "OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS", "OPENCODE_DISABLE_CLAUDE_CODE", "OPENCODE_DISABLE_DEFAULT_PLUGINS", "OPENCODE_DISABLE_MODELS_FETCH", "OPENCODE_DISABLE_AUTOUPDATE", "OPENCODE_DISABLE_LSP_DOWNLOAD", "OPENCODE_DISABLE_EMBEDDED_WEB_UI"} {
 		command.Env = append(command.Env, flag+"=true")
 	}
@@ -176,7 +211,7 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 			reader = bytes.NewReader(raw)
 		}
 		r, _ := http.NewRequestWithContext(ctx, method, "http://127.0.0.1:4096"+path, reader)
-		r.SetBasicAuth("opencode", "synthetic-fixture-password")
+		r.SetBasicAuth("opencode", bootstrap.Password)
 		r.Header.Set("Content-Type", "application/json")
 		response, e := client.Do(r)
 		if e != nil {
@@ -222,7 +257,7 @@ func TestPinnedNativeParallelToolsQuestionAndReplay(t *testing.T) {
 		t.Fatal(e)
 	}
 	eventReq, _ := http.NewRequestWithContext(ctx, "GET", "http://127.0.0.1:4096/event", nil)
-	eventReq.SetBasicAuth("opencode", "synthetic-fixture-password")
+	eventReq.SetBasicAuth("opencode", bootstrap.Password)
 	eventResponse, e := client.Do(eventReq)
 	if e != nil {
 		t.Fatal(e)

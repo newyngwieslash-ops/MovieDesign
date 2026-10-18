@@ -529,8 +529,8 @@ func deleteObject(ctx context.Context, tx *sql.Tx, kind, id string) (json.RawMes
 	var args []any
 	switch kind {
 	case "projects":
-		query = `SELECT (SELECT count(*) FROM composition_types WHERE project_id=?)+(SELECT count(*) FROM compositions WHERE project_id=?)+(SELECT count(*) FROM asset_projects WHERE project_id=?)+(SELECT count(*) FROM file_operations WHERE project_id=?)`
-		args = []any{id, id, id, id}
+		query = `SELECT (SELECT count(*) FROM composition_types WHERE project_id=?)+(SELECT count(*) FROM compositions WHERE project_id=?)+(SELECT count(*) FROM asset_projects WHERE project_id=?)+(SELECT count(*) FROM file_operations WHERE project_id=?)+(SELECT count(*) FROM chat_sessions WHERE project_id=?)`
+		args = []any{id, id, id, id, id}
 		statement = `DELETE FROM projects WHERE id=?`
 	case "composition_types":
 		query = `SELECT count(*) FROM compositions WHERE type_id=?`

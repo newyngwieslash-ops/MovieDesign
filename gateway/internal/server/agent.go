@@ -25,7 +25,7 @@ func (s *Server) StartAgentHost(dir string, preparationFailed bool) error {
 	}
 	s.agentHost = h
 	s.turns.Abort = h.Abort
-	return nil
+	return s.chat.Start(h, s.mcp.CloseEpoch)
 }
 func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -58,7 +58,7 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) {
 			status := s.agentHost.Status(r.Context(), s.llm, s.agentBootstrap)
 			status.ToolsReady = status.HostReady && s.agentHost.ToolsConnected(r.Context()) && s.mcp.CatalogReady()
 			if status.ToolsReady {
-				status.Message = "受管运行时与工具连接已就绪；聊天推理尚未开放。"
+				status.Message = "受管运行时与工具连接已就绪；聊天请求经受保护的 gateway 边界提交。"
 			}
 			value = status
 		}
