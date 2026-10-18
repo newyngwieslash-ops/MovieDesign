@@ -298,11 +298,16 @@ func (c *Chat) run() {
 			}
 			result, e := c.DB.Exec("UPDATE chat_dispatch SET state='submitting',turn_id=? WHERE message_id=? AND state='queued'", scope.TurnID, id)
 			if e != nil {
-				break
+				if !c.failUnsent(scope, id) {
+					return
+				}
+				continue
 			}
 			n, _ := result.RowsAffected()
 			if n == 0 {
-				c.end(scope)
+				if c.end(scope) != nil {
+					return
+				}
 				continue
 			}
 			if e = c.Host.DisconnectTools(c.ctx); e == nil {
@@ -312,8 +317,10 @@ func (c *Chat) run() {
 				e = c.Host.ConnectTools(c.ctx)
 			}
 			if e != nil {
-				c.setState(id, "unknown", "Tool transport could not be isolated")
-				break
+				if !c.failUnsent(scope, id) {
+					return
+				}
+				continue
 			}
 			var input ChatInput
 			_ = json.Unmarshal([]byte(raw), &input)
@@ -346,6 +353,22 @@ func (c *Chat) run() {
 			if !c.watch(scope, id, nativeMessage, acceptance) {
 				break
 			}
+		}
+	}
+}
+
+// Only the controller before prompt_async may assert that a message was never
+// submitted. Keep ownership through terminal persistence and the ordinary
+// idle/drain/disconnect/epoch barrier, including failures of either operation.
+func (c *Chat) failUnsent(scope ToolScope, id string) bool {
+	for {
+		if c.finish(scope, id, "error", "Native setup failed before prompt submission; no inference sent", "error") == nil {
+			return c.end(scope) == nil
+		}
+		select {
+		case <-c.ctx.Done():
+			return false
+		case <-time.After(250 * time.Millisecond):
 		}
 	}
 }
