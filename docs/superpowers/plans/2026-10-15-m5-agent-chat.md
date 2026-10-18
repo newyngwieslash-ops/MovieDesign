@@ -133,3 +133,5 @@ export function assetReferences(root: DocNode): string[] {
 - [ ] `./scripts/check.ps1`及smoke-chat验证真实LLM→工具→billing卡→图像→版本→画布；无LLM凭据标未执行，不能通过模拟对话宣布M5完成。提交 `feat(M5.5): complete design tools and media agent contracts`，推送M5。
 
 M5.5 工程任务在904f314通过独立规格/质量复审。最终全量与生产构建、原生模拟供应商矩阵及同资源候选/重启回归通过；真实LLM与付费图像调用仍未执行，末项真实验收不勾选。按总计划§6继续独立工程工作；整M5门禁和推送另记。
+
+整M5工程门禁在9f497a6关闭（Ready to merge: Yes），当前全量与生产聊天回归通过，真实LLM/付费调用仍未执行，依总计划§6继续M6。历史审查证据见docs/milestones.md。
