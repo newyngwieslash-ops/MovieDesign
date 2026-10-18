@@ -66,12 +66,12 @@ func TestFortyCalls(t *testing.T) {
 
 **Interfaces:** 新增 GET/POST `/api/chat/sessions`、POST `/api/chat/sessions/:id/cancel`；消息 POST 按用户 §8 返回202，内容通过全局 SSE。消息包含 requestId、TipTap文档、文本、references、annotations。输出统一 `ChatMessageEnvelope{session_id,step,content_delta|tool_call|...}` 与 `ChatDonePayload{done|error}`；原始 opencode event 只在适配层存在。
 
-- [ ] httptest opencode 模拟：立即拒绝、9秒受理、10秒仍未答复后最终成功、10秒后报错、全局事件断线、重复delta、cancel、41次熔断。用可注入短时钟测试宽限窗，不让每个用例真实等10秒。
-- [ ] POST先持久化 turn/message/requestId；后台请求生命周期独立于前端请求ctx。10秒只结束等待并回202，不能取消 opencode 请求。重放同一 requestId 不再POST；受理不明保持关联记录并查询事件/消息，不自动产生第二条用户消息。
-- [ ] SSE以锁定 `/doc` 的真实事件字段映射，记录上游 session/message/part/call ID，去重后持久化本地 events；只有上游对应轮次完成/失败或显式取消才发一次终态。工具运行、question等待不等于chatdone；断流先恢复事件与会话状态，不凭断流伪造done。
-- [ ] 原生 question 映射本地持久卡，用户回执转为 `POST /question/{id}/reply` 的 `{answers:string[][]}`；拒绝走原生 reject。保存本地questionID与上游ID映射及回执发送状态，回执未知时查询上游，不无限重发。agent 的提问是请求授权，不是授权本身。
-- [ ] cancel通过显式 session abort，队列未发送消息可撤销；不会隐式取消已经独立受理的生成任务，UI提供任务取消入口。新增路径、ChatDone字段形状及事件名先对照逆向文档固定到 docs/contracts。
-- [ ] `go -C gateway test ./internal/agent ./internal/questions ./internal/events -v`；提交 `feat(M5.3): bridge chat acceptance events and human questions`。
+- [x] httptest opencode 模拟：立即拒绝、9秒受理、10秒仍未答复后最终成功、10秒后报错、全局事件断线、重复delta、cancel、41次熔断。用可注入短时钟测试宽限窗，不让每个用例真实等10秒。
+- [x] POST先持久化 turn/message/requestId；后台请求生命周期独立于前端请求ctx。10秒只结束等待并回202，不能取消 opencode 请求。重放同一 requestId 不再POST；受理不明保持关联记录并查询事件/消息，不自动产生第二条用户消息。
+- [x] SSE以锁定 `/doc` 的真实事件字段映射，记录上游 session/message/part/call ID，去重后持久化本地 events；只有上游对应轮次完成/失败或显式取消才发一次终态。工具运行、question等待不等于chatdone；断流先恢复事件与会话状态，不凭断流伪造done。
+- [x] 原生 question 映射本地持久卡，用户回执转为 `POST /question/{id}/reply` 的 `{answers:string[][]}`；拒绝走原生 reject。保存本地questionID与上游ID映射及回执发送状态，回执未知时查询上游，不无限重发。agent 的提问是请求授权，不是授权本身。
+- [x] cancel通过显式 session abort，队列未发送消息可撤销；不会隐式取消已经独立受理的生成任务，UI提供任务取消入口。新增路径、ChatDone字段形状及事件名先对照逆向文档固定到 docs/contracts。
+- [x] `go -C gateway test ./internal/agent ./internal/questions ./internal/events -v`；提交 `feat(M5.3): bridge chat acceptance events and human questions`。
 
 ### Task M5.4：TipTap、资产引用、消息队列与流式 UI
 
