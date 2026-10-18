@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
@@ -257,6 +258,59 @@ func TestImageURLCollectionGuardsAndCount(t *testing.T) {
 	f.Config.Capability.Constraints.MaxImageBytes = 10
 	if _, e = s.CollectImages(context.Background(), p, ProviderResult{Data: []ProviderImage{{B64JSON: base64.StdEncoding.EncodeToString(data)}}}, f, []string{"oversize"}); e == nil {
 		t.Fatal("decoded size bound ignored")
+	}
+}
+
+func TestImageDownloadReadClassification(t *testing.T) {
+	for _, mode := range []string{"deadline", "oversize", "immutable", "base64-truncated"} {
+		t.Run(mode, func(t *testing.T) {
+			s, p := imageService(t)
+			data := tinyPNG(t)
+			entered := make(chan struct{})
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "image/png")
+				if mode == "deadline" {
+					w.WriteHeader(200)
+					w.(http.Flusher).Flush()
+					close(entered)
+					<-r.Context().Done()
+					return
+				}
+				if mode == "immutable" {
+					w.Write([]byte("invalid PNG"))
+					return
+				}
+				w.Write(data)
+			}))
+			defer remote.Close()
+			f := FrozenProvider{Config: validConfig("body", remote.URL)}
+			if mode == "oversize" {
+				f.Config.Capability.Constraints.MaxImageBytes = 10
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			result := ProviderResult{Data: []ProviderImage{{URL: remote.URL + "/result?signature=private-result-token"}}}
+			if mode == "base64-truncated" {
+				result.Data = []ProviderImage{{B64JSON: "a"}}
+			}
+			_, e := s.CollectImages(ctx, p, result, f, []string{"read-body"})
+			var failure *CollectionError
+			if !errors.As(e, &failure) || failure.Retryable != (mode == "deadline") || strings.Contains(e.Error(), "private-result-token") || strings.Contains(e.Error(), remote.URL) {
+				t.Fatal("wrong/redaction-unsafe read classification", e)
+			}
+			if mode == "deadline" {
+				select {
+				case <-entered:
+				default:
+					t.Fatal("deadline did not interrupt a started response body")
+				}
+				if failure.Code != "DOWNLOAD_FAILED" {
+					t.Fatal(failure)
+				}
+			} else if failure.Code != "INVALID_SAVED_MEDIA" {
+				t.Fatal(failure)
+			}
+		})
 	}
 }
 func TestImageMaskRequiresSourcePNGAndAlpha(t *testing.T) {

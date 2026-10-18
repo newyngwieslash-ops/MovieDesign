@@ -112,9 +112,10 @@ func TestQuestionBillingHTTPGate(t *testing.T) {
 			}
 			var qs struct {
 				Items []struct {
-					ID       string          `json:"id"`
-					Revision int64           `json:"revision"`
-					Quote    providers.Quote `json:"quote"`
+					ID           string          `json:"id"`
+					Revision     int64           `json:"revision"`
+					TaskRevision int64           `json:"task_revision"`
+					Quote        providers.Quote `json:"quote"`
 				} `json:"items"`
 			}
 			json.Unmarshal(list.Body.Bytes(), &qs)
@@ -124,6 +125,12 @@ func TestQuestionBillingHTTPGate(t *testing.T) {
 			q := qs.Items[0]
 			if q.Quote.EstimatedAmount != amount || q.Quote.InputHash == "" {
 				t.Fatal(q)
+			}
+			if mode == "approve" || mode == "zero" || mode == "retry" {
+				view, err := h.tasks.Query(context.Background(), project.ID, id)
+				if err != nil || view.Billing.EstimatedCredits == nil || *view.Billing.EstimatedCredits != q.Quote.EstimatedCredits || view.Revision != 1 || q.TaskRevision != view.Revision {
+					t.Fatal("known authoritative quote missing from task projection", view.Billing, view.Revision, err)
+				}
 			}
 			if e = h.tasks.Run(context.Background(), project.ID, id); e != nil {
 				t.Fatal(e)
@@ -272,9 +279,23 @@ func TestQuestionBillingHTTPGate(t *testing.T) {
 					if len(qs.Items) != 2 || qs.Items[1].Quote.QuoteID == q.Quote.QuoteID {
 						t.Fatal("retry reused old approval/quote", cards.Body.String())
 					}
+					view, err := h.tasks.Query(context.Background(), project.ID, id)
+					if err != nil || view.Billing.EstimatedCredits == nil || *view.Billing.EstimatedCredits != qs.Items[1].Quote.EstimatedCredits || view.Revision != rev+1 || qs.Items[1].TaskRevision != view.Revision {
+						t.Fatal("retry authoritative quote projection/revision", view.Billing, view.Revision, err)
+					}
 					h.tasks.Run(context.Background(), project.ID, id)
 					if posts.Load() != 1 {
 						t.Fatal("retry bypassed card")
+					}
+					approvedRetry := call("POST", "/api/question/"+qs.Items[1].ID+"/reply"+base+"&session_id=session-a", map[string]any{"requestId": "approve-retry", "expected_revision": qs.Items[1].Revision, "answers": [][]string{{"确认生成"}}})
+					if approvedRetry.Code != 200 {
+						t.Fatal("new billing card revision stale", approvedRetry.Code, approvedRetry.Body.String())
+					}
+					for deadline = time.Now().Add(3 * time.Second); time.Now().Before(deadline) && posts.Load() != 2; {
+						time.Sleep(10 * time.Millisecond)
+					}
+					if posts.Load() != 2 {
+						t.Fatal("fresh human card did not unlock exactly one new attempt", posts.Load())
 					}
 				}
 			} else {

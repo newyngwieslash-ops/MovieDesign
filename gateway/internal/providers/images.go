@@ -111,8 +111,11 @@ func imageBytes(data []byte, cap Capability) (image.Config, string, error) {
 }
 func readBounded(r io.Reader, limit int64) ([]byte, error) {
 	b, e := io.ReadAll(io.LimitReader(r, limit+1))
-	if e != nil || int64(len(b)) > limit {
-		return nil, invalid("Media response is incomplete or too large")
+	if int64(len(b)) > limit {
+		return nil, invalid("Media response exceeds byte limit")
+	}
+	if e != nil {
+		return nil, e
 	}
 	return b, nil
 }
@@ -417,6 +420,9 @@ func (s *Service) CollectImages(ctx context.Context, p string, result ProviderRe
 				return nil, invalid("Invalid base64 image")
 			}
 			data, e = readBounded(base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(item.B64JSON)), cap.Constraints.MaxImageBytes)
+			if e != nil && !errors.Is(e, ErrInvalid) {
+				return nil, invalid("Invalid base64 image")
+			}
 		} else if item.URL != "" && item.B64JSON == "" {
 			client, ce := NewClient(f.Config.BaseURL, true)
 			if ce != nil {
@@ -436,6 +442,9 @@ func (s *Service) CollectImages(ctx context.Context, p string, result ProviderRe
 			}
 			data, e = readBounded(res.Body, cap.Constraints.MaxImageBytes)
 			res.Body.Close()
+			if e != nil && !errors.Is(e, ErrInvalid) {
+				return nil, invalid("Result download interrupted")
+			}
 			if e == nil {
 				declared, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type"))
 				if declared != "image/png" && declared != "image/jpeg" || declared != http.DetectContentType(data) {

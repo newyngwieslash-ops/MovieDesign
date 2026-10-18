@@ -63,6 +63,40 @@ func TestGenerateAdmissionQuoteReplayAndBillingGate(t *testing.T) {
 		return w
 	}
 	input := map[string]any{"requestId": "estimate-one", "capability_id": "image:local", "prompt": " 原文\n ", "params": map[string]any{}, "references": []string{}, "count": 1, "output": map[string]any{"resources": []any{map[string]any{"key": "main", "mode": "create", "name": "Result"}}, "composition": map[string]any{"name": "Result", "type": map[string]any{"label": "Images"}, "placements": []any{map[string]any{"key": "main", "role": "primary"}}}}}
+	t.Run("output-label-boundary", func(t *testing.T) {
+		output := input["output"].(map[string]any)["composition"].(map[string]any)["type"].(map[string]any)
+		output["label"] = strings.Repeat("x", 257)
+		for _, route := range []string{"estimate", "image"} {
+			input["requestId"] = "overlong-" + route
+			b, _ := json.Marshal(input)
+			got := call("POST", "/api/generate/"+route+"?project_id="+p.ID, b)
+			if got.Code != 400 {
+				t.Errorf("overlong output admitted by %s: %d %s", route, got.Code, got.Body.String())
+			}
+		}
+		for _, table := range []string{"tasks", "questions", "task_outputs", "price_quotes"} {
+			var n int
+			if e := db.QueryRow("SELECT count(*) FROM " + table).Scan(&n); e != nil || n != 0 {
+				t.Errorf("invalid output allocated %s: %d %v", table, n, e)
+			}
+		}
+		if posts != 0 {
+			t.Fatal("invalid output submitted provider")
+		}
+		output["label"] = strings.Repeat("x", 256)
+		input["requestId"] = "boundary-estimate"
+		b, _ := json.Marshal(input)
+		if got := call("POST", "/api/generate/estimate?project_id="+p.ID, b); got.Code != 200 {
+			t.Fatal("valid boundary estimate", got.Code, got.Body.String())
+		}
+		input["requestId"] = "boundary-generate"
+		b, _ = json.Marshal(input)
+		if got := call("POST", "/api/generate/image?project_id="+p.ID, b); got.Code != 202 {
+			t.Fatal("valid boundary generation", got.Code, got.Body.String())
+		}
+		output["label"] = "Images"
+		input["requestId"] = "estimate-one"
+	})
 	raw, _ := json.Marshal(input)
 	estimate := call("POST", "/api/generate/estimate?project_id="+p.ID, raw)
 	if estimate.Code != 200 {

@@ -176,7 +176,7 @@ func currentQuote(ctx context.Context, tx *sql.Tx, p string, i tasks.Input) (pro
 }
 
 // Billing is a task transaction hook; it performs SQL/pure validation only.
-func (s *Service) Billing(ctx context.Context, tx *sql.Tx, p string, v tasks.TaskView, i tasks.Input, fresh bool) error {
+func (s *Service) Billing(ctx context.Context, tx *sql.Tx, p string, v *tasks.TaskView, i tasks.Input, fresh bool) error {
 	q, in, e := currentQuote(ctx, tx, p, i)
 	if e != nil {
 		return e
@@ -204,6 +204,7 @@ func (s *Service) Billing(ctx context.Context, tx *sql.Tx, p string, v tasks.Tas
 			return e
 		}
 	}
+	v.Billing.EstimatedCredits = &q.EstimatedCredits
 	_, e = s.insert(ctx, tx, p, Question{SessionID: i.SessionID, TaskID: v.ID, Kind: "billing", TaskRevision: v.Revision, InputHash: q.InputHash, Quote: &q, Provider: i.Provider.Config.Name, Model: i.Provider.Config.ModelID, Questions: []Info{{Header: "生成费用确认", Question: "确认此报价并提交一次生成？", Options: []Option{{Label: "确认生成", Description: "批准一次供应商请求；重复回执不会再次生成"}}}}, Impacts: []string{"提交一次生成请求，供应商可能计费", "创建声明的作品输出；取消不能撤回已发送的请求"}})
 	return e
 }
@@ -257,7 +258,7 @@ func (s *Service) Ask(ctx context.Context, p string, q Question) (Question, erro
 				return nil, e
 			}
 			v := tasks.TaskView{ID: q.TaskID, Revision: q.TaskRevision}
-			if e = s.Billing(ctx, tx, p, v, i, true); e != nil {
+			if e = s.Billing(ctx, tx, p, &v, i, true); e != nil {
 				return nil, e
 			}
 			var saved string

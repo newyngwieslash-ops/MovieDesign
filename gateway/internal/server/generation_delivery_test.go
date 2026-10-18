@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/png"
 	"net/http"
@@ -23,9 +24,13 @@ import (
 // Real human HTTP approval, SQLite journals and real managed PNG bytes. Removing
 // collection, reserved identity, commit replay or cancellation guards breaks this.
 func TestGenerationDelivery(t *testing.T) {
-	for _, mode := range []string{"complete", "receipt-restart", "invalid-media", "bad-count", "download-retry", "commit-restart", "cancel-download", "cancel-archive", "adopt-late", "adopt-archive-delete", "adopt-archive-rename", "late-version", "unknown", "reject"} {
+	for _, mode := range []string{"complete", "receipt-restart", "invalid-media", "bad-count", "download-retry", "partial-body", "commit-restart", "cancel-download", "cancel-archive", "adopt-late", "adopt-archive-delete", "adopt-archive-rename", "late-version", "unknown", "reject", "target-failed-existing-type", "target-failed-existing-composition", "target-failed-new-type", "target-failed-new-composition", "target-cancelled-existing-type", "target-cancelled-existing-composition", "target-cancelled-new-type", "target-cancelled-new-composition", "target-unsubmitted-existing-type", "target-unsubmitted-existing-composition", "target-unsubmitted-new-type", "target-unsubmitted-new-composition", "target-invalid-existing-type", "target-invalid-existing-composition", "target-invalid-new-type", "target-invalid-new-composition", "target-notaccepted-existing-type", "target-notaccepted-existing-composition", "target-notaccepted-new-type", "target-notaccepted-new-composition", "target-adoption-invalid-existing-type", "target-adoption-invalid-existing-composition", "target-adoption-invalid-new-type", "target-adoption-invalid-new-composition"} {
 		t.Run(mode, func(t *testing.T) {
 			archiveAdoption := strings.HasPrefix(mode, "adopt-archive")
+			targetCase := strings.HasPrefix(mode, "target-")
+			adoptionInvalid := strings.HasPrefix(mode, "target-adoption-invalid-")
+			cancelTarget := strings.HasPrefix(mode, "target-cancelled-") || strings.HasPrefix(mode, "target-notaccepted-") || adoptionInvalid
+			failedTarget := strings.HasPrefix(mode, "target-failed-")
 			ctx := context.Background()
 			db, e := store.Open(filepath.Join(t.TempDir(), "generation.db"))
 			if e != nil {
@@ -49,7 +54,11 @@ func TestGenerationDelivery(t *testing.T) {
 			remote = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == "POST" {
 					posts.Add(1)
-					if mode == "invalid-media" {
+					if cancelTarget {
+						close(entered)
+						<-release
+					}
+					if mode == "invalid-media" || strings.HasPrefix(mode, "target-invalid-") || adoptionInvalid {
 						json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]string{"b64_json": "invalid base64!"}}})
 						return
 					}
@@ -61,16 +70,22 @@ func TestGenerationDelivery(t *testing.T) {
 						w.WriteHeader(500)
 						return
 					}
-					if mode == "reject" {
+					if mode == "reject" || strings.HasPrefix(mode, "target-notaccepted-") {
 						w.WriteHeader(400)
 						return
 					}
-					json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]string{"url": remote.URL + "/result"}}})
+					json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]string{"url": remote.URL + "/result?signature=private-result-token"}}})
 					return
 				}
 				n := downloads.Add(1)
-				if mode == "download-retry" && n == 1 {
+				if (mode == "download-retry" || failedTarget) && n == 1 {
 					w.WriteHeader(503)
+					return
+				}
+				if mode == "partial-body" && n == 1 {
+					w.Header().Set("Content-Length", fmt.Sprint(pngBytes.Len()+100))
+					w.Header().Set("Content-Type", "image/png")
+					w.Write(pngBytes.Bytes()[:10])
 					return
 				}
 				if mode == "cancel-download" || mode == "adopt-late" {
@@ -107,6 +122,13 @@ func TestGenerationDelivery(t *testing.T) {
 				return object.ID
 			}
 			declaration := map[string]string{"key": "main", "mode": "create", "name": "Image"}
+			var targetType, targetComposition string
+			if targetCase && (strings.Contains(mode, "-existing-") || strings.HasSuffix(mode, "new-composition")) {
+				targetType = createObject("/api/composition-types", "target-type", map[string]string{"label": "Images"})
+				if strings.Contains(mode, "-existing-") {
+					targetComposition = createObject("/api/compositions", "target-composition", map[string]string{"type_id": targetType, "name": "Scene"})
+				}
+			}
 			var existingResource, newer string
 			if mode == "late-version" || archiveAdoption {
 				typeID := createObject("/api/composition-types", "type", map[string]string{"label": "Images"})
@@ -165,6 +187,39 @@ func TestGenerationDelivery(t *testing.T) {
 					t.Fatal(e)
 				}
 			}
+			checkTarget := func(protected bool) {
+				body := map[string]any{"requestId": fmt.Sprintf("target-write-%t", protected), "action": "create", "value": map[string]string{"label": "Images"}}
+				path := "/api/composition-types"
+				if strings.HasSuffix(mode, "composition") {
+					path = "/api/compositions"
+					body["value"] = map[string]string{"type_id": targetType, "name": "Scene"}
+					if targetComposition != "" {
+						body["action"], body["id"], body["value"] = "update", targetComposition, map[string]string{"name": "Renamed"}
+					}
+				} else if targetType != "" {
+					body["action"], body["id"], body["value"] = "update", targetType, map[string]string{"label": "Renamed"}
+				}
+				out := call(path, body)
+				want := 200
+				if protected {
+					want = 409
+				}
+				if out.Code != want {
+					t.Fatalf("target reservation protected=%t: got %d want %d: %s", protected, out.Code, want, out.Body.String())
+				}
+			}
+			if strings.HasPrefix(mode, "target-unsubmitted-") {
+				view, _ := h.tasks.Query(ctx, project.ID, id)
+				out := call("/api/tasks/"+id+"/resolve", map[string]any{"requestId": "cancel-unsent", "action": "cancel", "expected_revision": view.Revision})
+				if out.Code != 200 {
+					t.Fatal(out.Code, out.Body.String())
+				}
+				checkTarget(false)
+				if posts.Load() != 0 {
+					t.Fatal("unsubmitted cancellation sent provider POST")
+				}
+				return
+			}
 			reply := call("/api/question/"+qid+"/reply", map[string]any{"requestId": "approval", "expected_revision": 1, "answers": [][]string{{"确认生成"}}})
 			if reply.Code != 200 {
 				t.Fatal(reply.Code, reply.Body.String())
@@ -182,6 +237,22 @@ func TestGenerationDelivery(t *testing.T) {
 					t.Fatal(cancel.Code, cancel.Body.String())
 				}
 			}
+
+			if cancelTarget {
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("provider not started")
+				}
+				view, _ := h.tasks.Query(ctx, project.ID, id)
+				cancel := call("/api/tasks/"+id+"/resolve", map[string]any{"requestId": "cancel-target", "action": "cancel", "expected_revision": view.Revision})
+				// Release before asserting so a failed reservation cannot strand the fixture.
+				if cancel.Code != 200 {
+					close(release)
+					t.Fatal(cancel.Code, cancel.Body.String())
+				}
+				func() { defer close(release); checkTarget(true) }()
+			}
 			deadline := time.Now().Add(6 * time.Second)
 			var v tasks.TaskView
 			for time.Now().Before(deadline) {
@@ -191,7 +262,29 @@ func TestGenerationDelivery(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			if mode == "download-retry" || mode == "commit-restart" {
+			if strings.HasPrefix(mode, "target-notaccepted-") {
+				var state string
+				for deadline = time.Now().Add(4 * time.Second); time.Now().Before(deadline); {
+					db.QueryRow("SELECT state FROM task_attempts WHERE task_id=?", id).Scan(&state)
+					if state == "failed" {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if state != "failed" || posts.Load() != 1 {
+					t.Fatal("cancelled rejection did not settle", state, posts.Load())
+				}
+				checkTarget(false)
+				return
+			}
+			if strings.HasPrefix(mode, "target-invalid-") {
+				if v.Status != tasks.Failed || v.Problem == nil || v.Problem.Retryable {
+					t.Fatal("expected immutable failure", v)
+				}
+				checkTarget(false)
+				return
+			}
+			if mode == "download-retry" || mode == "partial-body" || mode == "commit-restart" || failedTarget {
 				if v.Status != tasks.Failed || v.Problem == nil || v.Problem.Source != "delivery" {
 					t.Fatal("expected recoverable collection", v)
 				}
@@ -202,6 +295,12 @@ func TestGenerationDelivery(t *testing.T) {
 					if e = h.tasks.Recover(ctx); e != nil {
 						t.Fatal(e)
 					}
+				}
+				if failedTarget {
+					checkTarget(true)
+				}
+				if mode == "partial-body" && (v.Problem == nil || !v.Problem.Retryable || strings.Contains(v.Problem.Message, "private-result-token")) {
+					t.Fatal("interrupted body lost safe retry or leaked URL", v)
 				}
 				retry := call("/api/tasks/"+id+"/resolve", map[string]any{"requestId": "collection-retry", "action": "retry", "expected_revision": v.Revision})
 				if retry.Code != 200 {
@@ -216,7 +315,7 @@ func TestGenerationDelivery(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 				}
 			}
-			if mode == "adopt-late" || archiveAdoption {
+			if mode == "adopt-late" || archiveAdoption || cancelTarget {
 				var count int
 				db.QueryRow("SELECT count(*) FROM versions").Scan(&count)
 				if count != 0 && !archiveAdoption || archiveAdoption && count != 2 {
@@ -233,6 +332,9 @@ func TestGenerationDelivery(t *testing.T) {
 				}
 				if adoption == "" {
 					t.Fatal("no explicit adoption card for late result")
+				}
+				if cancelTarget {
+					checkTarget(true)
 				}
 				if archiveAdoption {
 					var source, archive, originalInput, originalPlan, status string
@@ -265,6 +367,25 @@ func TestGenerationDelivery(t *testing.T) {
 				if adopted.Code != 200 {
 					t.Fatal(adopted.Code, adopted.Body.String())
 				}
+				if adoptionInvalid {
+					var state string
+					for deadline = time.Now().Add(4 * time.Second); time.Now().Before(deadline); {
+						db.QueryRow("SELECT state FROM task_attempts WHERE task_id=?", id).Scan(&state)
+						if h.tasks.Active() == 0 {
+							break
+						}
+						time.Sleep(10 * time.Millisecond)
+					}
+					if state != "failed" {
+						t.Error("immutable adoption incorrectly left retry pending", state)
+					}
+					checkTarget(false)
+					db.QueryRow("SELECT count(*) FROM versions").Scan(&count)
+					if count != 0 || posts.Load() != 1 {
+						t.Fatal("immutable adoption generated/delivered", count, posts.Load())
+					}
+					return
+				}
 				deadline = time.Now().Add(4 * time.Second)
 				for time.Now().Before(deadline) {
 					db.QueryRow("SELECT count(*) FROM versions WHERE id=?", version).Scan(&count)
@@ -293,6 +414,16 @@ func TestGenerationDelivery(t *testing.T) {
 						t.Fatal("adoption repeated collection or version insertion", count, downloads.Load())
 					}
 					checkCurrent()
+				}
+				if cancelTarget {
+					var cid, tid, vid string
+					db.QueryRow("SELECT json_extract(source_json,'$.composition_id'),json_extract(source_json,'$.type_id'),version_id FROM task_outputs WHERE task_id=?", id).Scan(&cid, &tid, &vid)
+					if vid != version || targetType != "" && tid != targetType || targetComposition != "" && cid != targetComposition {
+						t.Fatal("adoption retargeted frozen identity")
+					}
+					// All outputs delivered: names are ordinary editable objects again.
+					targetType, targetComposition = tid, cid
+					checkTarget(false)
 				}
 				return
 			}
@@ -368,7 +499,20 @@ func TestGenerationDelivery(t *testing.T) {
 			if gotResource != resource || gotOrdinal != ordinal {
 				t.Fatal("reserved slot changed")
 			}
+			if mode == "partial-body" {
+				var attempt int
+				db.QueryRow("SELECT current_attempt FROM tasks WHERE id=?", id).Scan(&attempt)
+				if attempt != 1 || downloads.Load() != 2 {
+					t.Fatal("partial-body retry changed attempt/download identity", attempt, downloads.Load())
+				}
+			}
 			checkCurrent()
+			if failedTarget {
+				var cid, tid string
+				db.QueryRow("SELECT json_extract(source_json,'$.composition_id'),json_extract(source_json,'$.type_id') FROM task_outputs WHERE task_id=?", id).Scan(&cid, &tid)
+				targetType, targetComposition = tid, cid
+				checkTarget(false)
+			}
 			f, e := ws.OpenRegular(project.ID, path)
 			if e != nil {
 				t.Fatal(e)

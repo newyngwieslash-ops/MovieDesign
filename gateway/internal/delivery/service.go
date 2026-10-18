@@ -260,9 +260,26 @@ func validate(in Request) error {
 		}
 		keys[v.Key] = true
 	}
-	used := map[string]bool{}
+	if e := ValidateOutput(in.Output); e != nil {
+		return e
+	}
 	for _, v := range in.Output.Resources {
-		if !keys[v.Key] || used[v.Key] || v.Name == "" || utf8.RuneCountInString(v.Name) > 512 {
+		if !keys[v.Key] {
+			return invalid("Resource keys must equal source keys")
+		}
+	}
+	return nil
+}
+
+// ValidateOutput is shared by admission/estimate and final Delivery. It checks
+// the declaration without requiring media paths or reserving any identities.
+func ValidateOutput(output Output) error {
+	if len(output.Resources) < 1 || len(output.Resources) > 100 {
+		return invalid("Delivery requires 1–100 resource declarations")
+	}
+	used := map[string]bool{}
+	for _, v := range output.Resources {
+		if v.Key == "" || len(v.Key) > 128 || used[v.Key] || v.Name == "" || utf8.RuneCountInString(v.Name) > 512 {
 			return invalid("Resource keys must equal source keys and names must be 1–512 characters")
 		}
 		used[v.Key] = true
@@ -270,7 +287,7 @@ func validate(in Request) error {
 			return invalid("create forbids baseVersionId; new_version requires it")
 		}
 	}
-	c := in.Output.Composition
+	c := output.Composition
 	if e := validatePlacements(c.Placements); e != nil {
 		return e
 	}
@@ -278,7 +295,7 @@ func validate(in Request) error {
 		return invalid("Composition requires name and type id or label (names/labels up to 256 characters)")
 	}
 	for _, v := range c.Placements {
-		if !keys[v.Key] || v.Role == "" {
+		if !used[v.Key] || v.Role == "" {
 			return invalid("Placements require an existing source key and nonempty role")
 		}
 	}

@@ -131,13 +131,25 @@ func taskOutputContent(ctx context.Context, tx *sql.Tx, p, cid string) ([]any, e
 // CheckTaskTargetReservation prevents a name-based writer from taking a pending
 // task's allocated identity. The task-output delivery resolver must consume the
 // exact saved identity, not call the name-based resolver again.
+// A cancelled submitted attempt may still return media; its adoption card owns
+// recovery after the worker settles. Delivered or permanently invalid slots do
+// not hold names, nor does a cancellation before any provider submission.
+const consumableTaskOutput = `o.attempt=t.current_attempt AND o.state<>'delivered' AND (
+ t.status IN ('accepted','running','waiting_user','unknown') OR
+ (t.status='failed' AND EXISTS(SELECT 1 FROM json_each(t.view_json,'$.actions') WHERE value='retry')) OR
+ (t.status='cancelled' AND EXISTS(SELECT 1 FROM task_attempts a WHERE a.task_id=t.id AND a.attempt=t.current_attempt AND a.submit_started_at IS NOT NULL AND (
+  a.state IN ('submitting','submitted','running','unknown','collection_pending','collecting','adoption_pending') OR
+  (coalesce(json_extract(a.error_json,'$.code'),'') NOT IN ('INVALID_SAVED_MEDIA','OUTPUT_COUNT_MISMATCH','INVALID_MEDIA_RESULT') AND EXISTS(SELECT 1 FROM questions q WHERE q.task_id=t.id AND q.kind='delivery' AND q.input_hash=t.id||':'||t.current_attempt AND q.state='pending'))
+ )))
+)`
+
 func CheckTaskTargetReservation(ctx context.Context, tx *sql.Tx, p, typeID, label, name string) error {
 	var exists int
 	if e := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name='task_outputs'").Scan(&exists); e != nil || exists == 0 {
 		return e
 	}
 	var n int
-	e := tx.QueryRowContext(ctx, `SELECT count(*) FROM task_outputs o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=? AND t.status IN ('accepted','running','waiting_user','unknown') AND ((?<>'' AND json_extract(o.source_json,'$.new_type')=1 AND json_extract(o.source_json,'$.type_label')=?) OR (?<>'' AND json_extract(o.source_json,'$.new_composition')=1 AND json_extract(o.source_json,'$.name')=? AND (json_extract(o.source_json,'$.type_id')=? OR (?<>'' AND json_extract(o.source_json,'$.type_label')=?))))`, p, label, label, name, name, typeID, label, label).Scan(&n)
+	e := tx.QueryRowContext(ctx, `SELECT count(*) FROM task_outputs o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=? AND `+consumableTaskOutput+` AND ((?<>'' AND json_extract(o.source_json,'$.new_type')=1 AND json_extract(o.source_json,'$.type_label')=?) OR (?<>'' AND json_extract(o.source_json,'$.new_composition')=1 AND json_extract(o.source_json,'$.name')=? AND (json_extract(o.source_json,'$.type_id')=? OR (?<>'' AND json_extract(o.source_json,'$.type_label')=?))))`, p, label, label, name, name, typeID, label, label).Scan(&n)
 	if e != nil {
 		return e
 	}
@@ -170,7 +182,7 @@ func checkTaskRename(ctx context.Context, tx *sql.Tx, kind, id, next string) err
 		return e
 	}
 	var n int
-	e := tx.QueryRowContext(ctx, "SELECT count(*) FROM task_outputs o JOIN tasks t ON t.id=o.task_id WHERE t.status IN ('accepted','running','waiting_user','unknown') AND json_extract(o.source_json,?)=?", "$."+field, id).Scan(&n)
+	e := tx.QueryRowContext(ctx, `SELECT count(*) FROM task_outputs o JOIN tasks t ON t.id=o.task_id WHERE `+consumableTaskOutput+` AND json_extract(o.source_json,?)=?`, "$."+field, id).Scan(&n)
 	if e != nil {
 		return e
 	}

@@ -228,7 +228,7 @@ func (s *Service) finish(a Attempt, out Outcome, callErr error) error {
 	if _, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state=?,error_json=coalesce(error_json,?),result_json=coalesce(result_json,?) WHERE task_id=? AND attempt=?", status, problemJSON, result, a.TaskID, a.Number); e != nil {
 		return e
 	}
-	if v.Status == Cancelled && status == Failed {
+	if v.Status == Cancelled && status == Failed && problem != nil && problem.Retryable {
 		var approved int
 		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM questions WHERE task_id=? AND kind='delivery' AND state='approved'", a.TaskID).Scan(&approved); e != nil {
 			return e

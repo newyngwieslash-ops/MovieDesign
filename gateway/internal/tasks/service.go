@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/google/uuid"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
@@ -22,7 +23,7 @@ type Service struct {
 	Events   *events.Service
 	Executor *Executor
 	// BillingGate adds the server-owned card in the admission/retry transaction.
-	BillingGate func(context.Context, *sql.Tx, string, TaskView, Input, bool) error
+	BillingGate func(context.Context, *sql.Tx, string, *TaskView, Input, bool) error
 	LateResult  func(context.Context, *sql.Tx, string, TaskView, int, string) error
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -194,6 +195,9 @@ func validateInput(i Input) error {
 		return invalid("A frozen enabled provider is required")
 	}
 	o := i.Output
+	if e := delivery.ValidateOutput(o); e != nil {
+		return e
+	}
 	if len(o.Resources) < 1 || len(o.Resources) > 50 || len(o.Composition.Placements) != len(o.Resources) || strings.TrimSpace(o.Composition.Name) == "" || len(o.Composition.Name) > 256 || (o.Composition.Type.ID == "") == (o.Composition.Type.Label == "") {
 		return invalid("Invalid declared output")
 	}
@@ -419,13 +423,17 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 		if _, e := tx.ExecContext(ctx, "UPDATE canvas_composition_state SET revision=revision+1 WHERE composition_id=?", target.CompositionID); e != nil {
 			return nil, e
 		}
-		if e := events.Append(ctx, tx, p, i.SessionID, v.ID, "task_changed", view); e != nil {
-			return nil, e
-		}
 		if s.BillingGate != nil {
-			if e := s.BillingGate(ctx, tx, p, v, i, false); e != nil {
+			if e := s.BillingGate(ctx, tx, p, &v, i, false); e != nil {
 				return nil, e
 			}
+		}
+		view, _ = json.Marshal(v)
+		if _, e = tx.ExecContext(ctx, "UPDATE tasks SET view_json=? WHERE id=?", string(view), v.ID); e != nil {
+			return nil, e
+		}
+		if e := events.Append(ctx, tx, p, i.SessionID, v.ID, "task_changed", view); e != nil {
+			return nil, e
 		}
 		return view, nil
 	})
@@ -557,17 +565,20 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 		default:
 			return nil, invalid("Unsupported task action")
 		}
-		if e = s.save(ctx, tx, p, session, &v, attempt); e != nil {
-			return nil, e
-		}
 		if s.BillingGate != nil && v.Status == WaitingUser && v.Problem != nil && v.Problem.Source == "billing" {
 			a, _, _, err := loadAttempt(ctx, tx, p, id)
 			if err != nil {
 				return nil, err
 			}
-			if err = s.BillingGate(ctx, tx, p, v, a.Input, true); err != nil {
+			next := v
+			next.Revision++ // The card binds the revision committed by save below.
+			if err = s.BillingGate(ctx, tx, p, &next, a.Input, true); err != nil {
 				return nil, err
 			}
+			v.Billing = next.Billing
+		}
+		if e = s.save(ctx, tx, p, session, &v, attempt); e != nil {
+			return nil, e
 		}
 		return json.Marshal(v)
 	})
