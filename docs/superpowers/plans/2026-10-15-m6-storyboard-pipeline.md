@@ -32,7 +32,7 @@
 
 **Files:**
 - Create: `gateway/internal/pipeline/storyboard.go`, `gateway/internal/pipeline/storyboard_test.go`, `gateway/internal/server/pipeline.go`, `desktop/src/features/pipeline/StoryboardReview.tsx`。
-- Create: `gateway/migrations/000010_pipeline.up.sql`, `gateway/migrations/000010_pipeline.down.sql`。
+- Create: `gateway/migrations/000011_pipeline.up.sql`, `gateway/migrations/000011_pipeline.down.sql`。
 - Modify: `gateway/internal/mcp/documents.go`, `desktop/src/features/canvas/CanvasNode.tsx`, `gateway/internal/server/server.go`, `docs/contracts.md`。
 
 **Interfaces:** `SaveStoryboard(ctx,scope,requestId,pipelineID,expectedRevision,Storyboard)(Revision,error)`；`Storyboard{Panels,Shots,Timeline}`结构化字段对应原文层级。时间统一整数毫秒，不把UI时间字符串存为真值。document_write增加显式typed document参数并在适配表登记；通用文档仍按原入口写入。
