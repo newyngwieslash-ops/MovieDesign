@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/url"
 
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 )
 
@@ -80,20 +81,55 @@ func (c *Chat) syncQuestions(ctx context.Context, s ToolScope) error {
 			return e
 		}
 	}
-	rows, e := c.DB.QueryContext(ctx, "SELECT native_id,send_state FROM native_questions WHERE turn_id=?", s.TurnID)
+	return c.retireMissingQuestions(ctx, s, present)
+}
+
+// Reconciliation of old mappings is read-only toward native: no GateQuestion,
+// receipt claim, reply or reject can run for an interrupted/closed epoch.
+func (c *Chat) reconcileInactiveQuestions() {
+	rows, e := c.DB.Query(`SELECT DISTINCT t.id,t.epoch,s.project_id,s.id,s.native_session_id FROM native_questions n JOIN chat_turns t ON t.id=n.turn_id JOIN chat_sessions s ON s.id=t.session_id WHERE t.state!='active' AND n.send_state!='sent'`)
+	if e != nil {
+		return
+	}
+	var scopes []ToolScope
+	for rows.Next() {
+		var s ToolScope
+		if rows.Scan(&s.TurnID, &s.Epoch, &s.ProjectID, &s.SessionID, &s.NativeSessionID) == nil {
+			scopes = append(scopes, s)
+		}
+	}
+	rows.Close()
+	if len(scopes) == 0 {
+		return
+	}
+	pending, e := c.Host.pendingQuestions(c.ctx)
+	if e != nil {
+		return
+	}
+	for _, s := range scopes {
+		present := map[string]bool{}
+		for _, q := range pending {
+			if q.SessionID == s.NativeSessionID {
+				present[q.ID] = true
+			}
+		}
+		_ = c.retireMissingQuestions(context.WithoutCancel(c.ctx), s, present)
+	}
+}
+func (c *Chat) retireMissingQuestions(ctx context.Context, s ToolScope, present map[string]bool) error {
+	rows, e := c.DB.QueryContext(ctx, "SELECT native_id FROM native_questions WHERE turn_id=? AND send_state!='sent'", s.TurnID)
 	if e != nil {
 		return e
 	}
-	type record struct{ id, state string }
-	var missing []record
+	var missing []string
 	for rows.Next() {
-		var r record
-		if e = rows.Scan(&r.id, &r.state); e != nil {
+		var id string
+		if e = rows.Scan(&id); e != nil {
 			rows.Close()
 			return e
 		}
-		if !present[r.id] && r.state != "sent" {
-			missing = append(missing, r)
+		if !present[id] {
+			missing = append(missing, id)
 		}
 	}
 	e = rows.Err()
@@ -101,11 +137,41 @@ func (c *Chat) syncQuestions(ctx context.Context, s ToolScope) error {
 	if e != nil {
 		return e
 	}
-	for _, r := range missing {
-		// Absence in native memory is never proof of a human answer or successful send.
-		if _, e = c.DB.ExecContext(ctx, "UPDATE native_questions SET send_state='unknown' WHERE native_id=?", r.id); e != nil {
+	for _, id := range missing {
+		tx, e := c.DB.BeginTx(ctx, nil)
+		if e != nil {
 			return e
 		}
+		e = func() error {
+			defer tx.Rollback()
+			if _, e := tx.ExecContext(ctx, "UPDATE native_questions SET send_state='unknown' WHERE native_id=?", id); e != nil {
+				return e
+			}
+			result, e := tx.ExecContext(ctx, `UPDATE questions SET state='superseded',revision=revision+1,question_json=json_set(question_json,'$.state','superseded','$.revision',revision+1,'$.reason','Native question unavailable; delivery unknown') WHERE id=(SELECT question_id FROM native_questions WHERE native_id=?) AND state='pending'`, id)
+			if e != nil {
+				return e
+			}
+			n, e := result.RowsAffected()
+			if e != nil {
+				return e
+			}
+			if n > 0 {
+				var raw string
+				if e = tx.QueryRowContext(ctx, "SELECT question_json FROM questions WHERE id=(SELECT question_id FROM native_questions WHERE native_id=?)", id).Scan(&raw); e != nil {
+					return e
+				}
+				if e = events.Append(ctx, tx, s.ProjectID, s.SessionID, "", "question_resolved", []byte(raw)); e != nil {
+					return e
+				}
+			}
+			return tx.Commit()
+		}()
+		if e != nil {
+			return e
+		}
+	}
+	if len(missing) > 0 {
+		c.Events.Notify()
 	}
 	return nil
 }

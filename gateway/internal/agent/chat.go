@@ -252,6 +252,7 @@ func (c *Chat) run() {
 		}
 		c.reconcileInterrupted()
 		for c.ctx.Err() == nil {
+			c.reconcileInactiveQuestions()
 			var blocked int
 			if c.DB.QueryRow("SELECT count(*) FROM chat_dispatch WHERE terminal=0 AND state IN ('unknown','submitting','accepted','running','cancelling')").Scan(&blocked) != nil || blocked > 0 {
 				break
@@ -291,7 +292,7 @@ func (c *Chat) run() {
 					break
 				}
 			}
-			scope, e := c.Turns.BeginQueued(c.ctx, p, session, native)
+			scope, e := c.Turns.Begin(context.WithoutCancel(c.ctx), p, session, native)
 			if e != nil {
 				break
 			}
@@ -381,13 +382,26 @@ func (c *Chat) reconcileInterrupted() {
 func (c *Chat) setState(id, state, message string) {
 	_, _ = c.DB.Exec("UPDATE chat_dispatch SET state=?,error=? WHERE message_id=? AND terminal=0 AND state!='cancelling'", state, message, id)
 }
+
+// Retain the sole worker and old scope while retrying private cleanup only.
+// A public terminal never authorizes a new epoch before this barrier succeeds.
 func (c *Chat) end(scope ToolScope) error {
-	return c.Turns.End(c.ctx, scope, func(ctx context.Context) error { return c.Host.WaitIdle(ctx, scope.NativeSessionID) }, func(ctx context.Context) error {
-		if e := c.Host.DisconnectTools(ctx); e != nil {
-			return e
+	for {
+		e := c.Turns.End(c.ctx, scope, func(ctx context.Context) error { return c.Host.WaitIdle(ctx, scope.NativeSessionID) }, func(ctx context.Context) error {
+			if e := c.Host.DisconnectTools(ctx); e != nil {
+				return e
+			}
+			return c.CloseEpoch(scope.Epoch)
+		})
+		if e == nil {
+			return nil
 		}
-		return c.CloseEpoch(scope.Epoch)
-	})
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 func (c *Chat) Cancel(ctx context.Context, p, session string, raw []byte) (map[string]string, error) {

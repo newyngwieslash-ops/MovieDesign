@@ -32,6 +32,10 @@ type chatFixture struct {
 	replies          atomic.Int32
 	accept           chan struct{}
 	failureEvent     bool
+	loseAcceptance   bool
+	abortFailures    atomic.Int32
+	control          func(string) bool
+	snapshotReads    chan string
 }
 
 func newChatFixture(t *testing.T, delay time.Duration, reject bool) *chatFixture {
@@ -54,6 +58,10 @@ func newChatFixture(t *testing.T, delay time.Duration, reject bool) *chatFixture
 	native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "private" {
 			w.WriteHeader(401)
+			return
+		}
+		if f.control != nil && f.control(r.URL.Path) {
+			w.WriteHeader(503)
 			return
 		}
 		switch {
@@ -84,6 +92,13 @@ func newChatFixture(t *testing.T, delay time.Duration, reject bool) *chatFixture
 			case <-r.Context().Done():
 				return
 			}
+			if f.loseAcceptance {
+				conn, _, e := w.(http.Hijacker).Hijack()
+				if e == nil {
+					conn.Close()
+				}
+				return
+			}
 			if f.reject {
 				w.WriteHeader(400)
 			} else {
@@ -91,10 +106,18 @@ func newChatFixture(t *testing.T, delay time.Duration, reject bool) *chatFixture
 			}
 		case strings.HasSuffix(r.URL.Path, "/abort"):
 			f.aborts.Add(1)
+			if f.abortFailures.CompareAndSwap(1, 0) {
+				w.WriteHeader(503)
+				return
+			}
 			fmt.Fprint(w, "true")
 		case strings.HasSuffix(r.URL.Path, "/message"):
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			select {
+			case f.snapshotReads <- f.parent:
+			default:
+			}
 			if f.parent == "" {
 				fmt.Fprint(w, "[]")
 				return

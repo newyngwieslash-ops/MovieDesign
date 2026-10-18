@@ -67,6 +67,9 @@ type nativeMessage struct {
 // Native deltas have no durable offset. Treat them as invalidation hints and read
 // authoritative text; equal adjacent tokens remain intact, SSE replay adds none.
 func (c *Chat) snapshotEvents(ctx context.Context, s ToolScope, id, parent string) (bool, error) {
+	return c.readSnapshotEvents(ctx, s, id, parent, true)
+}
+func (c *Chat) readSnapshotEvents(ctx context.Context, s ToolScope, id, parent string, publishTerminal bool) (bool, error) {
 	messages, e := c.Host.snapshot(ctx, s.NativeSessionID)
 	if e != nil {
 		return false, e
@@ -93,6 +96,9 @@ func (c *Chat) snapshotEvents(ctx context.Context, s ToolScope, id, parent strin
 		}
 	}
 	if terminal != "" {
+		if !publishTerminal {
+			return true, nil
+		}
 		message := ""
 		if terminal == "error" {
 			message = "Native turn failed; no automatic resubmission"
@@ -238,28 +244,25 @@ func (c *Chat) watch(s ToolScope, id, parent string, acceptance <-chan error) bo
 		if c.DB.QueryRowContext(context.WithoutCancel(ctx), "SELECT state FROM chat_dispatch WHERE message_id=?", id).Scan(&state) != nil {
 			return false
 		}
-		if state == "cancelling" && !cancelSent {
-			cancelSent = true
-			if e := c.Host.Abort(ctx, s.NativeSessionID); e != nil {
-				c.setState(id, "unknown", "Native cancellation acceptance unknown")
-				return false
-			}
-		}
-		if state == "cancelling" && settled && !acceptanceUnknown {
-			// A prompt may arrive after the first abort; do not release the scope
-			// until acceptance has settled and the owned runtime is aborted/idle.
-			if e := c.Host.Abort(ctx, s.NativeSessionID); e != nil {
-				return false
-			}
-			if e := c.Host.WaitIdle(ctx, s.NativeSessionID); e != nil {
-				return false
-			}
-			if e := c.finish(s, id, "cancelled", "", "cancelled"); e != nil {
-				return false
-			}
-			return c.end(s) == nil
-		}
 		if state == "cancelling" {
+			if !cancelSent {
+				cancelSent = c.Host.Abort(ctx, s.NativeSessionID) == nil
+			}
+			// Unknown acceptance can be resolved only by positive completion for
+			// the persisted parent, never by an absent native status entry.
+			known := settled && !acceptanceUnknown
+			if settled && acceptanceUnknown {
+				done, e := c.readSnapshotEvents(ctx, s, id, parent, false)
+				known = e == nil && done
+			}
+			if known && cancelSent {
+				// The prompt may have arrived after the first abort.
+				if c.Host.Abort(ctx, s.NativeSessionID) == nil && c.Host.WaitIdle(ctx, s.NativeSessionID) == nil {
+					if e := c.finish(s, id, "cancelled", "", "cancelled"); e == nil {
+						return c.end(s) == nil
+					}
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return false
@@ -268,6 +271,7 @@ func (c *Chat) watch(s ToolScope, id, parent string, acceptance <-chan error) bo
 			}
 			continue
 		}
+
 		if failed && settled {
 			status, message := "error", "Native turn failed; no automatic resubmission"
 			var uncertain int
