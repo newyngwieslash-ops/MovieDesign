@@ -20,7 +20,7 @@ export async function api<T>(projectID: string | null, path: string, init: Reque
   if (!response.ok) throw new APIError(data.error?.code ?? 'upstream', data.error?.message ?? `请求失败（${response.status}）`, response.status);
   return data as T;
 }
-export async function allPages<T>(projectID: string, path: string, signal: AbortSignal): Promise<T[]> {
+export async function allPages<T>(projectID: string | null, path: string, signal: AbortSignal): Promise<T[]> {
   // ponytail: load the complete local project in memory; use paged views when project size requires it.
   const items: T[] = [];
   let offset = 0;

@@ -14,20 +14,30 @@ test('actual assistant and tool output render hostile strings literally',()=>{
 });
 export {load};
 function find(tree,predicate){if(Array.isArray(tree)){for(const c of tree){const hit=find(c,predicate);if(hit)return hit;}}else if(tree&&typeof tree==='object'){if(predicate(tree))return tree;return find(tree.props?.children,predicate);}}
-function harness(initial={},storageFailure=false,annotationSource){
+function harness(initial={},storageFailure=false,annotationSource,skillFetch){
  const map=new Map(Object.entries(initial)),writes=[],reads=[],hooks=[],effects=[];let cursor=0,tree,doc={type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'original'}]}]},text='original',editorOptions,listener,history=[];
  const storage={getItem:k=>{if(storageFailure)throw Error('denied');return map.get(k)??null;},setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)};
  const react={useState(init){const i=cursor++;if(!(i in hooks))hooks[i]=typeof init==='function'?init():init;return [hooks[i],v=>{hooks[i]=typeof v==='function'?v(hooks[i]):v;}];},useRef(init){return hooks[cursor++]??={current:init};},useEffect(fn,deps){const i=cursor++,old=hooks[i];if(!old||deps.some((v,j)=>v!==old.deps[j])){hooks[i]={deps,cleanup:old?.cleanup};effects.push(()=>{hooks[i].cleanup?.();hooks[i].cleanup=fn();});}}};
  class APIError extends Error {constructor(status,code='invalid_input',message='definite rejection'){super(message);this.status=status;this.code=code;}}
  const gateway={APIError,newRequestID:()=>crypto.randomUUID(),api:(p,path,init={})=>{if(init.method==='POST')return new Promise((resolve,reject)=>writes.push({p,path,body:init.body,resolve,reject}));reads.push(path);return Promise.resolve({items:path.includes('/messages')?history:[{id:'s',project_id:'p',title:'Saved',state:'active',created_at:1}],coverage:{total:1,next_offset:1,exhausted:true}});}};
+ let skillQuery,skillData=[];
+ if(skillFetch){const actual=load('gateway.ts',{}, {fetch:skillFetch,URL,Headers});const original=gateway.api;gateway.api=(p,path,init)=>path.startsWith('/api/skills')?actual.api(p,path,init):original(p,path,init);gateway.allPages=actual.allPages;}
  const editor={get isEmpty(){return text.length===0;},getText:()=>text,getJSON:()=>doc,setEditable(){},chain(){return {focus(){return this;},insertContent(){return this;},run(){}};},commands:{clearContent(){text='';doc={type:'doc',content:[{type:'paragraph'}]};},setContent(v){doc=v;text=v.content?.[0]?.content?.[0]?.text??'';}}};
  const jsx=(type,props)=>({type,props}),helpers=load('features/chat/messages.ts');
- const {ChatPanel}=load('features/chat/ChatPanel.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':{useQuery:()=>({data:[]})},'@tiptap/react':{useEditor:o=>{editorOptions=o;return editor;},EditorContent:()=>null},'@tiptap/starter-kit':{default:{configure:()=>({})}},'../../gateway':gateway,'../../events':{subscribeEvents:(_p,event)=>{listener=event;return()=>{};}},'./AssetMention':{AssetMention:()=>({})},'./messages':helpers},{localStorage:storage});
+ const {ChatPanel}=load('features/chat/ChatPanel.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':{useQuery:o=>{if(o.queryKey.length===1&&o.queryKey[0]==='skills'){skillQuery=o;return {data:skillData};}return {data:[]};}},'@tiptap/react':{useEditor:o=>{editorOptions=o;return editor;},EditorContent:()=>null},'@tiptap/starter-kit':{default:{configure:()=>({})}},'../../gateway':gateway,'../../events':{subscribeEvents:(_p,event)=>{listener=event;return()=>{};}},'./AssetMention':{AssetMention:()=>({})},'./messages':helpers},{localStorage:storage});
  const render=()=>{cursor=0;tree=ChatPanel({projectID:'p',annotationSource});while(effects.length)effects.shift()();return tree;};
  const settle=async()=>{for(let i=0;i<5;i++){render();await tick();}render();};
  render();
- return {map,writes,reads,APIError,render,settle,get text(){return text;},select:label=>find(render(),n=>n.type==='select'&&n.props['aria-label']===label),button:label=>find(render(),n=>n.type==='button'&&[n.props.children].flat().join('')===label),type:value=>{text=value;doc={type:'doc',content:[{type:'paragraph',content:[{type:'text',text:value}]}]};editorOptions.onUpdate({editor});},history:value=>{history=value;},event:e=>listener(e),unmount:()=>{for(const h of hooks)h?.cleanup?.();}};
+ return {map,writes,reads,APIError,render,settle,loadSkills:async()=>{skillData=await skillQuery.queryFn({signal:new AbortController().signal});return skillData;},get text(){return text;},select:label=>find(render(),n=>n.type==='select'&&n.props['aria-label']===label),button:label=>find(render(),n=>n.type==='button'&&[n.props.children].flat().join('')===label),type:value=>{text=value;doc={type:'doc',content:[{type:'paragraph',content:[{type:'text',text:value}]}]};editorOptions.onUpdate({editor});},history:value=>{history=value;},event:e=>listener(e),unmount:()=>{for(const h of hooks)h?.cleanup?.();}};
 }
+test('actual skill query consumes every coverage page and rejects a nonadvancing cursor',async()=>{
+ const calls=[],names=['口播视频','图片标注修复'];
+ const h=harness({},false,undefined,async url=>{calls.push(url);const offset=Number(url.searchParams.get('offset'));assert.equal(url.searchParams.has('project_id'),false);return {ok:true,json:async()=>({items:[{name:names[offset],version:'1.0.0'}],coverage:{total:2,next_offset:offset+1,exhausted:offset===1}})};});
+ const skills=await h.loadSkills();assert.deepEqual(Array.from(skills,s=>s.name),names);assert.deepEqual(calls.map(u=>u.searchParams.get('offset')),['0','1']);
+ const selector=h.select('创作方法');for(const name of names)assert(find(selector,n=>n.type==='option'&&n.props.value===name));h.unmount();
+ const stalled=harness({},false,undefined,async()=>({ok:true,json:async()=>({items:[],coverage:{total:2,next_offset:0,exhausted:false}})}));
+ await assert.rejects(()=>stalled.loadSkills(),/分页进度无效/);stalled.unmount();
+});
 test('actual skill selector freezes explicit choice and restart replay retains it',async()=>{
  const h=harness();await h.settle();h.select('创作方法').props.onChange({target:{value:'口播视频'}});h.type('original');h.button('发送消息').props.onClick();const wire=h.writes[0].body;assert.equal(JSON.parse(wire).skill_id,'口播视频');h.writes[0].reject(Error('lost'));await h.settle();assert(h.select('创作方法').props.disabled);
  const restart=harness(Object.fromEntries(h.map));await restart.settle();assert.equal(restart.writes.length,0);restart.button('恢复原发送请求').props.onClick();assert.equal(restart.writes[0].body,wire);

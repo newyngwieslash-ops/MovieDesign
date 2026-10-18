@@ -26,7 +26,7 @@ export function ChatPanel({projectID,annotationSource}:{projectID:string;annotat
  const [state,setState]=useState(()=>historyState(projectID,session,[]));
  const [annotations,setAnnotations]=useState<unknown[]>([]),[draftText,setDraftText]=useState('');
  const [skillID,setSkillID]=useState('__continue__');
- const skills=useQuery({queryKey:['skills'],queryFn:({signal})=>api<{items:SkillInfo[]}>(null,'/api/skills',{signal})});
+ const skills=useQuery({queryKey:['skills'],queryFn:({signal})=>allPages<SkillInfo>(null,'/api/skills',signal)});
  const preview=useQuery({queryKey:['skills',skillID],enabled:skillID!==''&&skillID!=='__continue__',queryFn:({signal})=>api<Skill>(null,`/api/skills?name=${encodeURIComponent(skillID)}`,{signal})});
  const lock=useRef(false),alive=useRef(true),suggesting=useRef(false),composing=useRef(false),refresh=useRef<()=>void>(()=>{}),sendDraft=useRef<()=>void>(()=>{});
  const assets=useQuery({queryKey:['project',projectID,'assets','all',200],queryFn:({signal})=>allPages<MentionAsset>(projectID,'/api/assets',signal)});
@@ -119,7 +119,7 @@ export function ChatPanel({projectID,annotationSource}:{projectID:string;annotat
   <header><div><h2>创作聊天</h2><p>输入 @ 引用素材。Enter 发送，Shift + Enter 换行。忙时消息由服务端排队。</p></div><button disabled={busy||!!storageError||!!pending.create} onClick={()=>void execute({schema:1,projectID,kind:'create',sessionID:'',body:JSON.stringify({requestId:newRequestID(),title:`创作对话 ${new Date().toLocaleString('zh-CN')}`})})}>新建对话</button></header>
   <label>当前对话<select aria-label="当前对话" value={session} disabled={busy} onChange={e=>setSession(e.target.value)}><option value="">请选择对话</option>{sessions.map(s=><option key={s.id} value={s.id}>{s.title} · {s.state}</option>)}</select></label><button onClick={()=>refresh.current()}>刷新聊天历史</button>
   <p className="chat-latency">供应商响应完成后显示增量快照；等待不代表失败。聊天取消不会取消独立的媒体生成任务。</p>
-  <label>创作方法<select aria-label="创作方法" value={skillID} disabled={!editable} onChange={e=>setSkillID(e.target.value)}><option value="__continue__">沿用已采用方法；尚未采用时按需求匹配</option><option value="">停用创作方法</option>{skills.data?.items?.map(s=><option key={s.name} value={s.name}>{s.name} · {s.version}{s.modified?' · 本地改稿':''}</option>)}</select></label>
+  <label>创作方法<select aria-label="创作方法" value={skillID} disabled={!editable} onChange={e=>setSkillID(e.target.value)}><option value="__continue__">沿用已采用方法；尚未采用时按需求匹配</option><option value="">停用创作方法</option>{skills.data?.map(s=><option key={s.name} value={s.name}>{s.name} · {s.version}{s.modified?' · 本地改稿':''}</option>)}</select></label>
   <p>已采用：{adopted?`${adopted.name} · ${adopted.version} · ${adopted.revision.slice(0,12)}`:'无'}。选择方法随下一条消息生效，不代表批准后续方案或费用。</p>
   {method?.body&&<details><summary>查看制作方法与受管引用</summary><pre>{method.body}</pre>{Object.entries(method.references).map(([name,body])=><section key={name}><h3>{name}</h3><pre>{body}</pre></section>)}{method.modified&&<p>本地改稿已保留；随包版本另存于技能目录的 .bundled。当前对话继续使用受理时的快照；重新选择方法才采用当前文件。</p>}</details>}
   {(skills.error||preview.error)&&<p role="alert">{skills.error?.message||preview.error?.message}</p>}
