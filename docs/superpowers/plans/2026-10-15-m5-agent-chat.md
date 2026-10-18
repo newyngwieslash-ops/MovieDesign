@@ -37,12 +37,12 @@
 
 **Interfaces:** MCP 使用官方 Streamable HTTP handler 挂载 `/mcp`，同样校验 Origin，并验证专用令牌。`ToolScope{ProjectID,SessionID,TurnID}` 由 gateway 的受管会话绑定，不能由模型任选。写工具显式要求 requestId；tool requestId 与重放记录持久化。服务注入对象、投递、任务、问题服务，不复制业务算法。
 
-- [ ] 官方 SDK client 对真实 httptest HTTP server 做 initialize/tools/list/call：错误 Origin、无令牌、未知字段、无 output、跨项目引用、第41次执行都必须在业务副作用前拒绝；tools/list 精确验证本节下方矩阵，不允许原生文件工具漏出。
-- [ ] 首先用锁定 opencode 录制一次包含并行工具、question、工具事件重发的本地测试轨迹，验证工具名称、MCP request ID 与 opencode tool call ID 的关联。UI 的事件重播不增加调用次数。
-- [ ] MVP 采用全应用单一活跃 agent 轮次，其余消息排队。当前轮次与 MCP 连接 epoch 绑定；结束时等待 opencode idle、排空工具并关闭旧 MCP transport 后再进入下一轮。用 `ponytail:` 注释说明单轮并发上限，升级路径为独立会话运行时与连接隔离，不接受模型提交的任意 session_id。
-- [ ] `agent_tool_calls` 唯一键 `(turn_id,call_id)`，计数与准入同事务，第41次拒绝并触发 opencode abort。对没有可验证关联的 MCP 传输请求按执行请求保守计数，禁止仅靠延迟 SSE 事后计数；将锁定版本的关联方式和重放边界写入协议适配记录。原生 question 也经预算检查后才显示，超限问题直接 reject，不生成授权回执。
-- [ ] `design_execute` 调 Submit 后 Wait：穿过 billing，普通 waiting_user/unknown/终态返回完整任务视图；调用上下文断开只结束等待，不取消任务。`design_task_wait` 复用同一谓词。工具错误使用结构化业务结果，不把 unknown 转成可自动重试的网络错误。
-- [ ] `go -C gateway test ./internal/mcp ./internal/agent -v`，提交 `feat(M5.2): expose scoped design tools with execution limits`。
+- [x] 官方 SDK client 对真实 httptest HTTP server 做 initialize/tools/list/call：错误 Origin、无令牌、未知字段、无 output、跨项目引用、第41次执行都必须在业务副作用前拒绝；tools/list 精确验证本节下方矩阵，不允许原生文件工具漏出。
+- [x] 首先用锁定 opencode 录制一次包含并行工具、question、工具事件重发的本地测试轨迹，验证工具名称、MCP request ID 与 opencode tool call ID 的关联。UI 的事件重播不增加调用次数。
+- [x] MVP 采用全应用单一活跃 agent 轮次，其余消息排队。当前轮次与 MCP 连接 epoch 绑定；结束时等待 opencode idle、排空工具并关闭旧 MCP transport 后再进入下一轮。用 `ponytail:` 注释说明单轮并发上限，升级路径为独立会话运行时与连接隔离，不接受模型提交的任意 session_id。
+- [x] `agent_tool_calls` 唯一键 `(turn_id,call_id)`，计数与准入同事务，第41次拒绝并触发 opencode abort。对没有可验证关联的 MCP 传输请求按执行请求保守计数，禁止仅靠延迟 SSE 事后计数；将锁定版本的关联方式和重放边界写入协议适配记录。原生 question 也经预算检查后才显示，超限问题直接 reject，不生成授权回执。
+- [x] `design_execute` 调 Submit 后 Wait：穿过 billing，普通 waiting_user/unknown/终态返回完整任务视图；调用上下文断开只结束等待，不取消任务。`design_task_wait` 复用同一谓词。工具错误使用结构化业务结果，不把 unknown 转成可自动重试的网络错误。
+- [x] `go -C gateway test ./internal/mcp ./internal/agent -v`，提交 `feat(M5.2): expose scoped design tools with execution limits`。
 
 预算测试最小断言（测试文件包为 agent；Admit 返回 accepted/error，已存在 callID 返回原准入结果）：
 
