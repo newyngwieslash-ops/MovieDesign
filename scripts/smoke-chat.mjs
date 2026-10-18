@@ -32,6 +32,7 @@ async function supplier(listenPort=0){
  });await new Promise(resolve=>fixture.listen(listenPort,'127.0.0.1',resolve));return fixture.address().port;
 }
 async function send(text){await evaluate(`${ed}.commands.setContent({type:'doc',content:[{type:'paragraph',content:[{type:'text',text:${JSON.stringify(text)}}]}]})`);await click('发送消息');await wait(`![...document.querySelectorAll('.chat-panel button')].some(b=>b.textContent==='发送中')`);}
+async function waitFixture(count){for(let i=0;i<100&&modelRequests.length<count;i++)await new Promise(resolve=>setTimeout(resolve,200));assert.equal(modelRequests.length,count);}
 try{
  await wait(`document.body?.innerText.includes('本地服务已连接')`);
  if(phase==='initial'){
@@ -48,7 +49,38 @@ try{
   expected=JSON.parse(await readFile(join(dir,'chat-expected.json'),'utf8'));const {p,s,asset,version}=expected;
   await wait(`document.querySelector('[aria-label="当前对话"]')?.value===${JSON.stringify(s)}`);
   assert.equal(writes().length,0,'physical restart no automatic controls');await supplier(expected.supplierPort);
-  if(phase==='recovery'){
+  if(phase==='fix'){
+   await send('hold first queue-fix');await wait(`document.querySelector('.chat-history').innerText.includes('已受理')`);
+   await send('hold queued queue-fix');await wait(`document.querySelector('.chat-history').innerText.includes('已排队')`);
+   const beforeDraft=writes().length,cancelKey=`moviedesign.chat.cancel.v1.${p}`;
+   await evaluate(`${ed}.commands.setContent('<p>保留我的草稿</p>')`);
+   assert.equal(await evaluate(`[...document.querySelectorAll('.chat-panel button')].find(b=>b.textContent==='撤回并编辑').disabled`),true);
+   await evaluate(`[...document.querySelectorAll('.chat-panel button')].find(b=>b.textContent==='撤回并编辑').click()`);
+   assert.equal(await evaluate(`${ed}.getText()`),'保留我的草稿');assert.equal(writes().length,beforeDraft);assert.equal(await evaluate(`localStorage.getItem('${cancelKey}')`),null);await click('清空草稿');
+   // Transfer real image-editor geometry, then leave only its immutable annotation draft.
+   await evaluate(`document.querySelector('.asset-card').click()`);await click('编辑图像');await wait(`!!document.querySelector('.editor-stage canvas')`);await evaluate(`document.querySelector('.image-editor').scrollIntoView()`);await click('区域标注');
+   const rect=await evaluate(`(()=>{const r=document.querySelector('.editor-stage canvas').getBoundingClientRect();return {x:r.x,y:r.y}})()`);
+   for(const [type,x,y] of [['mousePressed',30,40],['mouseMoved',140,120],['mouseReleased',140,120]])await call('Input.dispatchMouseEvent',{type,x:rect.x+x,y:rect.y+y,button:'left',buttons:type==='mouseMoved'?1:undefined,clickCount:1});
+   await wait(`!!document.querySelector('textarea[aria-label="区域说明"]')`);await call('Input.insertText',{text:'保留标注草稿'});await key('Enter');await wait(`document.querySelectorAll('[aria-label="区域标注列表"] li').length===1`);
+   await click(await evaluate(`[...document.querySelectorAll('.chat-panel button')].find(b=>b.textContent.startsWith('附加当前标注')).textContent`));await evaluate(`${ed}.commands.clearContent()`);
+   await wait(`[...document.querySelectorAll('.chat-panel button')].find(b=>b.textContent==='撤回并编辑').disabled`);
+   assert.equal(await evaluate(`${ed}.isEmpty`),true);assert.equal(await evaluate(`[...document.querySelectorAll('.chat-panel button')].find(b=>b.textContent==='移除草稿标注').disabled`),false);
+   await evaluate(`[...document.querySelectorAll('.chat-panel button')].find(b=>b.textContent==='撤回并编辑').click()`);assert.equal(writes().length,beforeDraft);assert.equal(await evaluate(`localStorage.getItem('${cancelKey}')`),null);assert(await evaluate(`document.querySelector('.chat-composer').innerText.includes('保留标注草稿')`));await click('清空草稿');
+   const queued=(await get(p,`/api/chat/sessions/${s}/messages`)).items.find(m=>m.state==='queued');assert(queued);
+   // Hold only the browser's already explicit cancel until the real server dequeues.
+   await evaluate(`window.nativeFetch=window.fetch;window.fetch=async(...a)=>{if(String(a[0]).includes('/cancel')&&a[1]?.method==='POST'){await new Promise(resolve=>window.releaseWithdrawal=resolve);const r=await window.nativeFetch(...a);window.withdrawalResult={status:r.status,body:await r.clone().json()};return r;}return window.nativeFetch(...a);}`);
+   await click('撤回并编辑');await wait(`typeof window.releaseWithdrawal==='function'`);const pending=await evaluate(`localStorage.getItem('${cancelKey}')`);assert.equal(JSON.parse(JSON.parse(pending).body).message_id,queued.id);
+   await waitFixture(1);releaseHold();await wait(`fetch('http://127.0.0.1:8001/api/chat/sessions/${s}/messages?project_id=${p}').then(r=>r.json()).then(r=>r.items.some(m=>m.id==='${queued.id}'&&m.state==='accepted'))`);
+   await evaluate(`window.releaseWithdrawal()`);await wait(`!!window.withdrawalResult`);expected.withdrawal=await evaluate(`window.withdrawalResult`);assert.equal(expected.withdrawal.status,409);assert.equal(expected.withdrawal.body.error.code,'invalid_input');assert.equal(expected.withdrawal.body.error.message,'Only queued messages can be withdrawn');
+   await wait(`!localStorage.getItem('${cancelKey}')`);await wait(`document.querySelector('[data-message-id="${queued.id}"]').innerText.includes('已受理')`);
+   assert.equal(writes().filter(r=>r.url.includes('/messages')).length,2,'rejection never submits replacement');assert.equal(await evaluate(`[...document.querySelectorAll('.chat-panel button')].find(b=>b.textContent==='取消本次对话及队列').disabled`),false);
+   await evaluate(`window.fetch=window.nativeFetch`);await waitFixture(2);releaseHold();await wait(`document.querySelector('[data-message-id="${queued.id}"]').innerText.includes('已完成')`);
+   await send('explicit fresh send after race');await wait(`document.querySelectorAll('.assistant-message').length===3`);const sent=writes().filter(r=>r.url.includes('/messages')).map(r=>JSON.parse(r.postData));assert.notEqual(sent[2].requestId,sent[1].requestId);assert.equal(sent[2].text,'explicit fresh send after race');
+   expected.fix={textDraftPreserved:true,annotationOnlyPreserved:true,rejectedBody:JSON.parse(pending).body,explicitNewRequestId:sent[2].requestId};await writeFile(join(dir,'chat-expected.json'),JSON.stringify(expected));
+  }else if(phase==='fix-restart'){
+   assert.equal(await evaluate(`localStorage.getItem('moviedesign.chat.cancel.v1.${p}')`),null);assert.equal(writes().length,0);assert.equal(modelRequests.length,0);
+   await evaluate(`${ed}.commands.setContent('<p>重启后仍可编辑</p>')`);await wait(`![...document.querySelectorAll('.chat-panel button')].find(b=>b.textContent==='发送消息').disabled`);assert.equal(writes().length,0);assert.equal(await evaluate(`[...document.querySelectorAll('.chat-panel button')].find(b=>b.textContent==='清空草稿').disabled`),false);
+  }else if(phase==='recovery'){
    assert.equal((await evaluate(`fetch('http://127.0.0.1:8001/api/agent/status').then(r=>r.json())`)).active.model_id,'chat-fixture');
    await call('Page.bringToFront');await evaluate(`document.querySelector('.chat-panel').scrollIntoView();${ed}.commands.focus()`);await wait(`document.activeElement===document.querySelector('.chat-composer .tiptap')`);
    await call('Input.insertText',{text:'@'});await wait(`!!document.querySelector('.asset-suggestions [role="option"]')`);await key('ArrowDown');await key('Enter');await wait(`!!document.querySelector('.tiptap [data-type="mention"]')`);

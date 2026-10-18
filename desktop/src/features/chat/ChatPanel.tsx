@@ -71,7 +71,10 @@ export function ChatPanel({projectID,annotationSource}:{projectID:string;annotat
    if(original.kind==='send'){editor?.commands.clearContent();setAnnotations([]);setDraftText('');}
    refresh.current();
   }catch(e){if(alive.current){
-   if(e instanceof APIError&&e.status>=400&&e.status<500&&e.status!==408&&e.status!==409&&e.status!==429){persist(original,null);setError(e.message);}
+   // ponytail: this exact public text identifies the sole known non-applied 409;
+   // use a typed reason if the contract expands. All other 409s retain identity.
+   const rejectedWithdrawal=e instanceof APIError&&e.status===409&&e.code==='invalid_input'&&e.message==='Only queued messages can be withdrawn'&&original.kind==='cancel'&&!!JSON.parse(original.body).message_id;
+   if(e instanceof APIError&&(rejectedWithdrawal||e.status>=400&&e.status<500&&e.status!==408&&e.status!==409&&e.status!==429)){persist(original,null);setError(e.message);}
    else setError(`结果待确认：${(e as Error).message}。请查询历史或使用同一原请求恢复；不会自动重发。`);
    refresh.current();}}
   finally{lock.current=false;if(alive.current)setBusy(false);}
@@ -81,13 +84,15 @@ export function ChatPanel({projectID,annotationSource}:{projectID:string;annotat
   void execute({schema:1,projectID,kind:'send',sessionID:session,body:messageBody(newRequestID(),editor.getJSON(),editor.getText(),annotations)});
  }
  sendDraft.current=compose;
+ const hasDraft=!!editor&&!editor.isEmpty||annotations.length>0;
  function cancel(message?:Message,edit=false){
   if(!session||pending.cancel||pending.send||busy||storageError||message&&message.state!=='queued')return;
+  if(edit&&hasDraft){setError('请先发送或清空当前草稿及标注，再撤回并编辑排队消息。');return;}
   void execute({schema:1,projectID,kind:'cancel',sessionID:session,body:JSON.stringify({requestId:newRequestID(),...(message?{message_id:message.id}:{})}),...(edit?{edit:structuredClone(message!.content)}:{})});
  }
  function restoreEdit(){
   const p=pending.cancel;if(!p?.edit||p.sessionID!==session||!state.messages.some(m=>m.id===JSON.parse(p.body).message_id&&m.state==='cancelled'))return;
-  if(draftText.trim()){setError('请先发送或清空当前草稿，再载入撤回消息。');return;}
+  if(hasDraft){setError('请先发送或清空当前草稿及标注，再载入撤回消息。');return;}
   editor?.commands.setContent(p.edit.document);setAnnotations(structuredClone(p.edit.annotations));setDraftText(p.edit.text);
   persist(p,null);
  }
@@ -108,7 +113,7 @@ export function ChatPanel({projectID,annotationSource}:{projectID:string;annotat
   <header><div><h2>创作聊天</h2><p>输入 @ 引用素材。Enter 发送，Shift + Enter 换行。忙时消息由服务端排队。</p></div><button disabled={busy||!!storageError||!!pending.create} onClick={()=>void execute({schema:1,projectID,kind:'create',sessionID:'',body:JSON.stringify({requestId:newRequestID(),title:`创作对话 ${new Date().toLocaleString('zh-CN')}`})})}>新建对话</button></header>
   <label>当前对话<select aria-label="当前对话" value={session} disabled={busy} onChange={e=>setSession(e.target.value)}><option value="">请选择对话</option>{sessions.map(s=><option key={s.id} value={s.id}>{s.title} · {s.state}</option>)}</select></label><button onClick={()=>refresh.current()}>刷新聊天历史</button>
   <p className="chat-latency">供应商响应完成后显示增量快照；等待不代表失败。聊天取消不会取消独立的媒体生成任务。</p>
-  <div className="chat-history" aria-label="聊天记录">{state.messages.map(m=><article className="chat-turn" data-message-id={m.id} key={m.id}><header><strong>你</strong><span>{labels[m.state]??m.state}</span></header><pre>{m.content.text}</pre>{m.content.references?.length>0&&<p>素材：{m.content.references.join('、')}</p>}{m.content.annotations?.length>0&&<details><summary>发送时的标注（{m.content.annotations.length}）</summary><pre>{JSON.stringify(m.content.annotations,null,2)}</pre></details>}{m.error&&<p role="alert">{m.error}</p>}{m.state==='queued'&&<div><button disabled={!editable} onClick={()=>cancel(m,true)}>撤回并编辑</button><button disabled={!editable} onClick={()=>cancel(m)}>撤回消息</button></div>}<AssistantMessage parts={state.parts[m.id]??[]} /></article>)}</div>
+  <div className="chat-history" aria-label="聊天记录">{state.messages.map(m=><article className="chat-turn" data-message-id={m.id} key={m.id}><header><strong>你</strong><span>{labels[m.state]??m.state}</span></header><pre>{m.content.text}</pre>{m.content.references?.length>0&&<p>素材：{m.content.references.join('、')}</p>}{m.content.annotations?.length>0&&<details><summary>发送时的标注（{m.content.annotations.length}）</summary><pre>{JSON.stringify(m.content.annotations,null,2)}</pre></details>}{m.error&&<p role="alert">{m.error}</p>}{m.state==='queued'&&<div><button disabled={!editable||hasDraft} onClick={()=>cancel(m,true)}>撤回并编辑</button><button disabled={!editable} onClick={()=>cancel(m)}>撤回消息</button>{hasDraft&&<p>请先发送或清空当前草稿及标注，再撤回并编辑。</p>}</div>}<AssistantMessage parts={state.parts[m.id]??[]} /></article>)}</div>
   {(['create','send','cancel'] as const).map(kind=>{const p=pending[kind];return p&&<div className="chat-pending" key={kind}><strong>待确认的{kind==='create'?'创建':kind==='send'?'发送':'撤回/取消'}原请求</strong><p>请求号：{JSON.parse(p.body).requestId} {p.sessionID&&`· 对话 ${p.sessionID}`}</p>{kind==='send'&&<pre>{(JSON.parse(p.body) as Input).text}</pre>}<button disabled={busy||!!storageError} onClick={()=>void execute(p,true)}>恢复原{kind==='create'?'创建':kind==='send'?'发送':'取消'}请求</button>{kind==='send'&&<button disabled={busy||p.sessionID!==session||!!storageError} onClick={reconcileSend}>核对历史受理记录</button>}{kind==='cancel'&&p.edit&&<button disabled={busy||!!storageError||p.sessionID!==session||!state.messages.some(m=>m.id===JSON.parse(p.body).message_id&&m.state==='cancelled')} onClick={restoreEdit}>载入已撤回草稿</button>}</div>;})}
   <div className="chat-composer"><div className="chat-format"><button disabled={!editable} onClick={()=>editor?.chain().focus().toggleBulletList().run()}>列表</button><button disabled={!editable} onClick={()=>editor?.chain().focus().toggleBlockquote().run()}>引用段落</button><button disabled={!editable} onClick={()=>{editor?.commands.clearContent();setAnnotations([]);setDraftText('');}}>清空草稿</button></div><EditorContent editor={editor}/>
    {annotationSource?.projectID===projectID&&annotationSource.annotations.length>0&&<button disabled={!editable} onClick={attach}>附加当前标注 · {annotationSource.name} · 版本 {annotationSource.sourceVersionID}</button>}
