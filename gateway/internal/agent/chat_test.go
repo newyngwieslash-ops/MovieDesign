@@ -384,27 +384,30 @@ func TestChatCancelledQueueEmitsTerminalAndDoesNotSubmit(t *testing.T) {
 	}
 }
 func TestChatCancelDuringUnansweredAcceptanceAbortsOwnedSession(t *testing.T) {
-	f := newChatFixture(t, 800*time.Millisecond, false)
+	f := newChatFixture(t, 0, false)
+	f.accept = make(chan struct{})
 	_, e := f.chat.Send(context.Background(), f.project, f.session, f.input("send"))
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = f.chat.Cancel(context.Background(), f.project, f.session, []byte(`{"requestId":"cancel"}`))
-	if e != nil {
+	waitChat(t, func() bool { return f.prompts.Load() == 1 })
+	if _, e = f.chat.Cancel(context.Background(), f.project, f.session, []byte(`{"requestId":"cancel"}`)); e != nil {
 		t.Fatal(e)
 	}
-	time.Sleep(100 * time.Millisecond)
-	if f.aborts.Load() != 1 {
-		t.Fatal("cancel waited for unresolved prompt acceptance instead of explicit owned abort")
-	}
+	// Acceptance is still gated: observing Abort proves cancellation does not
+	// wait for the prompt HTTP response, regardless of CPU/SQLite scheduling.
+	waitChat(t, func() bool { return f.aborts.Load() == 1 })
+	close(f.accept)
 }
 
 func TestCancelWaitsForLateAcceptanceBeforeNextProjectEpoch(t *testing.T) {
-	f := newChatFixture(t, 350*time.Millisecond, false)
+	f := newChatFixture(t, 0, false)
+	f.accept = make(chan struct{})
 	_, e := f.chat.Send(context.Background(), f.project, f.session, f.input("first"))
 	if e != nil {
 		t.Fatal(e)
 	}
+	waitChat(t, func() bool { return f.prompts.Load() == 1 })
 	old := f.chat.Turns.Current()
 	p, e := (store.Objects{DB: f.chat.DB}).CreateProject(context.Background(), "other", "Other")
 	if e != nil {
@@ -428,10 +431,11 @@ func TestCancelWaitsForLateAcceptanceBeforeNextProjectEpoch(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	time.Sleep(100 * time.Millisecond)
+	waitChat(t, func() bool { return f.aborts.Load() == 1 })
 	if f.chat.Turns.Current() != old || f.prompts.Load() != 1 {
 		t.Fatal("old acceptance escaped into new epoch")
 	}
+	close(f.accept)
 	waitChat(t, func() bool { return f.prompts.Load() == 2 })
 	if f.chat.Turns.Current().ProjectID != p.ID {
 		t.Fatal("queued project did not activate after drain")

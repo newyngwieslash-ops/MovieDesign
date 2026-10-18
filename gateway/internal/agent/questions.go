@@ -87,7 +87,7 @@ func (c *Chat) syncQuestions(ctx context.Context, s ToolScope) error {
 // Reconciliation of old mappings is read-only toward native: no GateQuestion,
 // receipt claim, reply or reject can run for an interrupted/closed epoch.
 func (c *Chat) reconcileInactiveQuestions() {
-	rows, e := c.DB.Query(`SELECT DISTINCT t.id,t.epoch,s.project_id,s.id,s.native_session_id FROM native_questions n JOIN chat_turns t ON t.id=n.turn_id JOIN chat_sessions s ON s.id=t.session_id WHERE t.state!='active' AND n.send_state!='sent'`)
+	rows, e := c.DB.Query(`SELECT DISTINCT t.id,t.epoch,s.project_id,s.id,s.native_session_id FROM native_questions n JOIN chat_turns t ON t.id=n.turn_id JOIN chat_sessions s ON s.id=t.session_id LEFT JOIN questions q ON q.id=n.question_id WHERE t.state!='active' AND n.send_state!='sent' AND (n.send_state!='unknown' OR n.question_id IS NULL OR q.state='pending')`)
 	if e != nil {
 		return
 	}
@@ -117,7 +117,7 @@ func (c *Chat) reconcileInactiveQuestions() {
 	}
 }
 func (c *Chat) retireMissingQuestions(ctx context.Context, s ToolScope, present map[string]bool) error {
-	rows, e := c.DB.QueryContext(ctx, "SELECT native_id FROM native_questions WHERE turn_id=? AND send_state!='sent'", s.TurnID)
+	rows, e := c.DB.QueryContext(ctx, "SELECT n.native_id FROM native_questions n LEFT JOIN questions q ON q.id=n.question_id WHERE n.turn_id=? AND n.send_state!='sent' AND (n.send_state!='unknown' OR n.question_id IS NULL OR q.state='pending')", s.TurnID)
 	if e != nil {
 		return e
 	}
@@ -137,6 +137,7 @@ func (c *Chat) retireMissingQuestions(ctx context.Context, s ToolScope, present 
 	if e != nil {
 		return e
 	}
+	changed := false
 	for _, id := range missing {
 		tx, e := c.DB.BeginTx(ctx, nil)
 		if e != nil {
@@ -144,10 +145,33 @@ func (c *Chat) retireMissingQuestions(ctx context.Context, s ToolScope, present 
 		}
 		e = func() error {
 			defer tx.Rollback()
-			if _, e := tx.ExecContext(ctx, "UPDATE native_questions SET send_state='unknown' WHERE native_id=?", id); e != nil {
+			// Ask commits its receipt/card before the adapter links this row.
+			// Recover only that completed receipt, with both stored card and
+			// receipt identity verified against the owned project/session.
+			var cardID string
+			e := tx.QueryRowContext(ctx, `SELECT q.id FROM write_requests w JOIN questions q ON q.id=json_extract(w.response_json,'$.id')
+                WHERE w.project_id=? AND w.operation='question.ask' AND w.request_id=? AND w.state='completed'
+                AND json_extract(w.response_json,'$.project_id')=? AND json_extract(w.response_json,'$.session_id')=? AND json_extract(w.response_json,'$.requestId')=?
+                AND q.project_id=? AND q.session_id=? AND json_extract(q.question_json,'$.requestId')=?`,
+				s.ProjectID, id, s.ProjectID, s.SessionID, id, s.ProjectID, s.SessionID, id).Scan(&cardID)
+			if e != nil && !errors.Is(e, sql.ErrNoRows) {
 				return e
 			}
-			result, e := tx.ExecContext(ctx, `UPDATE questions SET state='superseded',revision=revision+1,question_json=json_set(question_json,'$.state','superseded','$.revision',revision+1,'$.reason','Native question unavailable; delivery unknown') WHERE id=(SELECT question_id FROM native_questions WHERE native_id=?) AND state='pending'`, id)
+			var linked int64
+			if e == nil {
+				result, e := tx.ExecContext(ctx, "UPDATE native_questions SET question_id=? WHERE native_id=? AND turn_id=? AND question_id IS NULL", cardID, id, s.TurnID)
+				if e != nil {
+					return e
+				}
+				linked, _ = result.RowsAffected()
+			}
+
+			result, e := tx.ExecContext(ctx, "UPDATE native_questions SET send_state='unknown' WHERE native_id=? AND turn_id=? AND send_state!='unknown'", id, s.TurnID)
+			if e != nil {
+				return e
+			}
+			marked, _ := result.RowsAffected()
+			result, e = tx.ExecContext(ctx, `UPDATE questions SET state='superseded',revision=revision+1,question_json=json_set(question_json,'$.state','superseded','$.revision',revision+1,'$.reason','Native question unavailable; delivery unknown') WHERE id=(SELECT question_id FROM native_questions WHERE native_id=?) AND state='pending'`, id)
 			if e != nil {
 				return e
 			}
@@ -164,13 +188,17 @@ func (c *Chat) retireMissingQuestions(ctx context.Context, s ToolScope, present 
 					return e
 				}
 			}
-			return tx.Commit()
+			if e := tx.Commit(); e != nil {
+				return e
+			}
+			changed = changed || linked > 0 || marked > 0 || n > 0
+			return nil
 		}()
 		if e != nil {
 			return e
 		}
 	}
-	if len(missing) > 0 {
+	if changed {
 		c.Events.Notify()
 	}
 	return nil
