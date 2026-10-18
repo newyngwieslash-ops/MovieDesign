@@ -5,7 +5,7 @@ import { subscribeEvents } from '../../events';
 import { readIntent, clearIntent, type Intent } from './pending';
 
 type Info = { header: string; question: string; options: {label: string; description: string}[]; multiple?: boolean; custom?: boolean };
-export type Question = { id: string; project_id: string; session_id: string; task_id?: string; kind: 'billing'|'choice'|'storyboard'|'delivery'; revision: number; task_revision?: number; state: string; questions: Info[]; provider?: string; model?: string; reason?: string; impacts?: string[]; quote?: {quote_id: string; currency: string; estimated_amount: number; minor_unit_scale: number; estimated_credits: number; expires_at: number; version: string; source: string} };
+export type Question = { id: string; project_id: string; session_id: string; task_id?: string; kind: 'billing'|'choice'|'storyboard'|'delivery'; revision: number; task_revision?: number; state: string; native_send_state?: 'pending'|'sending'|'sent'|'unknown'; questions: Info[]; provider?: string; model?: string; reason?: string; impacts?: string[]; quote?: {quote_id: string; currency: string; estimated_amount: number; minor_unit_scale: number; estimated_credits: number; expires_at: number; version: string; source: string} };
 export function ConfirmationCard({question: q, refresh}: {question: Question; refresh: () => void}) {
  const storageKey = `moviedesign.question.pending.v1.${q.project_id}.${q.id}`;
  const [saved] = useState(() => {try {return {intent:readIntent(localStorage,storageKey,q),error:''}} catch(e) {return {intent:null,error:(e as Error).message}}});
@@ -65,20 +65,23 @@ export function ConfirmationCard({question: q, refresh}: {question: Question; re
   {intent && (!resolved || q.state === 'approved') && <div><p>{q.state === 'approved' ? '批准回执已保存。恢复操作只会启动尚未发送的原任务。' : '存在待确认的原请求。'}</p><button disabled={busy || !!storageError} onClick={refresh}>查询确认状态</button><button disabled={busy || !!storageError} onClick={() => void send(intent)}>{q.state === 'approved' ? '恢复已批准的原任务' : '重发原确认请求'}</button></div>}
   {(expired || q.state === 'expired') && !resolved && <><p role="status">报价已过期，旧确认不可使用。</p><button disabled={busy || !!intent || !!storageError} onClick={renew}>继续并重新报价</button></>}
   {resolved && <p role="status">{q.state === 'approved' ? '已批准，已记录一次生成意图' : q.state === 'rejected' ? '已拒绝' : q.state === 'answered' ? '已提交选择' : '旧卡片不可使用'}{q.reason ? `：${q.reason}` : ''}</p>}
+  {q.native_send_state && <p role="status">原生回答投递：{{pending:'等待人工回执',sending:'正在投递已保存的人工回执',sent:'已送达',unknown:'结果未知；已保存的人工回执不会自动重发'}[q.native_send_state]}</p>}
   {message && <p role="alert">{message}</p>}{storageError && <p role="alert">无法安全保存确认：{storageError}</p>}
  </section>;
 }
 export function ConfirmationCards({projectID,sessionID}: {projectID: string; sessionID?: string}) {
  const [cards,setCards] = useState<Question[]>([]), [error,setError] = useState('');
  const load = useRef<() => void>(() => {});
+ const waitingNative = cards.filter(q=>['answered','rejected'].includes(q.state)&&['pending','sending'].includes(q.native_send_state??'')).map(q=>q.id).join(',');
+ useEffect(()=>{if(!waitingNative)return;let remaining=15;const timer=setInterval(()=>{load.current();if(--remaining===0)clearInterval(timer);},1000);return()=>clearInterval(timer);},[waitingNative,projectID,sessionID]);
  useEffect(() => {
   let alive = true, serial = 0;
   const refresh = () => { const request = ++serial; void api<{items:Question[]}>(projectID,`/api/question${sessionID === undefined ? '' : `?session_id=${encodeURIComponent(sessionID)}`}`).then(result => {if(alive && request===serial){setCards(result.items.filter(q=>q.project_id===projectID&&(sessionID===undefined||q.session_id===sessionID)));setError('');}}).catch(e=>{if(alive)setError(e.message)}); };
   load.current = refresh;
   let unsubscribe = () => {};
-  try { unsubscribe = subscribeEvents(projectID, event => {if(event.type.startsWith('question_')||event.type==='task_changed')refresh();},refresh,sessionID); } catch { setError('无法保存重连游标，请刷新确认状态。'); }
+  try { unsubscribe = subscribeEvents(projectID, event => {if(event.type.startsWith('question_')||event.type==='task_changed'||event.type==='chat_message'||event.type==='chat_done')refresh();},refresh,sessionID); } catch { setError('无法保存重连游标，请刷新确认状态。'); }
   refresh();
   return () => { alive=false; unsubscribe(); };
  },[projectID,sessionID]);
- return <aside className="confirmation-cards" aria-label="待确认事项">{error && <p role="alert">{error}</p>}{cards.map(q=><ConfirmationCard key={q.id} question={q} refresh={()=>load.current()} />)}{error && <button onClick={()=>load.current()}>刷新确认状态</button>}</aside>;
+ return <aside className="confirmation-cards" aria-label="待确认事项">{error && <p role="alert">{error}</p>}{cards.map(q=><ConfirmationCard key={q.id} question={q} refresh={()=>load.current()} />)}{(error||cards.some(q=>q.native_send_state&&q.native_send_state!=='sent')) && <button onClick={()=>load.current()}>刷新确认状态</button>}</aside>;
 }

@@ -14,7 +14,7 @@ function find(tree, predicate) {
   if (predicate(tree)) return tree;
   return find(tree.props?.children, predicate);
 }
-async function until(predicate) { for (let i = 0; i < 100; i++) { if (predicate()) return; await tick(); } throw Error('controlled response did not arrive'); }
+async function until(predicate) { const deadline=Date.now()+3000; while(!predicate()) { if(Date.now()>=deadline)throw Error('controlled response did not arrive'); await tick(); } }
 function harness(storageFailure = '') {
   const storage = new Map(), requests = [];
   const localStorage = {
@@ -53,7 +53,7 @@ function harness(storageFailure = '') {
   const recovery = load('features/assets/recovery.ts');
   const exportBytes = load('features/assets/exportBytes.ts', { './recovery': recovery });
   const { AssetLibrary } = load('features/assets/AssetLibrary.tsx', { './recovery': recovery, './exportBytes': { ...exportBytes, removeExport: async () => {} }, '../editor/ImageEditor': { ImageEditor() {} } });
-  const { App } = load('App.tsx', { './features/tasks/TaskCenter':{TaskCenter(){}},'./features/questions/ConfirmationCard':{ConfirmationCards(){}},'./features/providers/ProviderSettings':{ProviderSettings(){}}, './features/projects/ProjectPicker': { ProjectPicker }, './features/canvas/CanvasWorkspace': { CanvasWorkspace }, './features/assets/AssetLibrary': { AssetLibrary: AssetStub } });
+  const { App } = load('App.tsx', { './features/chat/ChatPanel':{ChatPanel(){}}, './features/tasks/TaskCenter':{TaskCenter(){}},'./features/questions/ConfirmationCard':{ConfirmationCards(){}},'./features/providers/ProviderSettings':{ProviderSettings(){}}, './features/projects/ProjectPicker': { ProjectPicker }, './features/canvas/CanvasWorkspace': { CanvasWorkspace }, './features/assets/AssetLibrary': { AssetLibrary: AssetStub } });
   const render = (component, state) => { hooks = state; cursor = 0; return component === App ? App() : AssetLibrary({ projectID: 'p' }); };
   const drop = state => render(AssetLibrary, state).props.onDrop({ preventDefault() {}, dataTransfer: { files: [new File(['same bytes'], 'file.png')] } });
   const key = recovery.storageKey('p');

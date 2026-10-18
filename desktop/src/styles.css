@@ -127,3 +127,26 @@ h3 { font-size: 14px; font-weight: 550; }
 .confirmation-card label { display: block; margin: 8px 0; }
 .confirmation-card button { margin: 8px 8px 0 0; }
 .confirmation-card button:focus-visible, .confirmation-card input:focus-visible { outline: 3px solid #536b2c; outline-offset: 3px; }
+.chat-panel { margin: 24px 0; padding: 20px; border: 1px solid #526349; border-radius: 10px; background: #171e18; }
+.chat-panel header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.chat-panel h2 { font-size:20px; margin:0 0 8px; }
+.chat-panel p { font-size:13px; line-height:1.7; }
+.chat-panel button { margin:4px; }
+.chat-panel select { max-width:100%; margin:8px; }
+.chat-panel pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; line-height:1.7; }
+.chat-history { max-height:520px; overflow:auto; }
+.chat-turn { padding:16px; margin:12px 0; background:#222b23; border:1px solid #3d4d3e; border-radius:8px; }
+.chat-turn header span,.chat-latency { color:#b9c7b6; font-size:12px; }
+.assistant-message { margin-top:12px; border-left:3px solid #8fa67c; padding-left:14px; }
+.chat-tool,.chat-pending { padding:10px; border:1px solid #726c45; background:#302e20; margin:8px 0; border-radius:6px; }
+.chat-composer { margin-top:16px; }
+.chat-composer .tiptap { min-height:120px; max-height:280px; overflow:auto; padding:12px; border:1px solid #6c8063; border-radius:8px; background:#111712; }
+.chat-composer .tiptap:focus-visible { outline:2px solid #c4e9aa; }
+.chat-composer .tiptap ul { list-style:disc; padding-left:24px; }
+.chat-composer .tiptap ol { list-style:decimal; padding-left:24px; }
+.chat-composer blockquote { border-left:3px solid #89a37d; padding-left:12px; }
+.asset-mention { display:inline-flex; align-items:center; gap:4px; background:#34482d; border-radius:4px; padding:2px 5px; vertical-align:middle; }
+.asset-mention img,.asset-suggestions img { width:24px; height:24px; object-fit:contain; }
+.asset-suggestions { position:fixed; z-index:100; width:280px; max-height:240px; overflow:auto; border:1px solid #8fa67c; border-radius:8px; padding:4px; background:#172016; }
+.asset-suggestions button { display:flex; align-items:center; gap:8px; width:100%; text-align:left; margin:2px 0; }
+.asset-suggestions [aria-selected=true] { background:#4d673e; outline:1px solid #c4e9aa; }

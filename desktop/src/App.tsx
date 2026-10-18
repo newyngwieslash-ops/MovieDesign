@@ -7,6 +7,7 @@ import { CanvasWorkspace } from './features/canvas/CanvasWorkspace';
 import { useState } from 'react';
 import { ProjectPicker } from './features/projects/ProjectPicker';
 import { AssetLibrary } from './features/assets/AssetLibrary';
+import {ChatPanel,type AnnotationSource} from './features/chat/ChatPanel';
 
 export function App() {
   const [page, setPage] = useState<'canvas' | 'providers'>('canvas');
@@ -16,8 +17,10 @@ export function App() {
   });
   const projectID = selection.id;
   const [editRequest, setEditRequest] = useState<{id: string; nonce: number}>();
+  const [annotationSource,setAnnotationSource] = useState<AnnotationSource>();
   function selectProject(id: string) {
     setEditRequest(undefined);
+    setAnnotationSource(undefined);
     let warning = '';
     try { localStorage.setItem('moviedesign.project', id); }
     catch { warning = '无法保存项目选择到本地存储，本次选择仅在当前窗口保留。'; }
@@ -55,7 +58,7 @@ export function App() {
       <div className="canvas-header"><div><h1>创作画布</h1><p>你的图像、视频与创作依据，将在这里汇合。</p></div><span className="local-badge">LOCAL</span></div>
       {error && <div className="error-banner" role="alert"><strong>无法连接本地服务</strong><p>{error}</p><p>请检查服务日志或端口占用，然后重新启动应用。</p></div>}
       {selection.warning && <p role="alert">{selection.warning}</p>}
-      {ready && projectID ? <><CanvasWorkspace key={projectID} projectID={projectID} onEdit={id => { setEditRequest({id, nonce: Date.now()}); requestAnimationFrame(() => document.querySelector('.asset-library')?.scrollIntoView()); }} /><AssetLibrary key={projectID} projectID={projectID} editRequest={editRequest} /></> : <CanvasWorkspace />}
+      {ready && projectID ? <><CanvasWorkspace key={projectID} projectID={projectID} onEdit={id => { setEditRequest({id, nonce: Date.now()}); requestAnimationFrame(() => document.querySelector('.asset-library')?.scrollIntoView()); }} /><AssetLibrary key={projectID} projectID={projectID} editRequest={editRequest} onAnnotations={setAnnotationSource} /><ChatPanel key={`chat-${projectID}`} projectID={projectID} annotationSource={annotationSource}/></> : <CanvasWorkspace />}
       </div>
       <footer><span>所有创作，从这里开始</span><span>MovieDesign · 本地优先</span></footer>
     </main>

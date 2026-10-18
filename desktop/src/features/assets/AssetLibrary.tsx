@@ -5,6 +5,7 @@ import { advanceCommit, advanceUpload, matchesFile, readOperation, storageKey, t
 import { VersionHistory, type Version } from './VersionHistory';
 import { ImageEditor } from '../editor/ImageEditor';
 import { fileDigest, persistExport, recoverExport, removeExport } from './exportBytes';
+import type {AnnotationSource} from '../chat/ChatPanel';
 
 type Asset = { id: string; name: string; path: string; mime_type: string | null; width: number | null; height: number | null; status: string };
 type Resource = { id: string; composition_id: string; description: string | null };
@@ -17,7 +18,7 @@ function Preview({ projectID, asset }: { projectID: string; asset: Asset }) {
   const path = `http://127.0.0.1:8001/api/files/content?project_id=${encodeURIComponent(projectID)}&path=${encodeURIComponent(asset.path)}`;
   return <img crossOrigin="anonymous" src={path} alt={asset.name} loading="lazy" />;
 }
-export function AssetLibrary({ projectID, editRequest }: { projectID: string; editRequest?: {id: string; nonce: number} }) {
+export function AssetLibrary({ projectID, editRequest, onAnnotations }: { projectID: string; editRequest?: {id: string; nonce: number}; onAnnotations?: (source:AnnotationSource)=>void }) {
   const client = useQueryClient();
   const [selected, setSelected] = useState('');
   const [editing, setEditing] = useState(false);
@@ -180,6 +181,6 @@ export function AssetLibrary({ projectID, editRequest }: { projectID: string; ed
       </> : <p>选择素材以查看对象及版本。</p>}
       <VersionHistory versions={versions.data?.filter(v => v.resource_id === resource?.id) ?? []} selected={selected} onSelect={selectVersion} />
     </aside></div>
-    {editing && activeAsset && <ImageEditor sourceVersionID={version?.id} projectID={projectID} key={activeAsset.id} assetId={activeAsset.id} source={`http://127.0.0.1:8001/api/files/content?project_id=${encodeURIComponent(projectID)}&path=${encodeURIComponent(activeAsset.path)}`} onExport={exportImage} />}
+    {editing && activeAsset && <ImageEditor sourceVersionID={version?.id} projectID={projectID} key={`${activeAsset.id}:${version?.id}`} assetId={activeAsset.id} source={`http://127.0.0.1:8001/api/files/content?project_id=${encodeURIComponent(projectID)}&path=${encodeURIComponent(activeAsset.path)}`} onExport={exportImage} onAnnotations={annotations=>onAnnotations?.({projectID,assetId:activeAsset.id,sourceVersionID:version?.id??'',name:activeAsset.name,annotations:structuredClone(annotations)})} />}
   </section>;
 }
