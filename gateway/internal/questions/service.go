@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
@@ -83,6 +84,26 @@ type Service struct {
 }
 
 func NewService(db *sql.DB, t *tasks.Service, e *events.Service) *Service { return &Service{db, t, e} }
+
+// LateResult is a worker SQL hook. Public Ask cannot forge a delivery-kind card.
+func (s *Service) LateResult(ctx context.Context, tx *sql.Tx, p string, v tasks.TaskView, attempt int, session string) error {
+	var exists, valid int
+	binding := fmt.Sprintf("%s:%d", v.ID, attempt)
+	if e := tx.QueryRowContext(ctx, "SELECT count(*) FROM questions WHERE task_id=? AND kind='delivery' AND input_hash=?", v.ID, binding).Scan(&exists); e != nil {
+		return e
+	}
+	if exists > 0 {
+		return nil
+	}
+	if e := tx.QueryRowContext(ctx, `SELECT count(*) FROM task_attempts a JOIN tasks t ON t.id=a.task_id WHERE a.task_id=? AND a.attempt=? AND json_array_length(a.result_json,'$.data')=json_array_length(t.frozen_input_json,'$.output.resources') AND NOT EXISTS(SELECT 1 FROM task_outputs WHERE task_id=a.task_id AND attempt=a.attempt AND state='delivered')`, v.ID, attempt).Scan(&valid); e != nil {
+		return e
+	}
+	if valid != 1 {
+		return nil
+	}
+	_, e := s.insert(ctx, tx, p, Question{SessionID: session, TaskID: v.ID, TaskRevision: v.Revision, Kind: "delivery", InputHash: binding, Questions: []Info{{Header: "采用取消后返回的图像", Question: "本地任务保持取消。是否收集已返回的原结果并投递到原定作品？不会重新发起生成。", Options: []Option{{Label: "采用已返回结果", Description: "使用同一任务、同一输出版本；不新增供应商请求"}}}}, Impacts: []string{"供应商可能已计费；此操作仅采用已返回结果"}})
+	return e
+}
 func fail(status int, message string) error {
 	return &store.DomainError{Status: status, Code: "invalid_input", Message: message}
 }
@@ -408,13 +429,18 @@ func (s *Service) Reply(ctx context.Context, p, id string, i HumanReply) (Receip
 			}
 		}
 		if q.TaskID != "" {
-			if e = s.Tasks.DecideQuestion(ctx, tx, p, q.SessionID, q.TaskID, q.TaskRevision, q.Kind == "billing", i.Reject); e != nil {
+			if q.Kind == "delivery" {
+				e = s.Tasks.AdoptQuestion(ctx, tx, p, q.SessionID, q.TaskID, q.TaskRevision, q.InputHash, i.Reject)
+			} else {
+				e = s.Tasks.DecideQuestion(ctx, tx, p, q.SessionID, q.TaskID, q.TaskRevision, q.Kind == "billing", i.Reject)
+			}
+			if e != nil {
 				return nil, e
 			}
 		}
 		q.Revision++
 		q.State = "answered"
-		if q.Kind == "billing" {
+		if q.Kind == "billing" || q.Kind == "delivery" {
 			q.State = "approved"
 		}
 		if i.Reject {

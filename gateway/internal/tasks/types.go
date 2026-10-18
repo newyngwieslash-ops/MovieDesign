@@ -98,6 +98,9 @@ type Billing struct {
 	EstimatedCredits *int64 `json:"estimated_credits"`
 }
 type Output struct {
+	ResourceID    string  `json:"resource_id,omitempty"`
+	CompositionID string  `json:"composition_id,omitempty"`
+	Ordinal       int64   `json:"ordinal,omitempty"`
 	TaskOutputKey string  `json:"task_output_key"`
 	OutputKey     string  `json:"output_key"`
 	Role          string  `json:"role"`
@@ -106,6 +109,7 @@ type Output struct {
 	VersionID     *string `json:"version_id,omitempty"`
 }
 type TaskView struct {
+	RequestID    string   `json:"request_id"`
 	ID           string   `json:"id"`
 	CapabilityID string   `json:"capability_id"`
 	Status       Status   `json:"status"`

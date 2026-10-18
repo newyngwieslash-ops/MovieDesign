@@ -21,10 +21,11 @@ import (
 var deliveryMu sync.Mutex
 
 type Service struct {
-	db        *sql.DB
-	workspace *workspace.Workspace
-	origin    string
-	fault     func(string) error
+	db           *sql.DB
+	workspace    *workspace.Workspace
+	origin       string
+	fault        func(string) error
+	CompleteTask func(context.Context, *sql.Tx, string, string, int) error
 }
 
 func NewService(db *sql.DB, w *workspace.Workspace, origin string) *Service {
@@ -36,6 +37,7 @@ type plannedSource struct {
 	Asset                                      store.Asset
 	Existing                                   bool
 	ResourceID, VersionID, BaseVersionID, Name string
+	Task                                       *taskBinding `json:",omitempty"`
 }
 type plan struct {
 	CompositionID, TypeID, TypeLabel, Name string
@@ -149,7 +151,16 @@ func (s *Service) Recover(ctx context.Context, p, key string) (Receipt, error) {
 		return Receipt{}, e
 	}
 	if j.Status != "unknown" {
-		return j.Receipt, nil
+		if j.Status != "blocked" {
+			return j.Receipt, nil
+		}
+		var owned Request
+		if json.Unmarshal([]byte(j.Input), &owned) != nil || len(owned.Sources) == 0 || owned.Sources[0].TaskOutputKey == "" {
+			return j.Receipt, nil
+		}
+		if _, _, err := taskSource(ctx, s.db, p, owned.Sources[0].TaskOutputKey); err != nil {
+			return j.Receipt, nil
+		}
 	}
 	in, e := store.DecodeValue[Request]([]byte(j.Input))
 	if e != nil {
@@ -279,12 +290,24 @@ func (s *Service) prepare(ctx context.Context, p string, in Request, j *journal)
 	}
 	pl := &plan{Name: in.Output.Composition.Name, Placements: in.Output.Composition.Placements}
 	snapshots := map[string]store.Asset{}
+	sources, bindings, e := s.taskSources(ctx, p, in)
+	if e != nil {
+		return e
+	}
 	// No file I/O inside the SQL transaction. Native handles enforce confinement.
-	for _, src := range in.Sources {
-		if src.TaskOutputKey != "" {
-			return missing("taskOutputKey not found; task output storage is introduced in M4")
-		}
+	for _, src := range sources {
 		if _, ok := snapshots[src.Path]; !ok {
+			if src.TaskOutputKey == "" {
+				tx, err := s.db.BeginTx(ctx, nil)
+				if err != nil {
+					return err
+				}
+				err = store.CheckTaskAssetPath(ctx, tx, p, src.Path)
+				tx.Rollback()
+				if err != nil {
+					return err
+				}
+			}
 			if e := s.checkSourcePending(ctx, p, in.RequestID, src.Path); e != nil {
 				return e
 			}
@@ -317,14 +340,19 @@ func (s *Service) prepare(ctx context.Context, p string, in Request, j *journal)
 	if n == 0 {
 		return missing("Project not found")
 	}
-	target, e := store.ResolveDeliveryTarget(ctx, tx, p, in.Output.Composition.Type.ID, in.Output.Composition.Type.Label, pl.Name)
-	if e != nil {
-		return e
+	var target store.DeliveryTarget
+	if len(bindings) > 0 {
+		target = bindings[sources[0].Key].DeliveryTarget
+	} else {
+		target, e = store.ResolveDeliveryTarget(ctx, tx, p, in.Output.Composition.Type.ID, in.Output.Composition.Type.Label, pl.Name)
+		if e != nil {
+			return e
+		}
 	}
 	pl.TypeID, pl.TypeLabel, pl.CompositionID = target.TypeID, target.TypeLabel, target.CompositionID
 	pl.NewType, pl.NewComposition = target.NewType, target.NewComposition
 	allocated := map[string]plannedSource{}
-	for _, src := range in.Sources {
+	for _, src := range sources {
 		ps, ok := allocated[src.Path]
 		if !ok {
 			// Successful inspection can observe installed replacement bytes before
@@ -391,6 +419,17 @@ func (s *Service) prepare(ctx context.Context, p string, in Request, j *journal)
 				}
 			}
 		}
+		if bound, ok := bindings[src.Key]; ok {
+			fresh, _, err := taskSource(ctx, tx, p, src.TaskOutputKey)
+			if err != nil {
+				return err
+			}
+			if fresh != bound {
+				return invalid("Task reservation changed")
+			}
+			ps.ResourceID, ps.VersionID, ps.BaseVersionID = bound.ResourceID, bound.VersionID, bound.BaseVersionID
+			ps.Task = &bound
+		}
 		pl.Sources = append(pl.Sources, ps)
 	}
 	raw, e := json.Marshal(pl)
@@ -442,6 +481,17 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 	}
 	defer tx.Rollback()
 	pl := j.Plan
+	for _, ps := range pl.Sources {
+		if ps.Task != nil {
+			fresh, _, err := taskSource(ctx, tx, p, ps.Source.TaskOutputKey)
+			if err != nil {
+				return Receipt{}, err
+			}
+			if fresh != *ps.Task {
+				return Receipt{}, invalid("Task reservation changed before commit")
+			}
+		}
+	}
 	var n int
 	if pl.NewType {
 		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM composition_types WHERE project_id=? AND label=?", p, pl.TypeLabel).Scan(&n); e != nil {
@@ -525,6 +575,17 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 		if e != nil {
 			return Receipt{}, e
 		}
+		if ps.Task != nil {
+			if _, e = tx.ExecContext(ctx, "UPDATE canvas_version_state SET ordinal=? WHERE version_id=?", ps.Task.Ordinal, ps.VersionID); e != nil {
+				return Receipt{}, e
+			}
+			if _, e = tx.ExecContext(ctx, "UPDATE canvas_resource_state SET next_ordinal=max(next_ordinal,?+1) WHERE resource_id=?", ps.Task.Ordinal, ps.ResourceID); e != nil {
+				return Receipt{}, e
+			}
+			if _, e = tx.ExecContext(ctx, "UPDATE task_outputs SET state='delivered',asset_id=?,version_id=? WHERE task_output_key=?", ps.Asset.ID, ps.VersionID, ps.Source.TaskOutputKey); e != nil {
+				return Receipt{}, e
+			}
+		}
 		for _, v := range pl.Placements {
 			if v.Key == ps.Source.Key {
 				_, e = tx.ExecContext(ctx, `INSERT INTO composition_members(composition_id,resource_id,role) SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM composition_members WHERE composition_id=? AND resource_id=? AND role=?)`, pl.CompositionID, ps.ResourceID, v.Role, pl.CompositionID, ps.ResourceID, v.Role)
@@ -534,6 +595,15 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 			}
 		}
 		r.Delivery.Versions = append(r.Delivery.Versions, Version{Key: ps.Source.Key, ResourceID: ps.ResourceID, VersionID: ps.VersionID, AssetID: ps.Asset.ID})
+	}
+	if pl.Sources[0].Task != nil {
+		if s.CompleteTask == nil {
+			return Receipt{}, invalid("Task completion is not installed")
+		}
+		b := pl.Sources[0].Task
+		if e = s.CompleteTask(ctx, tx, p, b.TaskID, b.Attempt); e != nil {
+			return Receipt{}, e
+		}
 	}
 	raw, _ := json.Marshal(r)
 	_, e = tx.ExecContext(ctx, "UPDATE deliveries SET stage='completed',status='completed',receipt=? WHERE project_id=? AND request_id=?", string(raw), p, key)

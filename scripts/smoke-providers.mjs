@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { connect } from './webview-cdp.mjs';
 const [port, dir, origin, phase = 'initial'] = process.argv.slice(2);
 const cdp = await connect(port, origin), {call, evaluate, wait, requests, exceptions, storageEvents, close} = cdp;
-const click = text => evaluate(`(()=>{const e=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${JSON.stringify(text)});if(!e||e.disabled)throw Error('button unavailable');e.click()})()`);
+const click = async text => { await wait(`(()=>{const e=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${JSON.stringify(text)});return e&&!e.disabled})()`);return evaluate(`(()=>{const e=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${JSON.stringify(text)});if(!e||e.disabled)throw Error('button unavailable');e.click()})()`); };
 const input = (label,value) => evaluate(`(()=>{const e=document.querySelector('input[aria-label=${JSON.stringify(label)}]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
 const get = () => evaluate(`fetch('http://127.0.0.1:8001/api/providers').then(r=>r.json())`);
 const settled = () => wait(`!document.querySelector('.provider-settings fieldset').disabled`);
@@ -20,7 +20,7 @@ try {
   await click('新增供应商');await input('供应商名称','云端配置');await input('供应商 Base URL','https://api.example.com/v1');await input('供应商模型','configured-image');
   await evaluate(`window.realFetch=window.fetch;window.providerDrop=true;window.fetch=async(...args)=>{if(window.providerDrop&&String(args[0]).includes('/api/providers')&&args[1]?.method==='POST'){window.providerDrop=false;const r=await window.realFetch(...args);if(r.ok)throw Error('controlled response loss');return r}return window.realFetch(...args)}`);
   await click('保存供应商');await wait(`document.body.innerText.includes('结果待确认')`);const original=requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).at(-1).postData;
-  await click('创作画布');await click('供应商设置');await wait(`document.body.innerText.includes('确认原请求')`);await click('确认原请求');await settled();assert.equal(requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).at(-1).postData,original);
+  await click('创作画布');await wait(`document.querySelector('.provider-settings').parentElement.hidden`);await click('供应商设置');await wait(`document.body.innerText.includes('确认原请求')`);await click('确认原请求');await settled();assert.equal(requests.filter(r=>r.method==='POST'&&r.url.includes('/api/providers')).at(-1).postData,original);
   await click('设为默认 云端配置');await settled();list=await get();assert.equal(list.items.filter(v=>v.default_for==='image')[0].config.name,'云端配置');await writeFile(join(dir,'providers-expected.json'),JSON.stringify(list));
   // Commit a key-changing update, lose the response, and exit with only nonsecret
   // original identity persisted. has_key alone cannot prove this rotation landed.

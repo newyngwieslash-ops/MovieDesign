@@ -23,6 +23,7 @@ type Service struct {
 	Executor *Executor
 	// BillingGate adds the server-owned card in the admission/retry transaction.
 	BillingGate func(context.Context, *sql.Tx, string, TaskView, Input, bool) error
+	LateResult  func(context.Context, *sql.Tx, string, TaskView, int, string) error
 	ctx         context.Context
 	cancel      context.CancelFunc
 	mu          sync.Mutex
@@ -62,12 +63,23 @@ type rowQuery interface {
 
 func query(ctx context.Context, q rowQuery, p, id string) (v TaskView, attempt int, session string, err error) {
 	var raw string
-	err = q.QueryRowContext(ctx, "SELECT view_json,current_attempt,session_id FROM tasks WHERE project_id=? AND id=?", p, id).Scan(&raw, &attempt, &session)
+	err = q.QueryRowContext(ctx, "SELECT view_json,current_attempt,session_id,request_id FROM tasks WHERE project_id=? AND id=?", p, id).Scan(&raw, &attempt, &session, &v.RequestID)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = &store.DomainError{Status: 404, Code: "not_found", Message: "Task not found in this project"}
 	}
 	if err == nil {
+		request := v.RequestID
 		err = json.Unmarshal([]byte(raw), &v)
+		v.RequestID = request
+		if err == nil {
+			for i := range v.Outputs {
+				o := &v.Outputs[i]
+				err = q.QueryRowContext(ctx, "SELECT json_extract(source_json,'$.resource_id'),json_extract(source_json,'$.composition_id'),json_extract(source_json,'$.ordinal') FROM task_outputs WHERE task_id=? AND attempt=? AND output_key=?", id, attempt, o.OutputKey).Scan(&o.ResourceID, &o.CompositionID, &o.Ordinal)
+				if err != nil {
+					return
+				}
+			}
+		}
 	}
 	return
 }
@@ -643,4 +655,57 @@ func (s *Service) DecideQuestion(ctx context.Context, tx *sql.Tx, p, session, id
 		return conflict()
 	}
 	return s.save(ctx, tx, p, session, &v, attempt)
+}
+
+// List uses the same coverage contract as the object lists.
+func (s *Service) List(ctx context.Context, p, session string, offset, limit int) (store.Page, error) {
+	page := store.Page{Items: []json.RawMessage{}}
+	if e := scope(p, "list"); e != nil {
+		return page, e
+	}
+	if offset < 0 || limit < 1 || limit > 200 {
+		return page, invalid("Invalid pagination")
+	}
+	if session != "" {
+		if e := scope("session", session); e != nil {
+			return page, e
+		}
+	}
+	tx, e := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if e != nil {
+		return page, e
+	}
+	defer tx.Rollback()
+	if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM tasks WHERE project_id=? AND (?='' OR session_id=?)", p, session, session).Scan(&page.Coverage.Total); e != nil {
+		return page, e
+	}
+	rows, e := tx.QueryContext(ctx, "SELECT id FROM tasks WHERE project_id=? AND (?='' OR session_id=?) ORDER BY created_at,id LIMIT ? OFFSET ?", p, session, session, limit, offset)
+	if e != nil {
+		return page, e
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return page, e
+		}
+		ids = append(ids, id)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return page, e
+	}
+	for _, id := range ids {
+		v, _, _, e := query(ctx, tx, p, id)
+		if e != nil {
+			return page, e
+		}
+		raw, _ := json.Marshal(v)
+		page.Items = append(page.Items, raw)
+	}
+	page.Coverage.NextOffset = offset + len(page.Items)
+	page.Coverage.Exhausted = page.Coverage.NextOffset >= page.Coverage.Total
+	return page, nil
 }

@@ -57,6 +57,12 @@ func CheckTaskAssetPath(ctx context.Context, tx *sql.Tx, p, path string) error {
 	if e != nil {
 		return e
 	}
+	if n == 0 {
+		e = tx.QueryRowContext(ctx, `SELECT count(*) FROM task_outputs o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=? AND (lower(o.path)=lower(?) OR substr(lower(o.path),1,length(?)+1)=lower(?)||'/')`, p, path, path, path).Scan(&n)
+		if e != nil {
+			return e
+		}
+	}
 	if n > 0 {
 		return protected()
 	}

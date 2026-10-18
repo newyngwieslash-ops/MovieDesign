@@ -1,3 +1,6 @@
+import {GenerationComposer,type Generation} from '../tasks/GenerationComposer';
+import {useTasks} from '../tasks/TaskCenter';
+import {completedPatch} from '../tasks/tasks';
 import {useCallback,useEffect,useRef,useState,type PointerEvent} from 'react';
 import {useQuery} from '@tanstack/react-query';
 import {allPages,api,APIError,newRequestID} from '../../gateway';
@@ -15,6 +18,7 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
  const [selected,setSelected]=useState(''),[choice,setChoice]=useState(''),[undo,setUndo]=useState<Command|null>(null),[redo,setRedo]=useState<Command|null>(null);
  const [view,setView]=useState<View>({x:30,y:30,scale:1}),[extent,setExtent]=useState({width:1000,height:600}),surface=useRef<HTMLDivElement>(null);
  const [preview,setPreview]=useState<Node|null>(null),gesture=useRef<{pointer:number;startX:number;startY:number;node?:Node;resize:boolean;view:View;next?:Node}|null>(null);
+ const tasks=useTasks(projectID);
  const assets=useQuery({queryKey:['project',projectID,'assets','all',200],queryFn:({signal})=>allPages<CanvasAsset>(projectID,'/api/assets',signal)});
  const versions=useQuery({queryKey:['project',projectID,'versions','all',200],queryFn:({signal})=>allPages<CanvasVersion>(projectID,'/api/versions',signal)});
  const resources=useQuery({queryKey:['project',projectID,'resources','all',200],queryFn:({signal})=>allPages<{id:string;composition_id:string}>(projectID,'/api/resources',signal)});
@@ -25,7 +29,7 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
  useEffect(()=>{const element=surface.current;if(!element)return;const resize=new ResizeObserver(([entry])=>setExtent({width:entry.contentRect.width,height:entry.contentRect.height}));resize.observe(element);return()=>resize.disconnect()},[]);
  useEffect(()=>{try{localStorage.setItem(`moviedesign.canvas.view.${projectID}`,JSON.stringify(view))}catch(e){setError((e as Error).message)}},[projectID,view]);
  async function send(p:Pending) {
-  if(lock.current||storageError)return;lock.current=true;setBusy(true);setError('');
+  if(lock.current||storageError)return false;lock.current=true;setBusy(true);setError('');
   try {
    if(localStorage.getItem(pendingKey(projectID))!==JSON.stringify(p))throw Error('画布待确认记录已变化，请刷新窗口后继续');
    const receipt=await api<Receipt>(projectID,'/api/canvas/commands',{method:'POST',body:p.body});
@@ -33,6 +37,7 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
    if(localStorage.getItem(pendingKey(projectID))!==JSON.stringify(p))throw Error('画布记录已变化，保留当前恢复记录');
    accept(receipt.document);localStorage.removeItem(pendingKey(projectID));setPending(null);
    if(p.mode==='undo'){setRedo(receipt.effects.undo);setUndo(null)}else{setUndo(p.mode?receipt.effects.undo:null);setRedo(null)}
+   return true;
   }catch(e){if(!alive.current)return;setError((e as Error).message);if(e instanceof APIError&&e.status>=400&&e.status<500){try{if(localStorage.getItem(pendingKey(projectID))===JSON.stringify(p)){localStorage.removeItem(pendingKey(projectID));setPending(null)}await refresh();setUndo(null);setRedo(null);setError(`${e.message}。命令已拒绝；已刷新，请重新编辑。`)}catch(refreshError){setError((refreshError as Error).message)}}}
   finally{lock.current=false;if(alive.current)setBusy(false)}
  }
@@ -40,6 +45,17 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
   if(!ready||pending||lock.current||storageError)return;
   try{if(localStorage.getItem(pendingKey(projectID))!==null)throw Error('已有待确认画布命令，请刷新后继续');const p:Pending={schema:1,projectID,mode,body:JSON.stringify({requestId:newRequestID(),expectedRevision:current.current.revision,command})};localStorage.setItem(pendingKey(projectID),JSON.stringify(p));setPending(p);void send(p)}catch(e){setError((e as Error).message)}
  }
+ async function prepareGeneration(input:Generation){
+  const existing=Object.values(current.current.nodes).filter(n=>n.pendingGeneration?.requestId===input.requestId);
+  if(existing.length===input.output.resources.length)return;
+  if(!ready||storageError)throw Error('画布尚未就绪');
+  const saved=readPending(localStorage.getItem(pendingKey(projectID)),projectID);
+  if(saved){if(JSON.parse(saved.body).requestId!==`generation-${input.requestId}`)throw Error('请先确认原画布命令');if(!await send(saved))throw Error('画布结果待确认');return}
+  const nodes=input.output.resources.map((r,i)=>{const after:Node={id:`generation-${input.requestId}-${i}`,kind:'placeholder',expectedKind:'image',draft:null,pendingGeneration:{requestId:input.requestId,outputKey:r.key},parentId:null,position:{x:40+i*370,y:50},size:{width:350,height:350},zIndex:Object.keys(current.current.nodes).length+i+1,hidden:false};return {id:after.id,before:null,after}});
+  const p:Pending={schema:1,projectID,body:JSON.stringify({requestId:`generation-${input.requestId}`,expectedRevision:current.current.revision,command:{type:'canvas.patch',nodes,edges:[]}})};
+  localStorage.setItem(pendingKey(projectID),JSON.stringify(p));setPending(p);if(!await send(p))throw Error('画布结果待确认');
+ }
+ useEffect(()=>{if(!ready||pending||busy||storageError||gesture.current)return;const command=completedPatch(current.current,tasks.data??[]);if(command)commit(command)},[tasks.data,ready,pending,busy,storageError,document.revision]);
  const rendered=preview?{...document,nodes:{...document.nodes,[preview.id]:preview}}:document;
  const visible=visibleNodes(rendered,view,extent.width,extent.height);
  const compositionIDs=[...new Set(visible.flatMap(n=>n.kind==='composition'?[n.compositionId]:[]))].sort();
@@ -61,6 +77,7 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
  function remove(){if(!node)return;const ids=new Set([node.id]);let changed=true;while(changed){changed=false;for(const n of Object.values(document.nodes))if(n.parentId&&ids.has(n.parentId)&&!ids.has(n.id)){ids.add(n.id);changed=true}}commit({type:'canvas.patch',nodes:[...ids].map(id=>({id,before:document.nodes[id],after:null})),edges:Object.values(document.edges).filter(e=>ids.has(e.source)||ids.has(e.target)).map(e=>({id:e.id,before:e,after:null}))});setSelected('')}
  function reparent(parentId:string|null){if(!node)return;const world=worldPosition(document,node),parent=parentId?worldPosition(document,document.nodes[parentId]):{x:0,y:0};update({...node,parentId,position:{x:world.x-parent.x,y:world.y-parent.y}})}
  return <section className="persistent-canvas" aria-label="持久创作画布" data-revision={document.revision}>
+  <GenerationComposer projectID={projectID} prepare={prepareGeneration}/>
   <div className="canvas-toolbar"><h2>创作画布</h2><select aria-label="添加对象版本" value={choice} onChange={e=>setChoice(e.target.value)}><option value="">选择已导入版本</option>{versions.data?.map(v=><option key={v.id} value={v.id}>{assets.data?.find(a=>a.id===v.asset_id)?.name??v.id}</option>)}</select><button disabled={disabled||!choice} onClick={()=>add('composition')}>添加对象</button><button disabled={disabled} onClick={()=>add('frame')}>添加画框</button><button disabled={disabled} onClick={()=>add('placeholder')}>添加占位</button><button disabled={disabled||!undo} onClick={()=>undo&&commit(undo,'undo')}>撤销画布</button><button disabled={disabled||!redo} onClick={()=>redo&&commit(redo,'redo')}>重做画布</button><button onClick={()=>setView({x:30,y:30,scale:1})}>重置视图</button><span>{Math.round(view.scale*100)}%</span></div>
   {pending&&<div role="status" className="pending-import">画布结果待确认 · 保留原命令与请求号 <button disabled={busy||!!storageError} onClick={()=>void send(pending)}>继续确认画布</button></div>}
   {(error||storageError||content.error||assets.error||versions.error||resources.error||compositions.error)&&<p role="alert">{storageError||error||content.error?.message||assets.error?.message||versions.error?.message||resources.error?.message||compositions.error?.message}</p>}

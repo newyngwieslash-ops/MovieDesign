@@ -79,7 +79,7 @@ func (s *Server) Health() Health {
 		return h
 	}
 	var pending int
-	e := s.db.QueryRow(`SELECT (SELECT count(*) FROM task_attempts WHERE state IN ('approved','submitting','submitted','running','unknown','collection_pending','collecting'))+(SELECT count(*) FROM file_operations WHERE stage='prepared')+(SELECT count(*) FROM deliveries WHERE status='unknown')`).Scan(&pending)
+	e := s.db.QueryRow(`SELECT (SELECT count(*) FROM task_attempts WHERE state IN ('approved','submitting','submitted','running','unknown','collection_pending','collecting','adoption_pending'))+(SELECT count(*) FROM file_operations WHERE stage='prepared')+(SELECT count(*) FROM deliveries WHERE status='unknown')`).Scan(&pending)
 	h.SafeToSuspend = h.SafeToSuspend && e == nil && pending == 0
 	return h
 }
@@ -118,10 +118,14 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 	}
 	ev := events.NewService(db)
 	srv := &Server{db: db, events: ev, tasks: tasks.NewService(db, ev, nil)}
+	if deliveries != nil {
+		deliveries.CompleteTask = srv.tasks.CompleteDelivery
+	}
 	if providerService != nil {
-		srv.tasks.Executor = tasks.ImageExecutor(providerService)
+		srv.tasks.Executor = tasks.ImageExecutor(providerService, deliveries)
 	}
 	qs := questions.NewService(db, srv.tasks, ev)
+	srv.tasks.LateResult = qs.LateResult
 	if providerService != nil {
 		srv.tasks.BillingGate = qs.Billing
 	}

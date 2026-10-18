@@ -5,10 +5,13 @@ import type { RectangleData, TagData, TextData } from '../../../packages/editor/
 import { annotationShapeIds, collectAnnotations, moveAnnotationPairs, type Annotation, type AnnotationPair } from './annotations';
 import { EditorToolbar } from './EditorToolbar';
 import { AnnotationEditor } from './AnnotationEditor';
+import {api,newRequestID,APIError} from '../../gateway';
+import {GenerationComposer} from '../tasks/GenerationComposer';
+import {sendIntent,readControlIntent,clearControlIntent,type Intent} from '../tasks/tasks';
 
 export interface ImageEditorHandle { collectAnnotations(): Annotation[] }
-export function ImageEditor({ assetId, source, onExport, onAnnotations, ref }: {
-  assetId: string; source: string; onExport: (blob: Blob) => Promise<void>; onAnnotations?: (annotations: Annotation[]) => void; ref?: Ref<ImageEditorHandle>;
+export function ImageEditor({ assetId, source, onExport, onAnnotations, ref, projectID, sourceVersionID }: {
+  assetId: string; source: string; onExport: (blob: Blob) => Promise<void>; onAnnotations?: (annotations: Annotation[]) => void; ref?: Ref<ImageEditorHandle>; projectID?:string; sourceVersionID?:string;
 }) {
   const host = useRef<HTMLDivElement>(null), viewport = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Editor | null>(null), pairs = useRef<AnnotationPair[]>([]);
@@ -24,6 +27,11 @@ export function ImageEditor({ assetId, source, onExport, onAnnotations, ref }: {
   const [editing, setEditing] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState('');
   const [annotation, setAnnotation] = useState(false);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [mask,setMask]=useState(''),[maskBusy,setMaskBusy]=useState(false),maskLock=useRef(false);
+  const maskKey=`moviedesign.mask.v1.${projectID}.${assetId}`;
+  const [savedMask]=useState(()=>{try{const i=readControlIntent(localStorage.getItem(maskKey),'mask',assetId);return {intent:i,error:''}}catch(e){return {intent:null,error:(e as Error).message}}});
+  const [maskIntent,setMaskIntent]=useState<Intent|null>(savedMask.intent);
+  async function createMask(original?:Intent){if(!projectID||maskLock.current||savedMask.error)return;maskLock.current=true;setMaskBusy(true);const editor=editorRef.current;const intent=original??{path:'/api/generate/mask',body:JSON.stringify({requestId:newRequestID(),asset_id:assetId,bounds:collect().map(a=>a.bounds)})};try{const result=await sendIntent(localStorage,maskKey,intent,async i=>{setMaskIntent(i);return api<{asset_id:string}>(projectID,i.path,{method:'POST',body:i.body})}) as {asset_id:string};if(editorRef.current!==editor)return;setMask(result.asset_id);if(clearControlIntent(localStorage,maskKey,intent))setMaskIntent(null)}catch(e){if(editorRef.current===editor){setError((e as Error).message);if(e instanceof APIError&&e.status<500){try{if(clearControlIntent(localStorage,maskKey,intent))setMaskIntent(null)}catch(cleanup){setError((cleanup as Error).message)}}}}finally{maskLock.current=false;if(editorRef.current===editor)setMaskBusy(false)}}
   useEffect(() => {
     let disposed = false, observer: ResizeObserver | undefined, closeText: ((commit: boolean) => void) | undefined;
     const image = new Image(); image.crossOrigin = 'anonymous';
@@ -124,6 +132,7 @@ export function ImageEditor({ assetId, source, onExport, onAnnotations, ref }: {
     <div ref={viewport} className="editor-viewport" style={{ pointerEvents: draft || saving ? 'none' : undefined }}><div ref={host} className="editor-stage" /></div>
     {draft && <AnnotationEditor onConfirm={finishDraft} onCancel={() => finishDraft()} />}
     {annotations.length > 0 && <ul aria-label="区域标注列表">{annotations.map(a => <li key={a.id}>{a.comment}</li>)}</ul>}
+    {projectID&&<><button disabled={maskBusy||saving||!!draft||!!maskIntent||!!savedMask.error||annotations.length===0} onClick={()=>void createMask()}>用标注创建修复蒙版</button>{maskIntent&&<button disabled={maskBusy||!!savedMask.error} onClick={()=>void createMask(maskIntent)}>确认原蒙版请求</button>}{savedMask.error&&<p role="alert">{savedMask.error}</p>}{mask&&<GenerationComposer key={mask} projectID={projectID} baseVersionID={sourceVersionID} references={[assetId,mask]}/>}</>}
     {error && <p role="alert" className="inline-error">{error}</p>}
   </section>;
 }

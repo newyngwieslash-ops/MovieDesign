@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 )
 
 // ImageExecutor only submits an already human-approved attempt. M4.4 owns that
 // atomic transition. Saved media is collected/delivered by M4.5, never re-POSTed.
-func ImageExecutor(s *providers.Service) *Executor {
-	return &Executor{Submit: func(ctx context.Context, a Attempt, _ func(string) error) (Outcome, error) {
+func ImageExecutor(s *providers.Service, deliveries ...*delivery.Service) *Executor {
+	executor := &Executor{Submit: func(ctx context.Context, a Attempt, _ func(string) error) (Outcome, error) {
 		input, e := GenerationInput(a.ProjectID, a.Input)
 		if e != nil {
 			return Outcome{NotAccepted: true}, e
@@ -38,6 +39,10 @@ func ImageExecutor(s *providers.Service) *Executor {
 		out.Problem = &Problem{Source: "delivery", Code: "RESULT_AWAITING_DELIVERY", Message: "Provider response saved; output delivery is not installed", Retryable: true}
 		return out, nil
 	}}
+	if len(deliveries) > 0 && deliveries[0] != nil {
+		executor.Collect = collectImages(s, deliveries[0])
+	}
+	return executor
 }
 
 // GenerationInput preserves the exact same frozen input for quote and submission.

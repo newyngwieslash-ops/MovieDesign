@@ -2,7 +2,7 @@ import { pendingStorageKey, preparePending, readPending, replayPending, type Pen
 import { useEffect, useState } from 'react';
 import { APIError, api, newRequestID } from '../../gateway';
 
-type Capability = { max_prompt_bytes: number; max_count: number; max_references: number; sizes: string[]; edit: boolean; duration_seconds: number[]; audio: boolean };
+type Capability = { paramSchema?: Record<string,unknown>; reference_roles?: string[]; constraints?: Record<string,unknown>; max_prompt_bytes: number; max_count: number; max_references: number; sizes: string[]; edit: boolean; duration_seconds: number[]; audio: boolean };
 type Pricing = { currency: string; unit: string; unit_amount: number; minor_unit_scale: number; credit_numerator: number; credit_denominator: number; source: string; version: string; effective_at: number };
 type Config = { id: string; name: string; kind: 'image' | 'video'; protocol: string; base_url: string; model_id: string; enabled: boolean; headers: { 'OpenAI-Organization'?: string; 'OpenAI-Project'?: string }; capability: Capability; pricing: Pricing | null };
 type View = { config: Config; has_key: boolean; default_for: string };
@@ -11,6 +11,7 @@ const blank = (): Config => ({ id: newRequestID(), name: '', kind: 'image', prot
 const price = (kind: string): Pricing => ({ currency: 'USD', unit: kind === 'image' ? 'image' : 'second', unit_amount: 0, minor_unit_scale: 2, credit_numerator: 0, credit_denominator: 1, source: '', version: '', effective_at: 0 });
 export function ProviderSettings({ ready }: { ready: boolean }) {
   const [items, setItems] = useState<View[]>([]), [config, setConfig] = useState<Config>(blank), [editing, setEditing] = useState(false);
+  const [advanced,setAdvanced]=useState('{}');
   const [key, setKey] = useState(''), [removeKey, setRemoveKey] = useState(false), [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false), [pending, setPending] = useState<PendingProvider | null>(() => {
     try { return readPending(localStorage.getItem(pendingStorageKey)); } catch { return null; }
@@ -20,7 +21,7 @@ export function ProviderSettings({ ready }: { ready: boolean }) {
   const locked = busy || pending !== null || !!storageError || !ready;
   async function refresh() { const result = await api<{ items: View[] }>(null, '/api/providers'); setItems(result.items); }
   useEffect(() => { if (ready) void refresh().catch(e => setMessage(String(e.message))); }, [ready]);
-  function choose(v?: View) { setConfig(v ? structuredClone(v.config) : blank()); setEditing(!!v); setKey(''); setRemoveKey(false); setMessage(''); }
+  function choose(v?: View) { setAdvanced(JSON.stringify({paramSchema:v?.config.capability.paramSchema,constraints:v?.config.capability.constraints,reference_roles:v?.config.capability.reference_roles},null,2)); setConfig(v ? structuredClone(v.config) : blank()); setEditing(!!v); setKey(''); setRemoveKey(false); setMessage(''); }
   async function accept(result: Receipt) {
     localStorage.removeItem(pendingStorageKey); setPending(null); setKey(''); setRecoveryKey(''); setRemoveKey(false);
     if (result.provider && !result.deleted) { setConfig(result.provider.config); setEditing(true); }
@@ -59,7 +60,7 @@ export function ProviderSettings({ ready }: { ready: boolean }) {
     catch (e) { setMessage((e as Error).message); }
   }
   function act(action: string, id: string) { void send(JSON.stringify({ requestId: newRequestID(), action, id })); }
-  function save() { void send(JSON.stringify({ requestId: newRequestID(), action: editing ? 'update' : 'create', config, ...(key ? { key } : {}), ...(removeKey ? { remove_key: true } : {}) })); }
+  function save() { let extra;try{extra=JSON.parse(advanced);if(!extra||Array.isArray(extra)||Object.keys(extra).some(k=>!['paramSchema','constraints','reference_roles'].includes(k)))throw Error('高级能力字段无效')}catch(e){setMessage((e as Error).message);return} const configured={...config,capability:{...config.capability,...extra}}; void send(JSON.stringify({ requestId: newRequestID(), action: editing ? 'update' : 'create', config:configured, ...(key ? { key } : {}), ...(removeKey ? { remove_key: true } : {}) })); }
   const set = <K extends keyof Config>(k: K, v: Config[K]) => setConfig({ ...config, [k]: v });
   const cap = <K extends keyof Capability>(k: K, v: Capability[K]) => set('capability', { ...config.capability, [k]: v });
   const pricing = <K extends keyof Pricing>(k: K, v: Pricing[K]) => set('pricing', { ...config.pricing!, [k]: v });
@@ -93,6 +94,7 @@ export function ProviderSettings({ ready }: { ready: boolean }) {
       <label>最大参考图数量<input type="number" min={0} max={16} required value={config.capability.max_references} onChange={e => cap('max_references', +e.target.value)} /></label>
       <label>尺寸（逗号分隔，如 1024x1024）<input value={config.capability.sizes.join(',')} onChange={e => cap('sizes', e.target.value ? e.target.value.split(',') : [])} /></label>
       {config.kind === 'image' ? <label><input type="checkbox" checked={config.capability.edit} onChange={e => cap('edit', e.target.checked)} />声明支持图像编辑</label> : <><label>时长秒数（逗号分隔）<input value={config.capability.duration_seconds.join(',')} onChange={e => cap('duration_seconds', e.target.value ? e.target.value.split(',').map(Number) : [])} /></label><label><input type="checkbox" checked={config.capability.audio} onChange={e => cap('audio', e.target.checked)} />声明支持音频</label></>}
+      {config.kind==='image'&&<details><summary>高级图像能力</summary><p>仅已实现的 OpenAI Images 参数。paramSchema 使用扁平 properties；constraints 可限制尺寸、像素和字节。标注修复明确声明 reference_roles: ["image","mask"]，并开启编辑。服务器验证所有声明，免费测试不验证远程生成能力。</p><label>高级能力 JSON<textarea aria-label="高级能力 JSON" rows={10} value={advanced} onChange={e=>setAdvanced(e.target.value)}/></label></details>}
       <h2>声明价格</h2><label><input aria-label="配置报价" type="checkbox" checked={config.pricing !== null} onChange={e => set('pricing', e.target.checked ? price(config.kind) : null)} />配置报价（未配置表示未知，不表示免费）</label>
       {config.pricing && <>
         <label>币种<input required pattern="[A-Z]{3}" value={config.pricing.currency} onChange={e => pricing('currency', e.target.value)} /></label>

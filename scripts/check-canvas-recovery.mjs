@@ -32,7 +32,7 @@ function harness(){
   });
  }};
  function load(name,extras={}){const module={exports:{}};vm.runInNewContext(ts.transpileModule(source(name),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{module,exports:module.exports,localStorage,Error,Map,Set,console,require:name=>extras[name]??(name==='react'?react:name==='react/jsx-runtime'?{jsx,jsxs:jsx}:name==='@tanstack/react-query'?{useQuery:()=>({data:[],dataUpdatedAt:0})}:name==='../../gateway'?gateway:name==='./CanvasNode'?{CanvasNode(){}}:require(name))});return module.exports}
- const canvas=load('canvas.ts'),{CanvasWorkspace}=load('CanvasWorkspace.tsx',{'./canvas':canvas});
+ const canvas=load('canvas.ts'),{CanvasWorkspace}=load('CanvasWorkspace.tsx',{'./canvas':canvas,'../tasks/GenerationComposer':{GenerationComposer(){}},'../tasks/TaskCenter':{useTasks:()=>({data:[]})},'../tasks/tasks':{completedPatch:()=>null}} );
  function render(){cursor=0;effects=[];const component=CanvasWorkspace({projectID:'p'});const tree=component.type(component.props);for(const effect of effects)effect();return tree}
  function unmount(){for(const hook of state)hook?.cleanup?.();state=[]}
  const button=name=>{const b=find(render(),name);assert(b,'missing '+name);return b.props};

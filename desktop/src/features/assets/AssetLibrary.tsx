@@ -180,6 +180,6 @@ export function AssetLibrary({ projectID, editRequest }: { projectID: string; ed
       </> : <p>选择素材以查看对象及版本。</p>}
       <VersionHistory versions={versions.data?.filter(v => v.resource_id === resource?.id) ?? []} selected={selected} onSelect={selectVersion} />
     </aside></div>
-    {editing && activeAsset && <ImageEditor key={activeAsset.id} assetId={activeAsset.id} source={`http://127.0.0.1:8001/api/files/content?project_id=${encodeURIComponent(projectID)}&path=${encodeURIComponent(activeAsset.path)}`} onExport={exportImage} />}
+    {editing && activeAsset && <ImageEditor sourceVersionID={version?.id} projectID={projectID} key={activeAsset.id} assetId={activeAsset.id} source={`http://127.0.0.1:8001/api/files/content?project_id=${encodeURIComponent(projectID)}&path=${encodeURIComponent(activeAsset.path)}`} onExport={exportImage} />}
   </section>;
 }

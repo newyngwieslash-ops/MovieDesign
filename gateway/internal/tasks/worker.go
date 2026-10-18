@@ -82,13 +82,14 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 	if e != nil {
 		return e
 	}
-	collect := state == "collection_pending" && s.Executor.Collect != nil
-	if Terminal(v.Status) || !collect && (state != "approved" || started || s.Executor.Submit == nil) {
+	adopt := v.Status == Cancelled && state == "adoption_pending"
+	collect := (state == "collection_pending" || adopt) && s.Executor.Collect != nil
+	if Terminal(v.Status) && !adopt || !collect && (state != "approved" || started || s.Executor.Submit == nil) {
 		return nil
 	}
 	var res sql.Result
 	if collect {
-		res, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='collecting' WHERE task_id=? AND attempt=? AND state='collection_pending'", id, attempt)
+		res, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='collecting' WHERE task_id=? AND attempt=? AND state IN ('collection_pending','adoption_pending')", id, attempt)
 	} else {
 		res, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='submitting',submit_started_at=? WHERE task_id=? AND attempt=? AND state='approved' AND submit_started_at IS NULL", time.Now().UnixMilli(), id, attempt)
 	}
@@ -99,12 +100,14 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 	if e != nil || n != 1 {
 		return e
 	}
-	v.Status = Running
-	v.Problem = nil
-	v.Actions = []string{"cancel"}
-	v.Progress = Progress{Phase: "active"}
-	if e = s.save(ctx, tx, p, session, &v, attempt); e != nil {
-		return e
+	if !adopt {
+		v.Status = Running
+		v.Problem = nil
+		v.Actions = []string{"cancel"}
+		v.Progress = Progress{Phase: "active"}
+		if e = s.save(ctx, tx, p, session, &v, attempt); e != nil {
+			return e
+		}
 	}
 	if e = tx.Commit(); e != nil {
 		return e
@@ -115,6 +118,27 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 		return s.finish(a, outcome, collectErr)
 	}
 	outcome, submitErr := s.Executor.Submit(ctx, a, func(upstream string) error { return s.checkpoint(a, upstream) })
+	if submitErr == nil && len(outcome.Result) > 0 && outcome.Problem != nil && outcome.Problem.Code == "RESULT_AWAITING_DELIVERY" && s.Executor.Collect != nil {
+		// Durable accepted response must precede any download or archive.
+		res, err := s.DB.ExecContext(context.Background(), "UPDATE task_attempts SET result_json=coalesce(result_json,?),state='collecting' WHERE task_id=? AND attempt=?", string(outcome.Result), a.TaskID, a.Number)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n != 1 {
+			return conflict()
+		}
+		a.Result = outcome.Result
+		current, err := s.Query(context.Background(), p, id)
+		if err != nil {
+			return err
+		}
+		if current.Status == Cancelled {
+			return s.finish(a, outcome, nil)
+		}
+		collected, err := s.Executor.Collect(ctx, a)
+		return s.finish(a, collected, err)
+	}
 	return s.finish(a, outcome, submitErr)
 }
 func (s *Service) checkpoint(a Attempt, upstream string) error {
@@ -204,6 +228,28 @@ func (s *Service) finish(a Attempt, out Outcome, callErr error) error {
 	if _, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state=?,error_json=coalesce(error_json,?),result_json=coalesce(result_json,?) WHERE task_id=? AND attempt=?", status, problemJSON, result, a.TaskID, a.Number); e != nil {
 		return e
 	}
+	if v.Status == Cancelled && status == Failed {
+		var approved int
+		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM questions WHERE task_id=? AND kind='delivery' AND state='approved'", a.TaskID).Scan(&approved); e != nil {
+			return e
+		}
+		if approved > 0 {
+			if _, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='adoption_pending' WHERE task_id=? AND attempt=?", a.TaskID, a.Number); e != nil {
+				return e
+			}
+		}
+	}
+	if v.Status == Cancelled && s.LateResult != nil {
+		var saved string
+		if e = tx.QueryRowContext(ctx, "SELECT coalesce(result_json,'null') FROM task_attempts WHERE task_id=? AND attempt=?", a.TaskID, a.Number).Scan(&saved); e != nil {
+			return e
+		}
+		if saved != "null" {
+			if e = s.LateResult(ctx, tx, a.ProjectID, v, a.Number, session); e != nil {
+				return e
+			}
+		}
+	}
 	if !Terminal(v.Status) {
 		if v.Outputs, e = readOutputs(ctx, tx, a.TaskID, a.Number); e != nil {
 			return e
@@ -243,7 +289,7 @@ func (s *Service) Recover(_ context.Context) error {
 	}
 	defer s.end()
 	ctx := s.ctx
-	rows, e := s.DB.QueryContext(ctx, "SELECT t.id,t.project_id FROM tasks t JOIN task_attempts a ON a.task_id=t.id AND a.attempt=t.current_attempt WHERE t.status IN ('running','unknown') OR (t.status='cancelled' AND a.state IN ('submitting','submitted','running','unknown','collection_pending','collecting'))")
+	rows, e := s.DB.QueryContext(ctx, "SELECT t.id,t.project_id FROM tasks t JOIN task_attempts a ON a.task_id=t.id AND a.attempt=t.current_attempt WHERE t.status IN ('running','unknown') OR (t.status='cancelled' AND a.state IN ('submitting','submitted','running','unknown','collection_pending','collecting','adoption_pending')) OR (t.status='completed' AND a.state='collecting')")
 	if e != nil {
 		return e
 	}
@@ -269,6 +315,16 @@ func (s *Service) Recover(_ context.Context) error {
 		// Saved output is collection work, regardless of whether the provider uses
 		// an upstream ID. Startup exposes an explicit retry and performs no I/O.
 		// finish also drains interrupted cancelled collection without reviving it.
+		var pending int
+		if e = s.DB.QueryRowContext(ctx, "SELECT count(*) FROM task_outputs WHERE task_id=? AND attempt=? AND state<>'delivered'", a.TaskID, a.Number).Scan(&pending); e != nil {
+			return e
+		}
+		if pending == 0 {
+			if e = s.finish(a, Outcome{Status: Completed}, nil); e != nil {
+				return e
+			}
+			continue
+		}
 		if string(a.Result) != "null" {
 			if e = s.finish(a, Outcome{Status: Failed, Problem: &Problem{Source: "delivery", Code: "COLLECTION_INTERRUPTED", Message: "Saved result collection was interrupted; retry collection", Retryable: true}}, nil); e != nil {
 				return e
@@ -290,4 +346,34 @@ func (s *Service) Recover(_ context.Context) error {
 		}
 	}
 	return nil
+}
+
+// CompleteDelivery shares the final Delivery receipt transaction: cancellation
+// and completion compete through one serialized state transition.
+func (s *Service) CompleteDelivery(ctx context.Context, tx *sql.Tx, p, id string, number int) error {
+	v, attempt, session, e := query(ctx, tx, p, id)
+	if e != nil {
+		return e
+	}
+	if attempt != number || v.Status != Running && v.Status != Cancelled {
+		return conflict()
+	}
+	outputs, e := readOutputs(ctx, tx, id, attempt)
+	if e != nil {
+		return e
+	}
+	for _, o := range outputs {
+		if o.State != "delivered" || o.VersionID == nil || o.AssetID == nil {
+			return invalid("Task outputs have not been delivered")
+		}
+	}
+	v.Outputs = outputs
+	if v.Status != Cancelled {
+		v.Status = Completed
+	}
+	v.Problem = nil
+	v.Actions = []string{}
+	percent := 100
+	v.Progress = Progress{Phase: "done", Percent: &percent}
+	return s.save(ctx, tx, p, session, &v, attempt)
 }

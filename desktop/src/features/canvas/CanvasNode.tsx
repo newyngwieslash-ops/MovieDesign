@@ -13,7 +13,7 @@ export function CanvasNode({node,position,selected,asset,content,projectID,onSel
   {node.kind==='frame'?<p>{node.collapsed?'已折叠':'分组画框'}</p>:asset?.status==='active'?<div className="node-content">
    {asset.mime_type?.startsWith('image/')?<img crossOrigin="anonymous" src={src} alt={asset.name} draggable={false}/>:asset.mime_type?.startsWith('video/')?<video crossOrigin="anonymous" src={src} controls preload="metadata"/>:asset.mime_type?.startsWith('audio/')?<audio crossOrigin="anonymous" src={src} controls preload="metadata"/>:asset.mime_type?.startsWith('text/')?<pre>{text||'读取文档…'}</pre>:<p>{asset.name} · {asset.mime_type??'文件'}</p>}
    {asset.mime_type?.startsWith('image/')&&node.kind==='composition'&&node.activeItem?.type==='version'&&<button onClick={()=>onEdit(node.activeItem!.type==='version'?node.activeItem!.versionId:'')}>在图像编辑器打开</button>}
-  </div>:<p>{node.kind==='placeholder'?'导入素材后可添加到画布':node.kind==='composition'&&node.activeItem===null?'请选择版本':'文件不可用'}</p>}
+  </div>:<p>{node.kind==='placeholder'?node.pendingGeneration?'生成意图已保存 · 请在任务中心查看状态':'导入素材后可添加到画布':node.kind==='composition'&&node.activeItem===null?'请选择版本':'文件不可用'}</p>}
   {selected&&<button className="node-resize" aria-label="调整节点尺寸" onPointerDown={e=>onDrag(e,true)}>↘</button>}
  </article>;
 }

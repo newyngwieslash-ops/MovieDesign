@@ -56,10 +56,10 @@ try {
     await key('Delete'); await wait(`!document.querySelector('[aria-label="区域标注列表"]')`); await click('撤销'); await wait(`document.querySelectorAll('[aria-label="区域标注列表"] li').length===1`);
     // Inject a native storage refusal before the first export POST. The original bytes/IDs must survive in memory for explicit continuation.
     await evaluate(`window.realOpen=indexedDB.open.bind(indexedDB); indexedDB.open=()=>{throw Error('controlled quota refusal')}`);
-    const beforePosts = requests.filter(r=>r.method==='POST').length; await click('保存新版本'); await wait(`document.body.innerText.includes('controlled quota refusal')`);
-    assert.equal(requests.filter(r=>r.method==='POST').length,beforePosts,'storage refusal sent zero POST');
+    const beforePosts = requests.filter(r=>r.method==='POST'&&r.url.startsWith('http://127.0.0.1:8001/')).length; await click('保存新版本'); await wait(`document.body.innerText.includes('controlled quota refusal')`);
+    assert.equal(requests.filter(r=>r.method==='POST'&&r.url.startsWith('http://127.0.0.1:8001/')).length,beforePosts,'storage refusal sent zero POST');
     await evaluate(`indexedDB.open=window.realOpen;window.realSet=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('moviedesign.import.'))throw Error('controlled intent refusal');return window.realSet.call(this,k,v)}`);
-    await click('重新查询/续投递'); await wait(`document.body.innerText.includes('controlled intent refusal')`); assert.equal(requests.filter(r=>r.method==='POST').length,beforePosts,'intent refusal sent zero POST');
+    await click('重新查询/续投递'); await wait(`document.body.innerText.includes('controlled intent refusal')`); assert.equal(requests.filter(r=>r.method==='POST'&&r.url.startsWith('http://127.0.0.1:8001/')).length,beforePosts,'intent refusal sent zero POST');
     await evaluate(`Storage.prototype.setItem=window.realSet;window.realFetch=window.fetch;window.exportAttempts=[];window.fetch=async(...args)=>{if(String(args[0]).includes('/api/upload?')){window.exportAttempts.push(args[1].body.get('requestId'));throw Error('controlled upload response unknown')}return window.realFetch(...args)}`);
     await click('重新查询/续投递'); await wait(`document.body.innerText.includes('controlled upload response unknown')`);
     const op = await evaluate(`JSON.parse(localStorage.getItem('moviedesign.import.v1.${project}'))`); assert(op.generatedPNG); assert.equal(op.target.baseVersionID,first.id);

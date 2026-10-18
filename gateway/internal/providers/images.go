@@ -336,7 +336,34 @@ func (s *Service) checkReferencePending(ctx context.Context, id string) error {
 	defer tx.Rollback()
 	return store.CheckAssetFilePending(ctx, tx, id)
 }
-func (s *Service) CollectImages(ctx context.Context, p string, result ProviderResult, f FrozenProvider, keys []string) ([]string, error) {
+
+type CollectionError struct {
+	Code, Message string
+	Retryable     bool
+}
+
+func (e *CollectionError) Error() string { return e.Message }
+func (s *Service) CollectImages(ctx context.Context, p string, result ProviderResult, f FrozenProvider, keys []string) (pathsOut []string, errOut error) {
+	// Only fixed local diagnostics cross the task boundary, never signed URLs or
+	// filesystem errors. Immutable malformed media cannot be repaired by retry.
+	defer func() {
+		if errOut == nil {
+			return
+		}
+		code, message, retry := "COLLECTION_IO", "Saved image could not be collected; retry collection", true
+		text := errOut.Error()
+		if strings.Contains(text, "download") || strings.Contains(text, "Result URL") {
+			code, message = "DOWNLOAD_FAILED", "Saved result download failed; retry downloads without generating again"
+		} else if errors.Is(errOut, ErrInvalid) && !strings.Contains(text, "unavailable") {
+			code, message, retry = "INVALID_SAVED_MEDIA", "Saved result is invalid or exceeds declared media limits; no automatic retry", false
+		} else {
+			var corrupt base64.CorruptInputError
+			if errors.As(errOut, &corrupt) {
+				code, message, retry = "INVALID_SAVED_MEDIA", "Saved base64 image is invalid; no automatic retry", false
+			}
+		}
+		errOut = &CollectionError{code, message, retry}
+	}()
 	if s.Files == nil {
 		return nil, ErrUnavailable
 	}
