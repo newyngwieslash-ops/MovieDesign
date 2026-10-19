@@ -266,3 +266,11 @@ M6.2 独立审查先发现I1：损坏冻结请求缺Composition仍能POST并在4
 
 全量scripts/check.ps1通过（Go/vet、78项组件含20项分镜与审批UI检查、69项TS、前端构建、3项Rust及M1冒烟 ef353633b448495f9158ed09c13133a5）；生产构建41.77秒通过；真实生产WebView＋固定opencode1.19.0三阶段39110e0240bf4d55908f299f55ad0249通过（意图→脚本→分镜rev1人工批准→WebView编辑产生rev2自动失效rev1并保留上游批准→rev2再次人工批准→物理重启保持“此版本已批准 · Prompt pending”且零修改请求/零残留进程）。独立任务审查结论Spec Compliant / Quality Approved，无Critical/Important，清单25源码＋3制品＋10证据SHA-256全部一致。继续M6.4精确Prompt合同与Preflight。
 
+### M6.4 精确Prompt合同、七项Preflight门禁与SQL血缘（2026-10-19）
+
+4ae4ab1实现、bc49b9f完成审查修复并通过独立复审（Spec Compliant / Quality Approved）。000014_prompt_contracts新增不可变prompt_revisions并升级prompt_contracts（触发器保护不可删改，仅允许受控状态流转与一次性task_id绑定）；五张核心表与000001–000013未变。final_video_prompt.md保留原始UTF-8字节（不Trim、不规范化CRLF/LF、不注入额外标题），同时通过SHA-256（PromptDigest）与XXH3（assets.full_hash）校验。
+
+七项Preflight门禁（approval、prompt_bytes、placeholders、capability_params、references、duration_aspect、audio）在共享编译与准入事务内执行，允许正常镜头时间/景别方括号（如[00:00-00:07] [近景]）而拦截未解析占位符，校验15秒口播+配乐（narration+music）显式音频合同。HTTP与MCP共用generation.Service.Admit及tasks.Service.ValidateAdmission/Submit/BillingInput/Run（AuthorizeExecution/BindExecutionTask/ClaimExecution），按目标Composition关联活跃流水线拦截省略contractId绕过（同时保留独立Composition普通生图），并在worker紧邻提交前原子迁移status='submitted'防御TOCTOU；已submitted任务不受后续分镜修订影响。完整SQL血缘（意图→脚本→分镜→Prompt→Contract→Task/Output→Version→Asset及有序参考Version依赖）与删除保护（409 Conflict）就绪。
+
+全量scripts/check.ps1通过（Go/vet、79项组件含21项分镜与Prompt契约UI检查、69项TS、前端构建、3项Rust及M1冒烟）；生产构建通过；真实生产WebView＋固定opencode1.19.0三阶段958e6de9b8a94f0e9da52db916616ec2通过（尾随空格与换行逐字节保持、Preflight七项门禁通过、音轨契约与SQL血缘渲染一致、物理重启零修改请求/零残留进程）。清单26源码＋3制品＋8证据SHA-256全部复核一致。继续M6.5失败回流与一句话工作流集成。
+

@@ -82,7 +82,7 @@ M6.3 engineering gate approved at 4ee7b84 (full check, 78 rendered UI checks, pr
 
 **Interfaces:** `Compile(ctx,pipelineID,revision,prompt,capabilityID,params,references)(Contract,error)`接受获批分镜派生的最终字符串，保存后不可变；`Preflight(ctx,ContractID)(Report,error)`；`AuthorizeExecution(ctx,TaskInput)error`被HTTP与MCP的共享Submit调用。Contract含prompt_version_id、prompt_sha256、storyboard_revision、approval_id、capability/config快照、有序references、参数及检查结果。
 
-- [ ] 测试同字不同换行、尾随空格、UTF-8字节、引用顺序、旧批准、超时长/画幅、未声明params、占位符、缺失asset、跨项目asset、展示后改prompt；任一变化不得沿用旧合同执行。
+- [x] 测试同字不同换行、尾随空格、UTF-8字节、引用顺序、旧批准、超时长/画幅、未声明params、占位符、缺失asset、跨项目asset、展示后改prompt；任一变化不得沿用旧合同执行。
 
 ```go
 func PromptDigest(prompt string) string {
@@ -95,11 +95,11 @@ func TestPromptBytesAreSignificant(t *testing.T) {
 }
 ```
 
-- [ ] 编译过程可以由agent按技能生成最终文本，但保存后gateway不再改写。`final_video_prompt.md`文件内容就是将提交的字符串，不额外加标题/frontmatter；合同元数据存支撑表。UI原文视图读取同一版本字节，复制/提交不从Markdown DOM重建文本。
-- [ ] Preflight复用capabilities.Validate并检查当前批准、资产存在及类型/数量、参数白名单、总时长/画幅、音频需求、明确占位符列表；检查结果逐项可读。模板编译记录未解析变量列表，辅以限定占位符语法检测，不用“包含中括号即失败”的粗略规则。
-- [ ] 所有流水线请求绑定pipeline/contract，不能通过通用execute去掉字段绕过门禁：按目标Composition与活跃流水线关联查验。普通非流水线图像任务仍可运行。worker临提交前再次核对批准与合同并完成原子准入；批准后的新编辑只影响尚未准入的执行。
-- [ ] 保存依赖链：分镜文档Version→Prompt文档Version（source_version_id）→task/generation_inputs→输出Version（source_version_id指向Prompt）→asset；version_dependencies额外保存源分镜、参考图、合同。分镜/Prompt/媒体是独立内容Resource，不能因为派生而塞入同一Resource；同一媒体修订才在该媒体Resource建新Version。
-- [ ] `go -C gateway test ./internal/pipeline ./internal/tasks ./internal/mcp -v`检查两入口等效门禁与SQL血缘join；提交 `feat(M6.4): lock prompt bytes and enforce preflight lineage`。
+- [x] 编译过程可以由agent按技能生成最终文本，但保存后gateway不再改写。`final_video_prompt.md`文件内容就是将提交的字符串，不额外加标题/frontmatter；合同元数据存支撑表。UI原文视图读取同一版本字节，复制/提交不从Markdown DOM重建文本。
+- [x] Preflight复用capabilities.Validate并检查当前批准、资产存在及类型/数量、参数白名单、总时长/画幅、音频需求、明确占位符列表；检查结果逐项可读。模板编译记录未解析变量列表，辅以限定占位符语法检测，不用“包含中括号即失败”的粗略规则。
+- [x] 所有流水线请求绑定pipeline/contract，不能通过通用execute去掉字段绕过门禁：按目标Composition与活跃流水线关联查验。普通非流水线图像任务仍可运行。worker临提交前再次核对批准与合同并完成原子准入；批准后的新编辑只影响尚未准入的执行。
+- [x] 保存依赖链：分镜文档Version→Prompt文档Version（source_version_id）→task/generation_inputs→输出Version（source_version_id指向Prompt）→asset；version_dependencies额外保存源分镜、参考图、合同。分镜/Prompt/媒体是独立内容Resource，不能因为派生而塞入同一Resource；同一媒体修订才在该媒体Resource建新Version。
+- [x] `go -C gateway test ./internal/pipeline ./internal/tasks ./internal/mcp -v`检查两入口等效门禁与SQL血缘join；提交 `feat(M6.4): lock prompt bytes and enforce preflight lineage`。
 
 ### Task M6.5：失败回流与一句话工作流集成
 
