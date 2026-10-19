@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/testsupport"
 	"strings"
 	"testing"
 )
@@ -15,6 +17,16 @@ func TestStoryboardRecoveryCASAndFrozenActor(t *testing.T) {
 	for _, point := range []string{"prepare", "archive", "before_commit", "after_commit"} {
 		t.Run(point, func(t *testing.T) {
 			f := setup(t)
+			testsupport.CreativeUpstream(t, f.db, f.p, "film", func(raw []byte) error {
+				r, e := f.s.WriteDocument(ctx, f.p, raw)
+				if e != nil {
+					return e
+				}
+				if r.Delivery.Status != "completed" {
+					return fmt.Errorf("%+v", r)
+				}
+				return nil
+			})
 			s := pipeline.Storyboard{Panels: []pipeline.Panel{{ID: "p", TimeMS: 0, Framing: "近景", Action: "口播", Transition: "连续"}}, Shots: []pipeline.Shot{{ID: "s", StartMS: 0, EndMS: 2000, PanelIDs: []string{"p"}, NarrativeRole: "讲述", StartState: "开始", EndState: "结束"}}, Timeline: pipeline.Timeline{DurationMS: 2000, ShotIDs: []string{"s"}, AudioIntent: "口播音乐"}}
 			in := DocumentRequest{RequestID: "typed", Mode: "create", Format: "md", TypedDocument: &pipeline.Document{Kind: "storyboard", PipelineID: "film", Storyboard: s}, Output: f.input(t, "unused").Output}
 			raw, _ := json.Marshal(in)
@@ -29,7 +41,7 @@ func TestStoryboardRecoveryCASAndFrozenActor(t *testing.T) {
 				t.Fatalf("fault %+v %v", first, e)
 			}
 			var key string
-			if e = f.db.QueryRow("SELECT request_id FROM deliveries WHERE project_id=?", f.p).Scan(&key); e != nil {
+			if e = f.db.QueryRow("SELECT 'document-'||json_extract(response_json,'$.Key') FROM write_requests WHERE project_id=? AND operation='document.write' AND request_id='typed'", f.p).Scan(&key); e != nil {
 				t.Fatal(e)
 			}
 			// Restart-equivalent fresh opposite-actor instance enters generic Recover.
@@ -86,7 +98,7 @@ func TestStoryboardRecoveryCASAndFrozenActor(t *testing.T) {
 			if e != nil || replay.Delivery.Status != "blocked" {
 				t.Fatal(replay, e)
 			}
-			if n := count(t, f.db, "SELECT count(*) FROM versions"); n != 2 {
+			if n := count(t, f.db, "SELECT count(*) FROM versions"); n != 4 {
 				t.Fatal("orphan SQL version", n)
 			}
 			if n := count(t, f.db, "SELECT count(*) FROM storyboard_revisions"); n != 2 {

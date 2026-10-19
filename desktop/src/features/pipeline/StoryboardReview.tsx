@@ -1,3 +1,4 @@
+import {subscribeEvents} from '../../events';
 import {useEffect,useRef,useState} from 'react';
 import {api,APIError,newRequestID} from '../../gateway';
 import {updatePending} from '../chat/messages';
@@ -52,6 +53,8 @@ export function StoryboardReview({projectID,versionID,text}:{projectID:string;ve
    if(r.revision>1){const v=await api<{source_version_id:string|null}>(projectID,`/api/versions?id=${encodeURIComponent(versionID)}`,{signal:abort.signal});if(v.source_version_id){const old=await api<Revision>(projectID,`/api/pipeline/storyboard?versionId=${encodeURIComponent(v.source_version_id)}`,{signal:abort.signal});if(!abort.signal.aborted)setPrevious(old)}}
   }catch(e){if(!abort.signal.aborted&&!(e instanceof APIError&&e.status===404))setError(String(e))}})();return()=>{abort.abort();epoch.current++};
  },[projectID,versionID]);
+ useEffect(()=>{let alive=true;const refresh=()=>{void api<Revision>(projectID,`/api/pipeline/storyboard?versionId=${encodeURIComponent(versionID)}`).then(r=>{if(alive)setRevision(r)}).catch(()=>{})};const stop=subscribeEvents(projectID,e=>{if(e.type==='question_resolved')refresh()},refresh);return()=>{alive=false;stop()}},[projectID,versionID]);
+ const propose=async()=>{if(!revision||lock.current)return;lock.current=true;setBusy(true);const generation=epoch.current;try{await api(projectID,'/api/question',{method:'POST',body:JSON.stringify({requestId:`review-${versionID}`,session_id:'pipeline',kind:'creative',creative:{pipelineId:revision.pipelineId,gate:'storyboard',revision:revision.revision,documentVersionId:versionID,semanticHash:revision.semanticHash}})});if(epoch.current===generation)setError('已提出此版本确认卡，请在待确认事项中批准。')}catch(e){if(epoch.current===generation)setError(String(e)+'；可再次点击，用同一请求核对确认卡。')}finally{lock.current=false;if(epoch.current===generation)setBusy(false)}};
  const save=async(retry=false)=>{
   if(!revision||lock.current||storageError)return;lock.current=true;setBusy(true);setError('');const generation=epoch.current,storageKey=key(projectID,revision.pipelineId);let owned:Pending|null=null;
   const current=()=>epoch.current===generation;
@@ -82,7 +85,7 @@ export function StoryboardReview({projectID,versionID,text}:{projectID:string;ve
  if(!revision)return <>{error&&<p role="alert">{error}</p>}<pre>{text||'读取文档…'}</pre></>;
  const s=revision.storyboard,changed=previous?(['panels','shots','timeline'] as const).filter(k=>JSON.stringify(previous.storyboard[k])!==JSON.stringify(s[k])):[];
  return <section className="storyboard-review" aria-label="语义分镜审阅" style={{padding:12,userSelect:'text'}}>
-  <strong>分镜 revision {revision.revision}</strong><p>未批准 · 人类批准功能待接入；Prompt {revision.promptStatus}</p>
+  <strong>分镜 revision {revision.revision}</strong><p>{revision.approvalStatus==='approved'?'此版本已批准':'未批准'} · Prompt {revision.promptStatus}</p>{revision.currentRevision===revision.revision&&revision.approvalStatus!=='approved'&&<button disabled={busy||!!pending||storageError} onClick={()=>void propose()}>提出此版本批准卡</button>}<p>内容变更会使旧批准失效。已提交任务仍属于其冻结版本，请在任务中心明确决定是否取消。</p>
   <p>变更：{previous?(changed.join('、')||'无语义变化'):revision.revision===1?'首次分镜':'读取前版中'}</p>
   <h4>Master Timeline · {s.timeline.durationMs} ms</h4><p>音轨意图：{s.timeline.audioIntent}</p>
   {s.timeline.shotIds.map(id=>{const shot=s.shots.find(x=>x.id===id)!;return <div key={id}><h4>Logical Shot {id} · {shot.startMs}–{shot.endMs} ms</h4><p>叙事职责：{shot.narrativeRole}<br/>起始：{shot.startState}<br/>结束：{shot.endState}</p>{shot.panelIds.map(pid=>{const p=s.panels.find(x=>x.id===pid)!;return <p key={pid}><b>Panel {pid} · {p.timeMs} ms</b><br/>景别：{p.framing}<br/>主体动作：{p.action}<br/>转场依据：{p.transition}</p>})}</div>})}

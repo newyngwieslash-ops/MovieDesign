@@ -262,7 +262,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 			serveCanvas(w, r, store.Canvas{DB: db})
 			return
 		}
-		if r.URL.Path == "/api/pipeline/storyboard" || r.URL.Path == "/api/documents/write" {
+		if r.URL.Path == "/api/pipeline/storyboard" || r.URL.Path == "/api/pipeline/artifact" || r.URL.Path == "/api/documents/write" {
 			srv.servePipeline(w, r, deliveries)
 			return
 		}

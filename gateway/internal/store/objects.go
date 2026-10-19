@@ -399,6 +399,9 @@ func createObject(ctx context.Context, tx *sql.Tx, p, kind string, raw json.RawM
 		if v.Origin == "" {
 			v.Origin = "agent"
 		}
+		if e = CheckCreativeVersion(ctx, tx, v.ResourceID, id); e != nil {
+			return nil, e
+		}
 		// A revision keeps resource_id; derivation may reference another resource's version in this project.
 		_, err = tx.ExecContext(ctx, `INSERT INTO versions(id,resource_id,asset_id,source_version_id,origin,created_at) VALUES(?,?,?,?,?,?)`, id, v.ResourceID, v.AssetID, v.SourceVersionID, v.Origin, time.Now().UnixMilli())
 	case "assets":
@@ -619,4 +622,18 @@ func CheckFilePending(ctx context.Context, tx *sql.Tx, p string, paths ...string
 		}
 	}
 	return rows.Err()
+}
+
+// Every Delivery path shares this guard. Untyped revisions cannot silently replace
+// an authoritative creative artifact; generic unrelated Resources are unaffected.
+func CheckCreativeVersion(ctx context.Context, tx *sql.Tx, resource, version string) error {
+	var n int
+	e := tx.QueryRowContext(ctx, `SELECT (EXISTS(SELECT 1 FROM creative_artifacts WHERE resource_id=?) OR EXISTS(SELECT 1 FROM pipelines WHERE resource_id=?)) AND NOT (EXISTS(SELECT 1 FROM creative_artifacts WHERE document_version_id=?) OR EXISTS(SELECT 1 FROM storyboard_revisions WHERE document_version_id=?))`, resource, resource, version, version).Scan(&n)
+	if e != nil {
+		return e
+	}
+	if n != 0 {
+		return invalid("Registered creative Resources require typed document revisions")
+	}
+	return nil
 }

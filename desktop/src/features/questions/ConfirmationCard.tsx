@@ -5,7 +5,7 @@ import { subscribeEvents } from '../../events';
 import { readIntent, clearIntent, type Intent } from './pending';
 
 type Info = { header: string; question: string; options: {label: string; description: string}[]; multiple?: boolean; custom?: boolean };
-export type Question = { id: string; project_id: string; session_id: string; task_id?: string; kind: 'billing'|'choice'|'storyboard'|'delivery'|'project_rules'; revision: number; task_revision?: number; state: string; native_send_state?: 'pending'|'sending'|'sent'|'unknown'; questions: Info[]; provider?: string; model?: string; reason?: string; impacts?: string[]; quote?: {basis?: string; quote_id: string; currency: string; estimated_amount: number; minor_unit_scale: number; estimated_credits: number; expires_at: number; version: string; source: string} };
+export type Question = { id: string; project_id: string; session_id: string; task_id?: string; kind: 'billing'|'choice'|'storyboard'|'delivery'|'project_rules'|'creative'; creativeContent?:string; creative?:{pipelineId:string;gate:'intent'|'script'|'storyboard';revision:number;documentVersionId:string;semanticHash:string}; revision: number; task_revision?: number; state: string; native_send_state?: 'pending'|'sending'|'sent'|'unknown'; questions: Info[]; provider?: string; model?: string; reason?: string; impacts?: string[]; quote?: {basis?: string; quote_id: string; currency: string; estimated_amount: number; minor_unit_scale: number; estimated_credits: number; expires_at: number; version: string; source: string} };
 export function ConfirmationCard({question: q, refresh}: {question: Question; refresh: () => void}) {
  const storageKey = `moviedesign.question.pending.v1.${q.project_id}.${q.id}`;
  const [saved] = useState(() => {try {return {intent:readIntent(localStorage,storageKey,q),error:''}} catch(e) {return {intent:null,error:(e as Error).message}}});
@@ -48,24 +48,24 @@ export function ConfirmationCard({question: q, refresh}: {question: Question; re
 
  function decide(reject: boolean) {
   if(!canDecide(q.state,expired,busy,!!intent,!!storageError,reject))return;
-  const selected = q.kind === 'billing' ? [['确认生成']] : answers.map((a,i) => custom[i].trim() ? [...a,custom[i]] : a);
+  const selected = q.creative ? [[q.questions[0].options[0].label]] : q.kind === 'billing' ? [['确认生成']] : answers.map((a,i) => custom[i].trim() ? [...a,custom[i]] : a);
   void send({path:`/api/question/${q.id}/${reject ? 'reject' : 'reply'}?session_id=${encodeURIComponent(q.session_id)}`, body:JSON.stringify({requestId:newRequestID(), answers:reject ? [] : selected, expected_revision:q.revision})});
  }
  function renew() {
   void send({path:'/api/question',body:JSON.stringify({requestId:newRequestID(),kind:'billing',session_id:q.session_id,task_id:q.task_id,task_revision:q.task_revision})});
  }
  return <section className="confirmation-card" aria-label={`${q.kind === 'billing' ? '费用' : q.kind === 'storyboard' ? '分镜' : '选项'}确认`} data-question-id={q.id}>
-  <h3>{q.questions[0]?.header ?? '确认事项'}</h3>
+  <h3>{q.questions[0]?.header ?? '确认事项'}</h3>{q.creative&&<details data-artifact-version={q.creative.documentVersionId}><summary>审阅完整{({intent:'意图',script:'脚本',storyboard:'分镜'} as const)[q.creative.gate]} · revision {q.creative.revision}</summary><pre style={{whiteSpace:'pre-wrap',maxHeight:360,overflow:'auto'}}>{q.creativeContent}</pre><small>Version：{q.creative.documentVersionId} · SHA-256：{q.creative.semanticHash}</small></details>}
   {q.quote && <><p>供应商：{q.provider} · 模型：{q.model}</p><p>预计费用：{q.quote.currency} {(q.quote.estimated_amount / 10 ** q.quote.minor_unit_scale).toFixed(q.quote.minor_unit_scale)} · 积分估算：{q.quote.estimated_credits}</p><p>报价来源：{q.quote.source} · 版本：{q.quote.version}</p><p>有效期至：{new Date(q.quote.expires_at).toLocaleString()}</p></>}
   {q.quote?.basis && <p>{q.quote.basis}</p>}
   {q.impacts?.map((impact,i) => <p key={i}>{impact}</p>)}
   <fieldset disabled={busy || !!intent || !!storageError || !['pending','expired'].includes(q.state)}>
-   {q.questions.map((info,n) => <div key={n}><p>{info.question}</p>{q.kind !== 'billing' && <>{info.options.map(option => <label key={option.label}><input type={info.multiple ? 'checkbox' : 'radio'} name={`${q.id}-${n}`} checked={answers[n]?.includes(option.label) ?? false} onChange={e => {setAnswers(previous => previous.map((a,i) => i !== n ? a : info.multiple ? e.target.checked ? [...a,option.label] : a.filter(v => v !== option.label) : [option.label]));if(!info.multiple)setCustom(previous => previous.map((a,i)=>i===n?'':a));}} />{option.label} — {option.description}</label>)}{info.custom && q.kind === 'choice' && <label>自定义回答<input value={custom[n]} maxLength={4096} onChange={e => {const value=e.target.value;setCustom(previous=>previous.map((a,i)=>i===n?value:a));if(!info.multiple)setAnswers(previous=>previous.map((a,i)=>i===n?[]:a));}} /></label>}</>}</div>)}
-   <button disabled={!canDecide(q.state,expired,busy,!!intent,!!storageError,false)} onClick={() => decide(false)}>{q.kind === 'billing' ? '确认生成' : '提交选择'}</button><button disabled={!canDecide(q.state,expired,busy,!!intent,!!storageError,true)} onClick={() => decide(true)}>拒绝</button>
+   {q.questions.map((info,n) => <div key={n}><p>{info.question}</p>{q.kind !== 'billing' && !q.creative && <>{info.options.map(option => <label key={option.label}><input type={info.multiple ? 'checkbox' : 'radio'} name={`${q.id}-${n}`} checked={answers[n]?.includes(option.label) ?? false} onChange={e => {setAnswers(previous => previous.map((a,i) => i !== n ? a : info.multiple ? e.target.checked ? [...a,option.label] : a.filter(v => v !== option.label) : [option.label]));if(!info.multiple)setCustom(previous => previous.map((a,i)=>i===n?'':a));}} />{option.label} — {option.description}</label>)}{info.custom && q.kind === 'choice' && <label>自定义回答<input value={custom[n]} maxLength={4096} onChange={e => {const value=e.target.value;setCustom(previous=>previous.map((a,i)=>i===n?value:a));if(!info.multiple)setAnswers(previous=>previous.map((a,i)=>i===n?[]:a));}} /></label>}</>}</div>)}
+   <button disabled={!canDecide(q.state,expired,busy,!!intent,!!storageError,false)} onClick={() => decide(false)}>{q.creative ? q.questions[0].options[0].label : q.kind === 'billing' ? '确认生成' : '提交选择'}</button><button disabled={!canDecide(q.state,expired,busy,!!intent,!!storageError,true)} onClick={() => decide(true)}>拒绝</button>
   </fieldset>
   {intent && (!resolved || q.state === 'approved') && <div><p>{q.state === 'approved' ? '批准回执已保存。恢复操作只会启动尚未发送的原任务。' : '存在待确认的原请求。'}</p><button disabled={busy || !!storageError} onClick={refresh}>查询确认状态</button><button disabled={busy || !!storageError} onClick={() => void send(intent)}>{q.state === 'approved' ? '恢复已批准的原任务' : '重发原确认请求'}</button></div>}
   {(expired || q.state === 'expired') && !resolved && <><p role="status">报价已过期，旧确认不可使用。</p><button disabled={busy || !!intent || !!storageError} onClick={renew}>继续并重新报价</button></>}
-  {resolved && <p role="status">{q.state === 'approved' ? '已批准，已记录一次生成意图' : q.state === 'rejected' ? '已拒绝' : q.state === 'answered' ? '已提交选择' : '旧卡片不可使用'}{q.reason ? `：${q.reason}` : ''}</p>}
+  {resolved && <p role="status">{q.state === 'approved' ? q.creative?'此版本已批准；尚未提交生成':'已批准，已记录一次生成意图' : q.state === 'rejected' ? '已拒绝' : q.state === 'answered' ? '已提交选择' : '旧卡片不可使用'}{q.reason ? `：${q.reason}` : ''}</p>}
   {q.native_send_state && <p role="status">原生回答投递：{{pending:'等待人工回执',sending:'正在投递已保存的人工回执',sent:'已送达',unknown:'结果未知；已保存的人工回执不会自动重发'}[q.native_send_state]}</p>}
   {message && <p role="alert">{message}</p>}{storageError && <p role="alert">无法安全保存确认：{storageError}</p>}
  </section>;

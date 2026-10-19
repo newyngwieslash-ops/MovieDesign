@@ -5,6 +5,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/agent"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
@@ -75,11 +76,26 @@ func (s *Server) documents(server *sdk.Server, scope agent.ToolScope) {
 		}
 		return map[string]any{"items": items}, nil
 	})
-	add(s, server, scope, "design_document_write", "Create/replace/atomic exact-anchored patch of md/txt/srt/ass through shared Delivery. For semantic storyboard_review.md use typedDocument {kind:storyboard,pipelineId,expectedRevision,storyboard:{panels,shots,timeline}}; all times integer milliseconds, Shots are narrative chapters, not generated clips. Typed writes render deterministic Markdown; optional complete Markdown content must match typed JSON. Semantic revisions require replace/new_version/baseVersionId of current revision and preserve Resource. Text never grants approval.", func(ctx context.Context, _ delivery.DocumentRequest, raw []byte) (any, error) {
+	add(s, server, scope, "design_document_write", "Create/replace/atomic exact-anchored patch of md/txt/srt/ass through shared Delivery. For intent/script use typedDocument {kind:intent|script,pipelineId,expectedRevision,content}; script requires approved current intent, storyboard requires approved current script. Successful typed writes publish a version-bound human question in the current session; output {document,approvalProposal,question?} reports document commit separately from proposal. Human approval is never inferred from text. For semantic storyboard_review.md use typedDocument {kind:storyboard,pipelineId,expectedRevision,storyboard:{panels,shots,timeline}}; all times integer milliseconds, Shots are narrative chapters, not generated clips. Typed writes render deterministic Markdown; optional complete Markdown content must match typed JSON. Semantic revisions require replace/new_version/baseVersionId of current revision and preserve Resource. Text never grants approval.", func(ctx context.Context, i delivery.DocumentRequest, raw []byte) (any, error) {
 		if s.services.Delivery == nil {
 			return nil, invalid("Delivery unavailable")
 		}
-		return s.services.Delivery.WriteDocument(ctx, scope.ProjectID, raw)
+		r, e := s.services.Delivery.WriteDocument(ctx, scope.ProjectID, raw)
+		if e != nil || i.TypedDocument == nil || r.Delivery.Status != "completed" {
+			return r, e
+		}
+		if s.services.Questions == nil {
+			return map[string]any{"document": r, "approvalProposal": "pending", "reason": "Question service unavailable; retry the original document request"}, nil
+		}
+		b, e := pipeline.BindingForVersion(ctx, s.services.Questions.DB, scope.ProjectID, r.Delivery.Versions[0].VersionID)
+		if e != nil {
+			return map[string]any{"document": r, "approvalProposal": "blocked", "reason": e.Error()}, nil
+		}
+		q, e := s.services.Questions.ProposeCreative(ctx, scope.ProjectID, scope.SessionID, i.RequestID, b)
+		if e != nil {
+			return map[string]any{"document": r, "approvalProposal": "pending", "reason": e.Error()}, nil
+		}
+		return map[string]any{"document": r, "approvalProposal": "proposed", "question": q}, nil
 	})
 	add(s, server, scope, "design_project_rules", "Read long-term rules or propose a complete replacement only when user explicitly requested persistence. Save returns a human card; only its human receipt commits. Read/merge current opaque revision first.", func(ctx context.Context, i rulesInput, _ []byte) (any, error) {
 		if s.services.Questions == nil {

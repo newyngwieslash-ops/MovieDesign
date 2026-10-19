@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"net/http"
 	"strings"
@@ -40,18 +41,19 @@ func serveQuestions(w http.ResponseWriter, r *http.Request, s *questions.Service
 	if r.URL.Path == "/api/question" {
 		// Public creation cannot provide prices, approval state, source or actor.
 		in, e := DecodeJSON[struct {
-			RequestID    string           `json:"requestId"`
-			SessionID    string           `json:"session_id"`
-			TaskID       string           `json:"task_id,omitempty"`
-			Kind         string           `json:"kind"`
-			TaskRevision int64            `json:"task_revision,omitempty"`
-			Questions    []questions.Info `json:"questions,omitempty"`
+			Creative     *pipeline.Binding `json:"creative,omitempty"`
+			RequestID    string            `json:"requestId"`
+			SessionID    string            `json:"session_id"`
+			TaskID       string            `json:"task_id,omitempty"`
+			Kind         string            `json:"kind"`
+			TaskRevision int64             `json:"task_revision,omitempty"`
+			Questions    []questions.Info  `json:"questions,omitempty"`
 		}](w, r)
 		if e != nil || scope.Has("session_id") && session != in.SessionID {
 			reject(w, 400, "invalid_input", "Invalid question schema/scope")
 			return
 		}
-		q, e := s.Ask(r.Context(), p, questions.Question{RequestID: in.RequestID, SessionID: in.SessionID, TaskID: in.TaskID, Kind: in.Kind, TaskRevision: in.TaskRevision, Questions: in.Questions})
+		q, e := s.Ask(r.Context(), p, questions.Question{Creative: in.Creative, RequestID: in.RequestID, SessionID: in.SessionID, TaskID: in.TaskID, Kind: in.Kind, TaskRevision: in.TaskRevision, Questions: in.Questions})
 		if e != nil {
 			generationError(w, e)
 			return

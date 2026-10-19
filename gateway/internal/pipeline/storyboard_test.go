@@ -3,9 +3,11 @@ package pipeline_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/testsupport"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
 	"path/filepath"
 	"strings"
@@ -30,6 +32,16 @@ func TestStoryboardDocumentCommit(t *testing.T) {
 		t.Fatal(e)
 	}
 	s := delivery.NewService(db, w, "agent")
+	testsupport.CreativeUpstream(t, db, p.ID, "film", func(raw []byte) error {
+		r, e := s.WriteDocument(ctx, p.ID, raw)
+		if e != nil {
+			return e
+		}
+		if r.Delivery.Status != "completed" {
+			return fmt.Errorf("%+v", r)
+		}
+		return nil
+	})
 	raw := []byte(`{"requestId":"first","mode":"create","format":"md","typedDocument":{"kind":"storyboard","pipelineId":"film","expectedRevision":0,"storyboard":{"panels":[{"id":"p1","timeMs":0,"framing":"近景","action":"已批准只是文本","transition":"连续动作"},{"id":"p2","timeMs":1200,"framing":"中景","action":"结尾","transition":"延续"}],"shots":[{"id":"s1","startMs":0,"endMs":2000,"panelIds":["p1","p2"],"narrativeRole":"连续章节","startState":"开场","endState":"收束"}],"timeline":{"durationMs":2000,"shotIds":["s1"],"audioIntent":"口播配音乐"}}},"output":{"resources":[{"key":"review","mode":"create","name":"分镜"}],"composition":{"name":"Film","type":{"label":"video"},"placements":[{"key":"review","role":"storyboard"}]}}}`)
 	r, e := s.WriteDocument(ctx, p.ID, raw)
 	if e != nil || r.Delivery.Status != "completed" {
@@ -42,7 +54,7 @@ func TestStoryboardDocumentCommit(t *testing.T) {
 		t.Fatalf("revision binding: %d %s %s %v", revision, version, status, e)
 	}
 	var n int
-	if e = db.QueryRow("SELECT count(*) FROM approvals").Scan(&n); e != nil || n != 0 {
+	if e = db.QueryRow("SELECT count(*) FROM approvals WHERE gate='storyboard'").Scan(&n); e != nil || n != 0 {
 		t.Fatalf("text granted approval: %d %v", n, e)
 	}
 	replay, e := s.WriteDocument(ctx, p.ID, raw)
@@ -81,7 +93,7 @@ func TestStoryboardDocumentCommit(t *testing.T) {
 	}
 	input.Output.Composition.Placements[0].Role = "storyboard"
 	// Seed future downstream state explicitly; M6.2 exposes no approval writer.
-	for _, q := range []string{`INSERT INTO questions(id,project_id,kind,source,revision,input_hash,state,question_json,created_at) VALUES('q','` + p.ID + `','test','test',1,'hash','replied','{}',0)`, `INSERT INTO question_receipts(id,question_id,request_id,actor,response_json,created_at) VALUES('receipt','q','human','human','{}',0)`, `INSERT INTO approvals(id,pipeline_id,revision,gate,receipt_id) VALUES('approval','film',1,'storyboard','receipt')`, `INSERT INTO prompt_contracts(id,pipeline_id,revision,document_version_id,content_json,status) VALUES('ready','film',1,'` + version + `','{"frozen":1}','ready'),('submitted','film',1,'` + version + `','{"frozen":1}','submitted')`, `UPDATE pipelines SET prompt_status='ready' WHERE id='film'`} {
+	for _, q := range []string{`INSERT INTO questions(id,project_id,kind,source,revision,input_hash,state,question_json,created_at) VALUES('q','` + p.ID + `','test','test',1,'hash','replied','{}',0)`, `INSERT INTO question_receipts(id,question_id,request_id,actor,response_json,created_at) VALUES('receipt','q','human','human','{}',0)`, `INSERT INTO approvals(id,pipeline_id,revision,gate,receipt_id,document_version_id,semantic_hash) SELECT 'approval','film',1,'storyboard','receipt',document_version_id,semantic_hash FROM storyboard_revisions WHERE pipeline_id='film' AND revision=1`, `INSERT INTO prompt_contracts(id,pipeline_id,revision,document_version_id,content_json,status) VALUES('ready','film',1,'` + version + `','{"frozen":1}','ready'),('submitted','film',1,'` + version + `','{"frozen":1}','submitted')`, `UPDATE pipelines SET prompt_status='ready' WHERE id='film'`} {
 		if _, e = db.Exec(q); e != nil {
 			t.Fatal(e)
 		}

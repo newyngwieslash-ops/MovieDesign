@@ -11,7 +11,7 @@ import (
 )
 
 func pipelineMethod(path, method string) bool {
-	return path == "/api/pipeline/storyboard" && method == "GET" || path == "/api/documents/write" && method == "POST"
+	return (path == "/api/pipeline/storyboard" || path == "/api/pipeline/artifact") && method == "GET" || path == "/api/documents/write" && method == "POST"
 }
 func (s *Server) servePipeline(w http.ResponseWriter, r *http.Request, d *delivery.Service) {
 	if !pipelineMethod(r.URL.Path, r.Method) {
@@ -37,6 +37,15 @@ func (s *Server) servePipeline(w http.ResponseWriter, r *http.Request, d *delive
 	if r.Method == "GET" {
 		if q.Get("versionId") == "" {
 			reject(w, 400, "invalid_input", "versionId is required")
+			return
+		}
+		if r.URL.Path == "/api/pipeline/artifact" {
+			b, e := pipeline.BindingForVersion(r.Context(), s.db, p, q.Get("versionId"))
+			if e != nil {
+				objectError(w, e)
+				return
+			}
+			respond(w, 200, b)
 			return
 		}
 		v, e := pipeline.ReadVersion(r.Context(), s.db, p, q.Get("versionId"))

@@ -9,6 +9,7 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/testsupport"
 	"image"
 	"image/png"
 	"strings"
@@ -162,10 +163,21 @@ func TestDocumentReadRulesAndCatalogTools(t *testing.T) {
 
 func TestStoryboardMCP(t *testing.T) {
 	f := setup(t)
+	f.server.services.Questions = questions.NewService(f.db, f.tasks, f.tasks.Events)
 	f.server.services.Delivery = delivery.NewService(f.db, f.providers.Files.Workspace, "agent")
+	testsupport.CreativeUpstream(t, f.db, f.scope.ProjectID, "film", func(raw []byte) error {
+		r, e := f.server.services.Delivery.WriteDocument(context.Background(), f.scope.ProjectID, raw)
+		if e != nil {
+			return e
+		}
+		if r.Delivery.Status != "completed" {
+			return fmt.Errorf("%+v", r)
+		}
+		return nil
+	})
 	raw := `{"requestId":"storyboard","mode":"create","format":"md","typedDocument":{"kind":"storyboard","pipelineId":"film","expectedRevision":0,"storyboard":{"panels":[{"id":"p","timeMs":0,"framing":"close","action":"speak","transition":"continuous"}],"shots":[{"id":"s","startMs":0,"endMs":2000,"panelIds":["p"],"narrativeRole":"intro","startState":"start","endState":"end"}],"timeline":{"durationMs":2000,"shotIds":["s"],"audioIntent":"none"}}},` + output + `}`
 	r := call(t, f.client, "design_document_write", raw)
-	if r["error"] != nil || r["delivery"].(map[string]any)["status"] != "completed" {
+	if r["error"] != nil || r["document"].(map[string]any)["delivery"].(map[string]any)["status"] != "completed" {
 		t.Fatal(r)
 	}
 	var n int

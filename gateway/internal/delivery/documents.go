@@ -65,7 +65,7 @@ func (s *Service) WriteDocument(ctx context.Context, p string, raw []byte) (Rece
 		if e = i.TypedDocument.Validate(); e != nil {
 			return Receipt{}, e
 		}
-		if len(fields["content"]) != 0 {
+		if len(fields["content"]) != 0 && i.TypedDocument.Kind == "storyboard" {
 			candidate, err := pipeline.ParseMarkdown(i.Content)
 			if err != nil {
 				return Receipt{}, err
@@ -76,7 +76,10 @@ func (s *Service) WriteDocument(ctx context.Context, p string, raw []byte) (Rece
 				return Receipt{}, invalid("Markdown candidate and typed storyboard disagree")
 			}
 		}
-		i.Content = i.TypedDocument.Storyboard.Render()
+		if i.TypedDocument.Kind != "storyboard" && len(fields["content"]) != 0 && i.Content != i.TypedDocument.Render() {
+			return Receipt{}, invalid("Markdown and creative artifact disagree")
+		}
+		i.Content = i.TypedDocument.Render()
 	}
 	if i.TypedDocument == nil && i.Mode != "patch" && (len(fields["content"]) == 0 || string(fields["content"]) == "null") {
 		return Receipt{}, invalid("Create/replace requires explicit complete content")
@@ -209,6 +212,18 @@ func (s *Service) WriteDocument(ctx context.Context, p string, raw []byte) (Rece
 					return json.Marshal(plan)
 				}
 			}
+			if i.TypedDocument != nil {
+				source, err := pipeline.ApprovedSource(ctx, tx, p, i.TypedDocument.PipelineID, i.TypedDocument.Kind)
+				if err != nil {
+					return nil, err
+				}
+				var plan documentPlan
+				if err = json.Unmarshal(prepared, &plan); err != nil {
+					return nil, err
+				}
+				plan.TypedDocument.SourceVersionID = source
+				return json.Marshal(plan)
+			}
 			return prepared, nil
 		})
 		if e != nil {
@@ -231,7 +246,10 @@ func (s *Service) WriteDocument(ctx context.Context, p string, raw []byte) (Rece
 	files := workspace.NewService(s.db, s.workspace)
 	name := "document." + i.Format
 	if planned.TypedDocument != nil {
-		name = "storyboard_review.md"
+		name = planned.TypedDocument.Kind + ".md"
+		if planned.TypedDocument.Kind == "storyboard" {
+			name = "storyboard_review.md"
+		}
 	}
 	stage, e := files.Stage(ctx, p, requestID, name, strings.NewReader(planned.Content))
 	if e != nil {
@@ -274,6 +292,12 @@ func commitDocument(ctx context.Context, tx *sql.Tx, p, key string, j *journal, 
 	}
 	d := plan.TypedDocument
 	v := versions[0]
+	if _, e = pipeline.Check(ctx, tx, p, *d, plan.Output.Resources[0].BaseVersionID); e != nil {
+		return e
+	}
+	if d.Kind != "storyboard" {
+		return pipeline.SaveArtifact(ctx, tx, p, *d, plan.Output.Resources[0].BaseVersionID, v.ResourceID, v.VersionID)
+	}
 	_, e = pipeline.SaveStoryboard(ctx, tx, store.Scope{ProjectID: p, Operation: "document.write", RequestID: key}, key, d.PipelineID, d.ExpectedRevision, d.Storyboard, plan.Output.Resources[0].BaseVersionID, v.ResourceID, v.VersionID)
 	return e
 }

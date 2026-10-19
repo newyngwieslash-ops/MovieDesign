@@ -46,7 +46,9 @@ type Document struct {
 	Kind             string     `json:"kind"`
 	PipelineID       string     `json:"pipelineId"`
 	ExpectedRevision int64      `json:"expectedRevision"`
-	Storyboard       Storyboard `json:"storyboard"`
+	Storyboard       Storyboard `json:"storyboard,omitempty"`
+	Content          string     `json:"content,omitempty"`
+	SourceVersionID  string     `json:"sourceVersionId,omitempty"`
 }
 type Revision struct {
 	PipelineID        string     `json:"pipelineId"`
@@ -74,12 +76,18 @@ func required(raw []byte, names ...string) error {
 }
 func (d *Document) UnmarshalJSON(raw []byte) error {
 	type plain Document
-	if e := required(raw, "kind", "pipelineId", "expectedRevision", "storyboard"); e != nil {
+	if e := required(raw, "kind", "pipelineId", "expectedRevision"); e != nil {
 		return e
 	}
 	v, e := store.DecodeValue[plain](raw)
 	*d = Document(v)
-	return e
+	if e != nil {
+		return e
+	}
+	if d.Kind == "storyboard" {
+		return required(raw, "storyboard")
+	}
+	return required(raw, "content")
 }
 func (p *Panel) UnmarshalJSON(raw []byte) error {
 	type plain Panel
@@ -116,8 +124,20 @@ func conflict() error {
 	return &store.DomainError{Status: 409, Code: "invalid_input", Message: "Storyboard revision changed; reload and submit a new requestId"}
 }
 func (d Document) Validate() error {
-	if d.Kind != "storyboard" || d.ExpectedRevision < 0 || (store.Scope{ProjectID: d.PipelineID, Operation: "storyboard", RequestID: "validate"}).Validate() != nil {
+	if (d.Kind != "storyboard" && d.Kind != "intent" && d.Kind != "script") || d.ExpectedRevision < 0 || (store.Scope{ProjectID: d.PipelineID, Operation: "storyboard", RequestID: "validate"}).Validate() != nil {
 		return invalid("Invalid typed storyboard identity")
+	}
+	if d.Kind != "storyboard" {
+		if len(d.Storyboard.Panels) != 0 || len(d.Storyboard.Shots) != 0 || d.Storyboard.Timeline.DurationMS != 0 {
+			return invalid("Upstream artifact cannot contain storyboard")
+		}
+		if d.Kind == "intent" && d.SourceVersionID != "" {
+			return invalid("Intent has no upstream source")
+		}
+		return d.ValidateContent()
+	}
+	if d.Content != "" {
+		return invalid("Storyboard uses structured content")
 	}
 	return d.Storyboard.Validate()
 }
@@ -215,9 +235,19 @@ func Check(ctx context.Context, tx *sql.Tx, p string, d Document, base string) (
 	if e := d.Validate(); e != nil {
 		return "", e
 	}
+	if d.Kind != "storyboard" {
+		return checkArtifact(ctx, tx, p, d, base)
+	}
+	source, e := ApprovedSource(ctx, tx, p, d.PipelineID, "storyboard")
+	if e != nil {
+		return "", e
+	}
+	if d.SourceVersionID != "" && source != d.SourceVersionID {
+		return "", conflict()
+	}
 	var project string
 	var current int64
-	e := tx.QueryRowContext(ctx, "SELECT project_id,revision FROM pipelines WHERE id=?", d.PipelineID).Scan(&project, &current)
+	e = tx.QueryRowContext(ctx, "SELECT project_id,revision FROM pipelines WHERE id=?", d.PipelineID).Scan(&project, &current)
 	if errors.Is(e, sql.ErrNoRows) {
 		if d.ExpectedRevision != 0 || base != "" {
 			return "", conflict()
@@ -230,6 +260,12 @@ func Check(ctx context.Context, tx *sql.Tx, p string, d Document, base string) (
 	if project != p || current != d.ExpectedRevision {
 		return "", conflict()
 	}
+	if current == 0 {
+		if base != "" {
+			return "", conflict()
+		}
+		return "", nil
+	}
 	var hash, version string
 	e = tx.QueryRowContext(ctx, "SELECT semantic_hash,document_version_id FROM storyboard_revisions WHERE pipeline_id=? AND revision=?", d.PipelineID, current).Scan(&hash, &version)
 	if e != nil {
@@ -239,7 +275,11 @@ func Check(ctx context.Context, tx *sql.Tx, p string, d Document, base string) (
 		return "", conflict()
 	}
 	_, h := d.Storyboard.encoded()
-	if h == hash {
+	var dependencies int
+	if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM version_dependencies WHERE version_id=? AND source_version_id=? AND kind='creative_source'", version, source).Scan(&dependencies); e != nil {
+		return "", e
+	}
+	if h == hash && dependencies == 1 {
 		return version, nil
 	}
 	return "", nil
@@ -249,7 +289,7 @@ func Check(ctx context.Context, tx *sql.Tx, p string, d Document, base string) (
 // The actual resource/version already exist in this same transaction; no I/O or
 // reentrant DB calls are allowed here. Delivery owns original request/replay.
 func SaveStoryboard(ctx context.Context, tx *sql.Tx, scope store.Scope, requestID, pipelineID string, expectedRevision int64, s Storyboard, base, resource, version string) (Revision, error) {
-	d := Document{"storyboard", pipelineID, expectedRevision, s}
+	d := Document{Kind: "storyboard", PipelineID: pipelineID, ExpectedRevision: expectedRevision, Storyboard: s}
 	if _, e := Check(ctx, tx, scope.ProjectID, d, base); e != nil {
 		return Revision{}, e
 	}
@@ -257,7 +297,7 @@ func SaveStoryboard(ctx context.Context, tx *sql.Tx, scope store.Scope, requestI
 	now := time.Now().UnixMilli()
 	revision := expectedRevision + 1
 	if expectedRevision == 0 {
-		if _, e := tx.ExecContext(ctx, "INSERT INTO pipelines(id,project_id,resource_id) VALUES(?,?,?)", pipelineID, scope.ProjectID, resource); e != nil {
+		if _, e := tx.ExecContext(ctx, "UPDATE pipelines SET resource_id=?3 WHERE id=?1 AND project_id=?2 AND resource_id IS NULL", pipelineID, scope.ProjectID, resource); e != nil {
 			return Revision{}, e
 		}
 	}
@@ -272,10 +312,17 @@ func SaveStoryboard(ctx context.Context, tx *sql.Tx, scope store.Scope, requestI
 	if _, e = tx.ExecContext(ctx, "INSERT INTO storyboard_revisions(pipeline_id,revision,content_json,semantic_hash,document_version_id,created_at) VALUES(?,?,?,?,?,?)", pipelineID, revision, string(b), h, version, now); e != nil {
 		return Revision{}, e
 	}
-	if _, e = tx.ExecContext(ctx, "UPDATE approvals SET valid=0 WHERE pipeline_id=?", pipelineID); e != nil {
+	if e = Invalidate(ctx, tx, scope.ProjectID, pipelineID, "storyboard"); e != nil {
 		return Revision{}, e
 	}
 	if _, e = tx.ExecContext(ctx, "UPDATE prompt_contracts SET status='invalidated' WHERE pipeline_id=? AND status IN ('pending','ready')", pipelineID); e != nil {
+		return Revision{}, e
+	}
+	source, e := ApprovedSource(ctx, tx, scope.ProjectID, pipelineID, "storyboard")
+	if e != nil {
+		return Revision{}, e
+	}
+	if _, e = tx.ExecContext(ctx, "INSERT INTO version_dependencies(version_id,source_version_id,kind) VALUES(?,?,'creative_source')", version, source); e != nil {
 		return Revision{}, e
 	}
 	if base != "" {
@@ -299,5 +346,12 @@ func ReadVersion(ctx context.Context, db *sql.DB, p, version string) (Revision, 
 		return r, fmt.Errorf("stored storyboard: %w", e)
 	}
 	r.ApprovalStatus = "unapproved"
+	var approved int
+	if e = db.QueryRowContext(ctx, "SELECT count(*) FROM approvals WHERE pipeline_id=? AND gate='storyboard' AND revision=? AND document_version_id=? AND semantic_hash=? AND valid=1", r.PipelineID, r.Revision, version, r.SemanticHash).Scan(&approved); e != nil {
+		return r, e
+	}
+	if approved > 0 && r.CurrentRevision == r.Revision {
+		r.ApprovalStatus = "approved"
+	}
 	return r, nil
 }

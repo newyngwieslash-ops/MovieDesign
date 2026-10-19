@@ -15,7 +15,7 @@ function harness(map=new Map(),denied=false){let cursor=0,tree;const hooks=[],ef
  class APIError extends Error{constructor(status){super('rejected');this.status=status}}
  const gateway={APIError,newRequestID:()=>crypto.randomUUID(),api:(p,path,init={})=>{if(init.method==='POST')return new Promise((resolve,reject)=>writes.push({p,path,body:init.body,resolve,reject}));reads.push(path);return Promise.resolve(path.includes('/pipeline/')?{pipelineId:'film',revision:1,currentRevision:1,storyboard:board,promptStatus:'pending'}:path.includes('/versions')?{resource_id:'r'}:path.includes('/resources')?{composition_id:'c'}:{name:'Film',type_id:'t'})}};
  const jsx=(type,props)=>({type,props});const helpers=load('features/chat/messages.ts',{});
- const {StoryboardReview}=load('features/pipeline/StoryboardReview.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'../../gateway':gateway,'../chat/messages':helpers},{localStorage:storage});
+ const {StoryboardReview}=load('features/pipeline/StoryboardReview.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'../../gateway':gateway,'../../events':{subscribeEvents:()=>()=>{}},'../chat/messages':helpers},{localStorage:storage});
  const render=()=>{cursor=0;tree=StoryboardReview({projectID:'p',versionID:'v',text:'# review\n```json\n'+JSON.stringify(board)+'\n```'});while(effects.length)effects.shift()();return tree};
  const settle=async()=>{for(let i=0;i<6;i++){render();await tick()}render()};
  const button=label=>find(render(),n=>n.type==='button'&&n.props.children===label);

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
@@ -30,24 +31,26 @@ type Info struct {
 	Custom   bool     `json:"custom,omitempty"`
 }
 type Question struct {
-	Rules           *RulesChange     `json:"rules,omitempty"`
-	NativeSendState string           `json:"native_send_state,omitempty"`
-	ID              string           `json:"id"`
-	ProjectID       string           `json:"project_id"`
-	RequestID       string           `json:"requestId,omitempty"`
-	SessionID       string           `json:"session_id"`
-	TaskID          string           `json:"task_id,omitempty"`
-	Kind            string           `json:"kind"`
-	Revision        int64            `json:"revision"`
-	TaskRevision    int64            `json:"task_revision,omitempty"`
-	InputHash       string           `json:"input_hash"`
-	State           string           `json:"state"`
-	Questions       []Info           `json:"questions"`
-	Quote           *providers.Quote `json:"quote,omitempty"`
-	Provider        string           `json:"provider,omitempty"`
-	Model           string           `json:"model,omitempty"`
-	Impacts         []string         `json:"impacts,omitempty"`
-	Reason          string           `json:"reason,omitempty"`
+	CreativeContent string            `json:"creativeContent,omitempty"`
+	Creative        *pipeline.Binding `json:"creative,omitempty"`
+	Rules           *RulesChange      `json:"rules,omitempty"`
+	NativeSendState string            `json:"native_send_state,omitempty"`
+	ID              string            `json:"id"`
+	ProjectID       string            `json:"project_id"`
+	RequestID       string            `json:"requestId,omitempty"`
+	SessionID       string            `json:"session_id"`
+	TaskID          string            `json:"task_id,omitempty"`
+	Kind            string            `json:"kind"`
+	Revision        int64             `json:"revision"`
+	TaskRevision    int64             `json:"task_revision,omitempty"`
+	InputHash       string            `json:"input_hash"`
+	State           string            `json:"state"`
+	Questions       []Info            `json:"questions"`
+	Quote           *providers.Quote  `json:"quote,omitempty"`
+	Provider        string            `json:"provider,omitempty"`
+	Model           string            `json:"model,omitempty"`
+	Impacts         []string          `json:"impacts,omitempty"`
+	Reason          string            `json:"reason,omitempty"`
 }
 type HumanReply struct {
 	RequestID        string     `json:"requestId"`
@@ -245,6 +248,15 @@ func validate(q Question) error {
 // to an existing waiting task. Billing content/price is always generated here.
 func (s *Service) Ask(ctx context.Context, p string, q Question) (Question, error) {
 	var result Question
+	if q.Creative != nil {
+		if q.Kind != "creative" || q.TaskID != "" || len(q.Questions) != 0 || q.Rules != nil || q.Quote != nil {
+			return result, fail(400, "Creative proposal accepts binding only")
+		}
+		return s.ProposeCreative(ctx, p, q.SessionID, q.RequestID, *q.Creative)
+	}
+	if q.Rules != nil {
+		return result, fail(400, "Use typed rule proposal")
+	}
 	if e := scope(p, q.RequestID); e != nil {
 		return result, e
 	}
@@ -453,7 +465,7 @@ func (s *Service) Reply(ctx context.Context, p, id string, i HumanReply) (Receip
 		}
 		q.Revision++
 		q.State = "answered"
-		if q.Kind == "billing" || q.Kind == "delivery" {
+		if q.Kind == "billing" || q.Kind == "delivery" || q.Kind == "creative" {
 			q.State = "approved"
 		}
 		if i.Reject {
@@ -479,6 +491,14 @@ func (s *Service) Reply(ctx context.Context, p, id string, i HumanReply) (Receip
 		if _, e = tx.ExecContext(ctx, "INSERT INTO question_receipts(id,question_id,request_id,actor,response_json,created_at)VALUES(?,?,?,'human',?,?)", receipt.ID, id, i.RequestID, string(b), time.Now().UnixMilli()); e != nil {
 			return nil, e
 		}
+		if q.Kind == "creative" && !i.Reject {
+			if q.Creative == nil {
+				return nil, fail(409, "Creative binding missing")
+			}
+			if _, e = pipeline.ApproveStoryboard(ctx, tx, pipeline.HumanReceipt{ProjectID: p, QuestionID: id, ReceiptID: receipt.ID, Binding: *q.Creative}); e != nil {
+				return nil, e
+			}
+		}
 		if e = events.Append(ctx, tx, p, q.SessionID, q.TaskID, "question_resolved", saved); e != nil {
 			return nil, e
 		}
@@ -487,7 +507,7 @@ func (s *Service) Reply(ctx context.Context, p, id string, i HumanReply) (Receip
 	if e == nil {
 		e = json.Unmarshal(out, &receipt)
 		s.Events.Notify()
-		if e == nil && receipt.State == "approved" {
+		if e == nil && receipt.State == "approved" && receipt.TaskID != "" {
 			_ = s.Tasks.Dispatch(p, receipt.TaskID)
 		}
 	}

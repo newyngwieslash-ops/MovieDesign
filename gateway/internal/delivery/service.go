@@ -626,6 +626,11 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 	if e = commitDocument(ctx, tx, p, key, j, r.Delivery.Versions); e != nil {
 		return Receipt{}, e
 	}
+	for _, v := range r.Delivery.Versions {
+		if e = store.CheckCreativeVersion(ctx, tx, v.ResourceID, v.VersionID); e != nil {
+			return Receipt{}, e
+		}
+	}
 	if pl.Sources[0].Task != nil {
 		if s.CompleteTask == nil {
 			return Receipt{}, invalid("Task completion is not installed")
