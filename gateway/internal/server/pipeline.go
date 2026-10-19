@@ -108,6 +108,9 @@ func (s *Server) servePipeline(w http.ResponseWriter, r *http.Request, d *delive
 			objectError(w, e)
 			return
 		}
+		if s.events != nil {
+			s.events.Notify()
+		}
 		respond(w, 200, map[string]any{"contract": contract, "preflight": report})
 		return
 	}

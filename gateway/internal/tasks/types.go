@@ -3,6 +3,7 @@ package tasks
 import (
 	"encoding/json"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 )
@@ -112,17 +113,19 @@ type Output struct {
 	VersionID     *string `json:"version_id,omitempty"`
 }
 type TaskView struct {
-	RequestID    string   `json:"request_id"`
-	ID           string   `json:"id"`
-	CapabilityID string   `json:"capability_id"`
-	Status       Status   `json:"status"`
-	Revision     int64    `json:"revision"`
-	Prompt       string   `json:"prompt"`
-	Outputs      []Output `json:"outputs"`
-	Problem      *Problem `json:"problem,omitempty"`
-	Actions      []string `json:"actions"`
-	Progress     Progress `json:"progress"`
-	Billing      Billing  `json:"billing"`
+	RequestID    string                  `json:"request_id"`
+	ID           string                  `json:"id"`
+	CapabilityID string                  `json:"capability_id"`
+	ContractID   string                  `json:"contract_id,omitempty"`
+	Status       Status                  `json:"status"`
+	Revision     int64                   `json:"revision"`
+	Prompt       string                  `json:"prompt"`
+	Outputs      []Output                `json:"outputs"`
+	Problem      *Problem                `json:"problem,omitempty"`
+	Recovery     *pipeline.RecoveryState `json:"recovery,omitempty"`
+	Actions      []string                `json:"actions"`
+	Progress     Progress                `json:"progress"`
+	Billing      Billing                 `json:"billing"`
 }
 
 func invalid(message string) error {

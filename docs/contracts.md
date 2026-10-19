@@ -634,3 +634,26 @@ This is an explicit MovieDesign typed port addition. The existing 18 design tool
    - On task output delivery (`delivery.Service.commit`), `RecordTaskDeliveryLineage` sets `versions.source_version_id = prompt_version_id` on delivered media versions and inserts `version_dependencies` rows for `(media_version_id, prompt_version_id, 'prompt_contract')`, `(media_version_id, storyboard_version_id, 'storyboard_source')`, and `(media_version_id, ref_version_id, 'reference:<index>')`.
    - `GET /api/pipeline/lineage?project_id=P&versionId=V` (or `assetId` / `taskId` / `contractId` / `pipelineId`) returns the complete SQL-backed lineage chain (`intent` → `script` → `storyboard` → `prompt` → `contract` → `task` → `outputs` + `dependencies`). Deleting any referenced project, resource, version, or asset returns `409 Conflict`.
 
+## M6.5: failure classification, revisioned return paths, and one-sentence workflow
+
+This is an explicit MovieDesign typed port addition. The existing 18 design tools and native `question` permission remain unchanged.
+
+1. **Failure Classification & Authoritative Recovery Actions (`gateway/internal/pipeline/recovery.go`)**:
+   - `ClassifyFailure(problem)` maps a task or preflight failure to a recommended return stage (`parameter | semantic | upstream | unknown`):
+     - `unknown`: submission outcome uncertain (`Unknown == true` or `SUBMISSION_OUTCOME_UNKNOWN`). Never enters a generator or permits `retry`; server actions are `["query", "cancel"]` (`recommendedAction = "query"`).
+     - `semantic`: stale or invalidated creative approvals (`STALE_CREATIVE_APPROVAL`, `STALE_PROMPT_REVISION`), content policy rejection, or narrative/duration/audio intent incompatibility. Server actions are `["modify_storyboard"]` (`recommendedAction = "modify_storyboard"`).
+     - `parameter`: invalid capability parameter, resolution/size/aspect mismatch, or reference limit error where approved storyboard semantics remain valid. Server actions are `["modify_params", "modify_storyboard"]` (`recommendedAction = "modify_params"`).
+     - `upstream`: temporary provider rate limit (`429`), `5xx`, network error before acceptance, or local delivery collection pause (`RESULT_AWAITING_DELIVERY`). Never auto-retries. For pipeline-bound provider failures, server actions are `["retry", "modify_params", "modify_storyboard"]` (`recommendedAction = "retry"`); for local delivery collection (`source == "delivery"`), server actions remain `["retry"]`.
+
+2. **Durable Recovery Receipts & Stage Transitions (`POST /api/tasks/:id/resolve`)**:
+   - `tasks.Service.Resolve` accepts `action` in `{"retry", "cancel", "query", "modify_params", "modify_storyboard"}` gated by `expected_revision` and idempotent `store.WriteRequest`.
+   - Every human recovery choice records a `RecoveryState` receipt (`stage`, `recommendedAction`, `selectedAction`, `targetStage`, `receiptId`, `requestId`, `fromTaskId`, `fromContractId`, `pipelineId`, `storyboardVersionId`, `promptVersionId`, `updatedAt`) inside `tasks.result_json`:
+     - `"modify_params"`: preserves current storyboard revision and valid human approval; surfaces `RecoveryState` on `GET /api/pipeline/prompt` (`PromptReview.tsx`) so the user can compile a new `PromptContract` (`POST /api/pipeline/compile` with `fromTaskId` and `fromContractId`) on the same storyboard revision.
+     - `"modify_storyboard"`: surfaces `RecoveryState` on `GET /api/pipeline/storyboard` (`StoryboardReview.tsx`) so the user edits and saves a new storyboard revision (which directionally invalidates old storyboard and prompt approvals while preserving upstream `intent` and `script` approvals).
+     - `"retry"`: allowed only when `"retry"` is in `task.actions` (never for `parameter`, `semantic`, or `unknown`). Replays the exact frozen `generation_inputs` (`prompt`, `prompt_sha256`, `params`, `references`, `output`, `provider`) into a new billing-gated attempt (`waiting_user`) without altering any input bytes.
+     - `"query"`: allowed only on `unknown` tasks; invokes `Executor.Query` read-only (`reconcileUnknown`) to reconcile upstream status without ever calling `Executor.Submit`.
+
+3. **M3 Editor Media Revisions & Offline M6 Video Boundary**:
+   - Delivered media Versions produced by a `submitted` `PromptContract` can enter the M3 `ImageEditor` (annotation + mask repair `mode: "new_version"` on the same media `Resource`). `RecordTaskDeliveryLineage` records `(new_media_version_id, base_media_version_id, 'media_revision')` and `TraceLineage` includes descendant media revisions on the same `Resource` in the SQL lineage graph.
+   - In M6, `video:*` capabilities are supported for offline storyboard review, approval, and 7-gate `PromptContract` compilation (`PromptReview.tsx` explicitly marks the M6 video execution adapter as test-only / pending M7.1 `ark-video` integration).
+

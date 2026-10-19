@@ -1,6 +1,6 @@
 # 里程碑验收
 
-完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)。M2–M4 已通过全量检查与独立整阶段审查并推送。M5.1–M5.5 单任务复审均通过，整M5审查问题在9f497a6修复并复审通过，main@bb20c6f已推送核验；M6.1–M6.3工程任务复审通过，M6.4实施中，其余M6–M7待实施。真实凭据支持的LLM、图像和视频验收未执行。计划中的命令不是已执行结果，各阶段证据另行记录。
+完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)。M2–M4 已通过全量检查与独立整阶段审查并推送。M5.1–M5.5 单任务复审均通过，整M5审查问题在9f497a6修复并复审通过，main@bb20c6f已推送核验；M6.1–M6.4工程任务复审通过，M6.5已完成实施与原生回归并等待独立审查，其余M7待实施。真实凭据支持的LLM、图像和视频验收未执行。计划中的命令不是已执行结果，各阶段证据另行记录。
 
 | 里程碑 | 范围 | 状态 |
 | --- | --- | --- |
@@ -9,7 +9,7 @@
 | M3 | 八图形编辑器、历史、标注、持久创作画布 | 验证通过 |
 | M4 | 图像模型、能力契约、任务状态机、计费与事件 | 工程验收与整阶段复审通过；真实调用未执行 |
 | M5 | opencode、MCP、提示词、聊天与确认卡 | 单任务与整阶段工程复审通过，真实调用未执行；远程交付见后文 |
-| M6 | 两个技能、分镜批准、Prompt 锁定与 Preflight | M6.1–M6.3任务复审通过，M6.4接续；整阶段未完成 |
+| M6 | 两个技能、分镜批准、Prompt 锁定与 Preflight | M6.1–M6.4任务复审通过，M6.5待独立审查；整阶段审查待执行 |
 | M7 | 视频、任务中心完善、更新策略 | 待实施 |
 
 ## M1 验收项
@@ -274,3 +274,14 @@ M6.2 独立审查先发现I1：损坏冻结请求缺Composition仍能POST并在4
 
 全量scripts/check.ps1通过（Go/vet、79项组件含21项分镜与Prompt契约UI检查、69项TS、前端构建、3项Rust及M1冒烟）；生产构建通过；真实生产WebView＋固定opencode1.19.0三阶段958e6de9b8a94f0e9da52db916616ec2通过（尾随空格与换行逐字节保持、Preflight七项门禁通过、音轨契约与SQL血缘渲染一致、物理重启零修改请求/零残留进程）。清单26源码＋3制品＋8证据SHA-256全部复核一致。继续M6.5失败回流与一句话工作流集成。
 
+### M6.5 失败回流、新版本门禁与一句话工作流集成（2026-10-19，等待独立审查）
+
+实现四条明确失败回流路径（参数错误`parameter`/`modify_params`、语义与创意冲突`semantic`/`modify_storyboard`、上游临时故障`upstream`/`retry`、结果未知`unknown`/`query`），复用既有`write_requests`、`prompt_contracts.content_json`与`tasks.snapshot_json`记录`RecoveryRoute`，五张核心表与000001–000014未变，无新增迁移或业务依赖。
+
+- 参数回流（`modify_params`）：保留当前分镜`revision`与已批准回执，在`PromptReview`输入新参数JSON并调用`POST /api/pipeline/compile`（幂等`requestId`）生成新`PromptContract`，写入`recovery`元数据并使旧未提交合同失效。
+- 语义回流（`modify_storyboard`）：回流至`StoryboardReview`编辑分镜产生新`revision`，原子失效旧分镜批准与未提交合同，要求重新人工批准并生成新`final_video_prompt.md`与新`PromptContract`，禁止静默覆写原分镜或跳过批准。
+- 上游临时故障（`retry`）与未知状态（`query`）：零自动重试；人工点击「原样重试」仅重放冻结输入并进入费用确认卡片；`unknown`状态人工点击「继续查询」执行`reconcileUnknown`只读对账且绝不重发`Executor.Submit`。
+- 明确标注M6视频能力仅做`PromptContract`与七项`Preflight`契约层校验（UI显式渲染`M6 视频适配器状态：仅契约/预检验证（测试专用 fixture；真实 ark-video 执行适配器于 M7.1 交付）`），绝不将M6视频预检冒充真实视频生成验收。
+- 已交付媒体`Version`可直接进入M3图像编辑器执行区域标注、蒙版生成与局部修复（`isDeliveredMediaRevisionEdit`允许已交付媒体Resource追加修订版本），产出同一媒体`Resource`下的新`Version`，并通过`GET /api/pipeline/lineage`保持从`mediaV2`→`mediaV1`→`contract`→`prompt r2`→`storyboard r2`→`script r1`→`intent r1`的完整SQL血缘。
+
+全量`scripts/check.ps1`通过（Go/vet、83项组件含任务回流与分镜/Prompt回流UI检查、71项TS、前端构建、3项Rust及M1冒烟 7cdb99ef64594e4bb290f0901232bee8）；生产构建52.93秒通过；真实生产WebView＋固定opencode1.19.0＋本地合成供应商三阶段`4fd2fc18483f4026b7dfe9c4fb4ab4ef`通过（一句话请求→意图/脚本/分镜三门禁批准→15s口播+配乐视频契约编译与显式测试标注→关键帧图像任务参数回流重编译→语义回流分镜rev2失效旧合同并重批→上游故障零自动重试与人工原样重试交付画布→M3图像编辑器标注蒙版修复生成同Resource新Version→完整SQL血缘与物理重启零控制写、零残留进程）。真实LLM方法遵循、付费供应商调用与真实视频生成仍为**未执行**。

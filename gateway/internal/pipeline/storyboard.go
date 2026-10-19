@@ -52,15 +52,16 @@ type Document struct {
 	Contract         *ContractDraft `json:"contract,omitempty"`
 }
 type Revision struct {
-	PipelineID        string     `json:"pipelineId"`
-	Revision          int64      `json:"revision"`
-	Storyboard        Storyboard `json:"storyboard"`
-	SemanticHash      string     `json:"semanticHash"`
-	DocumentVersionID string     `json:"documentVersionId"`
-	CreatedAt         int64      `json:"createdAt"`
-	CurrentRevision   int64      `json:"currentRevision"`
-	PromptStatus      string     `json:"promptStatus"`
-	ApprovalStatus    string     `json:"approvalStatus"`
+	PipelineID        string         `json:"pipelineId"`
+	Revision          int64          `json:"revision"`
+	Storyboard        Storyboard     `json:"storyboard"`
+	SemanticHash      string         `json:"semanticHash"`
+	DocumentVersionID string         `json:"documentVersionId"`
+	CreatedAt         int64          `json:"createdAt"`
+	CurrentRevision   int64          `json:"currentRevision"`
+	PromptStatus      string         `json:"promptStatus"`
+	ApprovalStatus    string         `json:"approvalStatus"`
+	Recovery          *RecoveryState `json:"recovery,omitempty"`
 }
 
 func required(raw []byte, names ...string) error {
@@ -345,7 +346,7 @@ func SaveStoryboard(ctx context.Context, tx *sql.Tx, scope store.Scope, requestI
 			return Revision{}, e
 		}
 	}
-	return Revision{pipelineID, revision, s, h, version, now, revision, "pending", "unapproved"}, nil
+	return Revision{pipelineID, revision, s, h, version, now, revision, "pending", "unapproved", nil}, nil
 }
 func ReadVersion(ctx context.Context, db *sql.DB, p, version string) (Revision, error) {
 	var r Revision
@@ -368,5 +369,6 @@ func ReadVersion(ctx context.Context, db *sql.DB, p, version string) (Revision, 
 	if approved > 0 && r.CurrentRevision == r.Revision {
 		r.ApprovalStatus = "approved"
 	}
+	r.Recovery = LatestPipelineRecovery(ctx, db, p, r.PipelineID)
 	return r, nil
 }

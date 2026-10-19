@@ -83,6 +83,7 @@ type PromptContract struct {
 	Audio               AudioRequirement  `json:"audio"`
 	Preflight           PreflightReport   `json:"preflight"`
 	TaskID              string            `json:"taskId,omitempty"`
+	Recovery            *RecoveryLink     `json:"recovery,omitempty"`
 	CreatedAt           int64             `json:"createdAt"`
 }
 
@@ -104,6 +105,7 @@ type PromptVersionView struct {
 	CreatedAt          int64           `json:"createdAt"`
 	Contract           *PromptContract `json:"contract,omitempty"`
 	Lineage            *Lineage        `json:"lineage,omitempty"`
+	Recovery           *RecoveryState  `json:"recovery,omitempty"`
 }
 
 func validatePromptContent(content string) error {
@@ -291,5 +293,6 @@ func ReadPromptVersion(ctx context.Context, db *sql.DB, p, versionID string) (Pr
 	if lineage, err := TraceLineage(ctx, db, p, versionID); err == nil {
 		v.Lineage = &lineage
 	}
+	v.Recovery = LatestPipelineRecovery(ctx, db, p, v.PipelineID)
 	return v, nil
 }

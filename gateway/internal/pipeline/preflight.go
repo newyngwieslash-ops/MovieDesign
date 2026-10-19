@@ -51,6 +51,8 @@ type CompileInput struct {
 	References         []string          `json:"references,omitempty"`
 	Placeholders       []string          `json:"placeholders,omitempty"`
 	Audio              *AudioRequirement `json:"audio,omitempty"`
+	FromTaskID         string            `json:"fromTaskId,omitempty"`
+	FromContractID     string            `json:"fromContractId,omitempty"`
 }
 
 type ExecutionCheck struct {
@@ -553,9 +555,9 @@ func preflightTx(ctx context.Context, tx *sql.Tx, projectID string, in CompileIn
 		if audioErr == nil {
 			genAudio, hasGenAudio := params["generate_audio"].(bool)
 			audioMode, hasAudioMode := params["audio_mode"].(string)
-			if !req.RequiresAudio {
+			if !req.RequiresAudio || expectedKind == "image" {
 				if (hasGenAudio && genAudio) || (hasAudioMode && audioMode != "none") {
-					audioErr = invalid("Storyboard timeline audioIntent is silent, but parameters enable audio generation")
+					audioErr = invalid("Still image or silent storyboard cannot enable audio generation parameters")
 				}
 			} else {
 				if !cap.Audio {
@@ -652,6 +654,45 @@ func compileTx(ctx context.Context, tx *sql.Tx, projectID string, in CompileInpu
 	now := time.Now().UnixMilli()
 	contract.ID = uuid.NewString()
 	contract.CreatedAt = now
+	latestRec := LatestPipelineRecovery(ctx, tx, projectID, in.PipelineID)
+	fromTaskID := strings.TrimSpace(in.FromTaskID)
+	fromContractID := strings.TrimSpace(in.FromContractID)
+	if fromTaskID == "" && latestRec != nil && latestRec.SelectedAction == "modify_params" {
+		fromTaskID = latestRec.FromTaskID
+		if fromContractID == "" {
+			fromContractID = latestRec.FromContractID
+		}
+	}
+	if fromTaskID != "" || fromContractID != "" {
+		reqID := in.RequestID
+		receiptID := ""
+		stage := FailureParameter
+		action := "modify_params"
+		if latestRec != nil {
+			if reqID == "" {
+				reqID = latestRec.RequestID
+			}
+			receiptID = latestRec.ReceiptID
+			if latestRec.Stage != "" {
+				stage = latestRec.Stage
+			}
+			if latestRec.SelectedAction != "" {
+				action = latestRec.SelectedAction
+			}
+		}
+		if receiptID == "" && reqID != "" {
+			receiptID = "pipeline.compile." + in.PipelineID + ":" + reqID
+		}
+		contract.Recovery = &RecoveryLink{
+			Stage:          stage,
+			Action:         action,
+			RequestID:      reqID,
+			ReceiptID:      receiptID,
+			FromTaskID:     fromTaskID,
+			FromContractID: fromContractID,
+			CreatedAt:      now,
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE prompt_contracts SET status='invalidated' WHERE pipeline_id=? AND status IN ('pending','ready')`, in.PipelineID); err != nil {
 		return PromptContract{}, report, err
 	}
@@ -739,6 +780,39 @@ func isCompositionPipelineBound(ctx context.Context, tx *sql.Tx, projectID, comp
 	return n > 0, err
 }
 
+func isDeliveredMediaRevisionEdit(ctx context.Context, tx *sql.Tx, projectID string, in ExecutionCheck) bool {
+	if len(in.BaseVersionIDs) == 0 || len(in.References) == 0 || strings.HasPrefix(in.CapabilityID, "video:") {
+		return false
+	}
+	for _, baseVerID := range in.BaseVersionIDs {
+		if baseVerID == "" {
+			return false
+		}
+		var docCount int
+		if err := tx.QueryRowContext(ctx, `SELECT
+			(SELECT count(*) FROM storyboard_revisions WHERE document_version_id=?) +
+			(SELECT count(*) FROM prompt_revisions WHERE document_version_id=?) +
+			(SELECT count(*) FROM creative_artifacts WHERE document_version_id=?)`,
+			baseVerID, baseVerID, baseVerID).Scan(&docCount); err != nil || docCount > 0 {
+			return false
+		}
+		var deliveredCount int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM versions v
+			JOIN resources r ON r.id=v.resource_id
+			JOIN compositions c ON c.id=r.composition_id
+			WHERE v.id=? AND c.project_id=? AND EXISTS(
+				SELECT 1 FROM versions v2
+				JOIN task_outputs o ON o.version_id=v2.id
+				JOIN tasks t ON t.id=o.task_id
+				JOIN prompt_contracts pc ON pc.task_id=t.id
+				WHERE v2.resource_id=v.resource_id AND o.state='delivered' AND pc.status='submitted'
+			)`, baseVerID, projectID).Scan(&deliveredCount); err != nil || deliveredCount == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func hasTargetPipeline(ctx context.Context, tx *sql.Tx, projectID string, in ExecutionCheck) (bool, error) {
 	var totalPipelines int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pipelines WHERE project_id=?`, projectID).Scan(&totalPipelines); err != nil || totalPipelines == 0 {
@@ -746,6 +820,9 @@ func hasTargetPipeline(ctx context.Context, tx *sql.Tx, projectID string, in Exe
 	}
 	if strings.HasPrefix(in.CapabilityID, "video:") {
 		return true, nil
+	}
+	if in.ContractID == "" && isDeliveredMediaRevisionEdit(ctx, tx, projectID, in) {
+		return false, nil
 	}
 	for _, baseVerID := range in.BaseVersionIDs {
 		if baseVerID == "" {

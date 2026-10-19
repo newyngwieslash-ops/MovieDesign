@@ -116,7 +116,8 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 			}
 			v.Status = Failed
 			v.Problem = problem
-			v.Actions = []string{}
+			v.ContractID = a.Input.ContractID
+			applyFailureRecovery(ctx, tx, p, a, &v)
 			v.Progress = Progress{Phase: "paused"}
 			if e = s.save(ctx, tx, p, session, &v, attempt); e != nil {
 				return e
@@ -291,13 +292,13 @@ func (s *Service) finish(a Attempt, out Outcome, callErr error) error {
 		}
 		v.Status = status
 		v.Problem = problem
+		v.ContractID = a.Input.ContractID
 		v.Actions = []string{}
 		v.Progress = Progress{Phase: "paused"}
-		if !Terminal(status) {
+		if status == Failed || status == Unknown {
+			applyFailureRecovery(ctx, tx, a.ProjectID, a, &v)
+		} else if !Terminal(status) {
 			v.Actions = []string{"cancel"}
-		}
-		if status == Failed && problem != nil && problem.Retryable {
-			v.Actions = []string{"retry"}
 		}
 		if status == Running {
 			v.Progress.Phase = "active"
@@ -314,6 +315,27 @@ func (s *Service) finish(a Attempt, out Outcome, callErr error) error {
 		s.Events.Notify()
 	}
 	return e
+}
+
+func applyFailureRecovery(ctx context.Context, tx *sql.Tx, projectID string, a Attempt, v *TaskView) {
+	fp := pipeline.FailureProblem{
+		Status: string(v.Status),
+	}
+	if v.Problem != nil {
+		fp.Source = v.Problem.Source
+		fp.Code = v.Problem.Code
+		fp.Message = v.Problem.Message
+		fp.Retryable = v.Problem.Retryable
+		if v.Problem.Upstream != nil {
+			fp.UpstreamCode = v.Problem.Upstream.Code
+		}
+	}
+	rec, actions := pipeline.BuildTaskRecoveryTx(ctx, tx, projectID, a.TaskID, a.Input.ContractID, fp, v.Recovery)
+	v.Recovery = rec
+	v.Actions = actions
+	if v.Problem != nil && rec != nil && (rec.Stage == pipeline.FailureParameter || rec.Stage == pipeline.FailureSemantic || rec.Stage == pipeline.FailureUnknown) {
+		v.Problem.Retryable = false
+	}
 }
 
 // Recover runs once during process startup after adapters have been installed.

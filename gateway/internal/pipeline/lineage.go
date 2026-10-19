@@ -59,6 +59,7 @@ type Lineage struct {
 	References   []PromptReference   `json:"references"`
 	Outputs      []DeliveredMedia    `json:"outputs"`
 	Dependencies []VersionDependency `json:"dependencies"`
+	Recovery     *RecoveryState      `json:"recovery,omitempty"`
 }
 
 func RecordTaskDeliveryLineage(ctx context.Context, tx *sql.Tx, projectID, taskID string, delivered []DeliveredVersion) error {
@@ -67,6 +68,13 @@ func RecordTaskDeliveryLineage(ctx context.Context, tx *sql.Tx, projectID, taskI
 		FROM prompt_contracts c JOIN pipelines p ON p.id=c.pipeline_id
 		WHERE c.task_id=? AND p.project_id=?`, taskID, projectID).Scan(&rawJSON, &promptVersionID)
 	if errors.Is(err, sql.ErrNoRows) {
+		for _, dv := range delivered {
+			if dv.BaseVersionID != "" && dv.BaseVersionID != dv.VersionID {
+				if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO version_dependencies(version_id,source_version_id,kind) VALUES(?,?,'media_revision')`, dv.VersionID, dv.BaseVersionID); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	}
 	if err != nil {
@@ -198,7 +206,7 @@ func TraceLineage(ctx context.Context, db *sql.DB, projectID, targetID string) (
 	var pipelineID, contractID, promptVersionID, sbVersionID, scriptVersionID, intentVersionID string
 	var sbRevision int64
 
-	// Resolve targetID across delivered media versions, prompt contracts, tasks, prompt revisions, storyboard revisions, creative artifacts, or pipelines.
+	// Resolve targetID across delivered media versions (including M3 editor revisions on the same media resource), prompt contracts, tasks, prompt revisions, storyboard revisions, creative artifacts, or pipelines.
 	_ = db.QueryRowContext(ctx, `SELECT c.pipeline_id,c.id,c.document_version_id
 		FROM task_outputs o
 		JOIN tasks t ON t.id=o.task_id
@@ -206,6 +214,17 @@ func TraceLineage(ctx context.Context, db *sql.DB, projectID, targetID string) (
 		JOIN pipelines p ON p.id=c.pipeline_id
 		WHERE p.project_id=? AND (o.version_id=? OR t.id=?)
 		ORDER BY o.attempt DESC LIMIT 1`, projectID, targetID, targetID).Scan(&pipelineID, &contractID, &promptVersionID)
+	if pipelineID == "" {
+		_ = db.QueryRowContext(ctx, `SELECT c.pipeline_id,c.id,c.document_version_id
+			FROM versions target
+			JOIN versions base ON base.resource_id=target.resource_id
+			JOIN task_outputs o ON o.version_id=base.id
+			JOIN tasks t ON t.id=o.task_id
+			JOIN prompt_contracts c ON c.task_id=t.id
+			JOIN pipelines p ON p.id=c.pipeline_id
+			WHERE p.project_id=? AND target.id=? AND o.state='delivered'
+			ORDER BY base.created_at DESC, o.attempt DESC LIMIT 1`, projectID, targetID).Scan(&pipelineID, &contractID, &promptVersionID)
+	}
 	if pipelineID == "" {
 		_ = db.QueryRowContext(ctx, `SELECT c.pipeline_id,c.id,c.document_version_id
 			FROM prompt_contracts c JOIN pipelines p ON p.id=c.pipeline_id
@@ -238,6 +257,7 @@ func TraceLineage(ctx context.Context, db *sql.DB, projectID, targetID string) (
 		return out, &store.DomainError{Status: 404, Code: "not_found", Message: "Pipeline lineage not found for target"}
 	}
 	out.PipelineID = pipelineID
+	out.Recovery = LatestPipelineRecovery(ctx, db, projectID, pipelineID)
 
 	if contractID == "" {
 		q := `SELECT id,document_version_id FROM prompt_contracts WHERE pipeline_id=?`
@@ -303,6 +323,8 @@ func TraceLineage(ctx context.Context, db *sql.DB, projectID, targetID string) (
 		}
 	}
 
+	mediaResources := map[string]bool{}
+	seenOutputs := map[string]bool{}
 	rows, err := db.QueryContext(ctx, `SELECT o.task_id,o.attempt,o.output_key,o.role,v.resource_id,o.version_id,o.asset_id,coalesce(v.source_version_id,'')
 		FROM task_outputs o
 		JOIN tasks t ON t.id=o.task_id
@@ -316,9 +338,29 @@ func TraceLineage(ctx context.Context, db *sql.DB, projectID, targetID string) (
 			if rows.Scan(&m.TaskID, &m.Attempt, &m.OutputKey, &m.Role, &m.ResourceID, &m.VersionID, &m.AssetID, &m.SourceVersionID) == nil {
 				out.Outputs = append(out.Outputs, m)
 				versionSet[m.VersionID] = true
+				mediaResources[m.ResourceID] = true
+				seenOutputs[m.VersionID] = true
 			}
 		}
 		rows.Close()
+	}
+	for resID := range mediaResources {
+		revRows, revErr := db.QueryContext(ctx, `SELECT coalesce(o.task_id,''),coalesce(o.attempt,1),coalesce(o.output_key,'revision'),coalesce(o.role,'revision'),v.resource_id,v.id,coalesce(v.asset_id,''),coalesce(v.source_version_id,'')
+			FROM versions v
+			LEFT JOIN task_outputs o ON o.version_id=v.id AND o.state='delivered'
+			WHERE v.resource_id=? AND v.asset_id IS NOT NULL
+			ORDER BY v.created_at, v.id`, resID)
+		if revErr == nil {
+			for revRows.Next() {
+				var m DeliveredMedia
+				if revRows.Scan(&m.TaskID, &m.Attempt, &m.OutputKey, &m.Role, &m.ResourceID, &m.VersionID, &m.AssetID, &m.SourceVersionID) == nil && !seenOutputs[m.VersionID] {
+					out.Outputs = append(out.Outputs, m)
+					versionSet[m.VersionID] = true
+					seenOutputs[m.VersionID] = true
+				}
+			}
+			revRows.Close()
+		}
 	}
 
 	depRows, err := db.QueryContext(ctx, `SELECT d.version_id,d.source_version_id,d.kind

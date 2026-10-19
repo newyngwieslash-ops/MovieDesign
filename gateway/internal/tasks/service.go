@@ -395,7 +395,7 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 		if e != nil {
 			return nil, e
 		}
-		v = TaskView{ID: uuid.NewString(), CapabilityID: i.CapabilityID, Prompt: i.Prompt, Revision: 1, Outputs: declarations(i)}
+		v = TaskView{ID: uuid.NewString(), CapabilityID: i.CapabilityID, ContractID: i.ContractID, Prompt: i.Prompt, Revision: 1, Outputs: declarations(i)}
 		billing(&v)
 		if i.QuoteID != "" {
 			var frozen string
@@ -536,7 +536,9 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 		}
 		raw = i.raw
 	}
+	freshResolve := false
 	result, e := store.WriteRequest(ctx, s.DB, store.Scope{ProjectID: p, Operation: "tasks.resolve." + id, RequestID: i.RequestID}, raw, func(tx *sql.Tx) ([]byte, error) {
+		freshResolve = true
 		view, attempt, session, e := query(ctx, tx, p, id)
 		if e != nil {
 			return nil, e
@@ -553,6 +555,17 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 		}
 		if !allowed {
 			return nil, conflict()
+		}
+		var frozen string
+		if e = tx.QueryRowContext(ctx, "SELECT frozen_input_json FROM tasks WHERE id=?", id).Scan(&frozen); e != nil {
+			return nil, e
+		}
+		var input Input
+		if e = json.Unmarshal([]byte(frozen), &input); e != nil {
+			return nil, e
+		}
+		if v.ContractID == "" {
+			v.ContractID = input.ContractID
 		}
 		switch i.Action {
 		case "cancel":
@@ -581,14 +594,11 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 				v.Progress = Progress{Phase: "pending"}
 				break
 			}
-			var frozen string
-			if e = tx.QueryRowContext(ctx, "SELECT frozen_input_json FROM tasks WHERE id=?", id).Scan(&frozen); e != nil {
-				return nil, e
+			rec, _, err := pipeline.ApplyRecoveryActionTx(ctx, tx, p, id, input.ContractID, i.RequestID, "retry", v.Recovery)
+			if err != nil {
+				return nil, err
 			}
-			var input Input
-			if e = json.Unmarshal([]byte(frozen), &input); e != nil {
-				return nil, e
-			}
+			v.Recovery = rec
 			v.Outputs = declarations(input)
 			attempt++
 			billing(&v)
@@ -604,6 +614,26 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 			if v.Outputs, e = readOutputs(ctx, tx, id, attempt); e != nil {
 				return nil, e
 			}
+		case "modify_params", "modify_storyboard":
+			if v.Status != Failed {
+				return nil, conflict()
+			}
+			rec, nextActions, err := pipeline.ApplyRecoveryActionTx(ctx, tx, p, id, input.ContractID, i.RequestID, i.Action, v.Recovery)
+			if err != nil {
+				return nil, err
+			}
+			v.Recovery = rec
+			v.Actions = nextActions
+		case "query":
+			if v.Status != Unknown {
+				return nil, conflict()
+			}
+			rec, nextActions, err := pipeline.ApplyRecoveryActionTx(ctx, tx, p, id, input.ContractID, i.RequestID, "query", v.Recovery)
+			if err != nil {
+				return nil, err
+			}
+			v.Recovery = rec
+			v.Actions = nextActions
 		default:
 			return nil, invalid("Unsupported task action")
 		}
@@ -626,9 +656,36 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 	})
 	if e == nil {
 		e = json.Unmarshal(result, &v)
+		if e == nil && freshResolve && i.Action == "query" {
+			if updated, ok := s.reconcileUnknown(ctx, p, id); ok {
+				v = updated
+				if encoded, err := json.Marshal(v); err == nil {
+					_, _ = s.DB.ExecContext(ctx, "UPDATE write_requests SET response_json=? WHERE project_id=? AND operation=? AND request_id=?", string(encoded), p, "tasks.resolve."+id, i.RequestID)
+				}
+			}
+		}
 		s.Events.Notify()
 	}
 	return v, e
+}
+
+func (s *Service) reconcileUnknown(ctx context.Context, p, id string) (TaskView, bool) {
+	if s.Executor == nil || s.Executor.Query == nil {
+		return TaskView{}, false
+	}
+	a, _, started, err := loadAttempt(ctx, s.DB, p, id)
+	if err != nil || !started || (a.UpstreamID == "" && a.Provider.Config.Kind != "llm") {
+		return TaskView{}, false
+	}
+	out, queryErr := s.Executor.Query(ctx, a)
+	if err := s.finish(a, out, queryErr); err != nil {
+		return TaskView{}, false
+	}
+	v, err := s.Query(ctx, p, id)
+	if err != nil {
+		return TaskView{}, false
+	}
+	return v, true
 }
 
 // BillingInput is SQL-only; questions must pass their own transaction.

@@ -18,7 +18,11 @@ test('completed output replaces only matching intent and preserves moved positio
 });
 test('empty/cross-owner control journals cannot become fresh intents and cleanup cannot erase a newer request',()=>{
  assert.equal(readControlIntent(null,'resolve','t'),null);for(const raw of ['', '{}','null'])assert.throws(()=>readControlIntent(raw,'resolve','t'));
- const intent={path:'/api/tasks/t/resolve',body:JSON.stringify({requestId:'one',action:'retry',expected_revision:4})};assert.deepEqual(readControlIntent(JSON.stringify(intent),'resolve','t'),intent);assert.throws(()=>readControlIntent(JSON.stringify(intent),'resolve','other'));
+ for(const action of ['retry','cancel','query','modify_params','modify_storyboard']){
+  const intent={path:'/api/tasks/t/resolve',body:JSON.stringify({requestId:'one',action,expected_revision:4})};assert.deepEqual(readControlIntent(JSON.stringify(intent),'resolve','t'),intent);assert.throws(()=>readControlIntent(JSON.stringify(intent),'resolve','other'));
+ }
+ assert.throws(()=>readControlIntent(JSON.stringify({path:'/api/tasks/t/resolve',body:JSON.stringify({requestId:'one',action:'unknown_action',expected_revision:4})}),'resolve','t'));
+ const intent={path:'/api/tasks/t/resolve',body:JSON.stringify({requestId:'one',action:'retry',expected_revision:4})};
  let value=JSON.stringify({...intent,body:'newer'}),removed=false;assert.equal(clearControlIntent({getItem:()=>value,removeItem:()=>{removed=true}},'key',intent),false);assert.equal(removed,false);
 });
 test('expired billing still permits explicit rejection, while busy/storage/original intent guards apply',()=>{
