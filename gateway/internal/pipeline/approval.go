@@ -44,6 +44,8 @@ func Current(ctx context.Context, tx query, project, pipeline, gate string) (Bin
 	var e error
 	if gate == "storyboard" {
 		e = tx.QueryRowContext(ctx, `SELECT s.revision,s.document_version_id,s.semantic_hash FROM storyboard_revisions s JOIN pipelines p ON p.id=s.pipeline_id WHERE p.project_id=? AND p.id=? AND s.revision=p.revision`, project, pipeline).Scan(&b.Revision, &b.DocumentVersionID, &b.SemanticHash)
+	} else if gate == "prompt" {
+		e = tx.QueryRowContext(ctx, `SELECT r.revision,r.document_version_id,r.prompt_sha256 FROM prompt_revisions r JOIN pipelines p ON p.id=r.pipeline_id WHERE p.project_id=? AND p.id=? ORDER BY r.revision DESC LIMIT 1`, project, pipeline).Scan(&b.Revision, &b.DocumentVersionID, &b.SemanticHash)
 	} else if gate == "intent" || gate == "script" {
 		e = tx.QueryRowContext(ctx, `SELECT a.revision,a.document_version_id,a.semantic_hash FROM creative_artifacts a JOIN pipelines p ON p.id=a.pipeline_id WHERE p.project_id=? AND p.id=? AND a.gate=? ORDER BY a.revision DESC LIMIT 1`, project, pipeline, gate).Scan(&b.Revision, &b.DocumentVersionID, &b.SemanticHash)
 	} else {
@@ -61,6 +63,8 @@ func ApprovedSource(ctx context.Context, tx query, p, id, gate string) (string, 
 	upstream := "intent"
 	if gate == "storyboard" {
 		upstream = "script"
+	} else if gate == "prompt" {
+		upstream = "storyboard"
 	}
 	b, e := Current(ctx, tx, p, id, upstream)
 	if e != nil {
@@ -74,7 +78,7 @@ func ApprovedSource(ctx context.Context, tx query, p, id, gate string) (string, 
 	if n == 0 {
 		return "", &store.DomainError{Status: 409, Code: "waiting_user", Message: "Current " + upstream + " artifact requires human approval"}
 	}
-	// A script may only authorize its originally frozen current intent.
+	// Upstream artifacts may only authorize their originally frozen upstream source.
 	if upstream == "script" {
 		source, e := ApprovedSource(ctx, tx, p, id, "script")
 		if e != nil {
@@ -85,6 +89,18 @@ func ApprovedSource(ctx context.Context, tx query, p, id, gate string) (string, 
 			return "", e
 		}
 		if source != actual {
+			return "", conflict()
+		}
+	} else if upstream == "storyboard" {
+		source, e := ApprovedSource(ctx, tx, p, id, "storyboard")
+		if e != nil {
+			return "", e
+		}
+		var dependencies int
+		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM version_dependencies WHERE version_id=? AND source_version_id=? AND kind='creative_source'", b.DocumentVersionID, source).Scan(&dependencies); e != nil {
+			return "", e
+		}
+		if dependencies != 1 {
 			return "", conflict()
 		}
 	}
@@ -258,7 +274,7 @@ func SaveArtifact(ctx context.Context, tx *sql.Tx, p string, d Document, base, r
 		}
 	}
 	var duplicate int
-	if e := tx.QueryRowContext(ctx, `SELECT count(*) FROM creative_artifacts WHERE resource_id=? AND (pipeline_id<>? OR gate<>?)`, resource, d.PipelineID, d.Kind).Scan(&duplicate); e != nil {
+	if e := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM creative_artifacts WHERE resource_id=? AND (pipeline_id<>? OR gate<>?)) + (SELECT count(*) FROM pipelines WHERE resource_id=?) + (SELECT count(*) FROM prompt_revisions WHERE resource_id=?)`, resource, d.PipelineID, d.Kind, resource, resource).Scan(&duplicate); e != nil {
 		return e
 	}
 	if duplicate != 0 {
@@ -273,7 +289,17 @@ func SaveArtifact(ctx context.Context, tx *sql.Tx, p string, d Document, base, r
 		return e
 	}
 	if d.SourceVersionID != "" {
+		if base == "" {
+			if _, e = tx.ExecContext(ctx, "UPDATE versions SET source_version_id=? WHERE id=?", d.SourceVersionID, version); e != nil {
+				return e
+			}
+		}
 		if _, e = tx.ExecContext(ctx, "INSERT INTO version_dependencies(version_id,source_version_id,kind)VALUES(?,?,'creative_source')", version, d.SourceVersionID); e != nil {
+			return e
+		}
+	}
+	if base != "" {
+		if _, e = tx.ExecContext(ctx, "INSERT INTO version_dependencies(version_id,source_version_id,kind)VALUES(?,?,?)", version, base, d.Kind+"_revision"); e != nil {
 			return e
 		}
 	}
@@ -283,6 +309,9 @@ func SaveArtifact(ctx context.Context, tx *sql.Tx, p string, d Document, base, r
 func (d Document) Render() string {
 	if d.Kind == "storyboard" {
 		return d.Storyboard.Render()
+	}
+	if d.Kind == "prompt" {
+		return d.Content
 	}
 	return "# " + d.Kind + "\n\n" + d.Content
 }
@@ -310,7 +339,7 @@ func (d Document) MarshalJSON() ([]byte, error) {
 }
 func BindingForVersion(ctx context.Context, tx query, p, version string) (Binding, error) {
 	var b Binding
-	e := tx.QueryRowContext(ctx, `SELECT a.pipeline_id,a.gate,a.revision,a.document_version_id,a.semantic_hash FROM creative_artifacts a JOIN pipelines p ON p.id=a.pipeline_id WHERE p.project_id=? AND a.document_version_id=? UNION ALL SELECT s.pipeline_id,'storyboard',s.revision,s.document_version_id,s.semantic_hash FROM storyboard_revisions s JOIN pipelines p ON p.id=s.pipeline_id WHERE p.project_id=? AND s.document_version_id=?`, p, version, p, version).Scan(&b.PipelineID, &b.Gate, &b.Revision, &b.DocumentVersionID, &b.SemanticHash)
+	e := tx.QueryRowContext(ctx, `SELECT a.pipeline_id,a.gate,a.revision,a.document_version_id,a.semantic_hash FROM creative_artifacts a JOIN pipelines p ON p.id=a.pipeline_id WHERE p.project_id=? AND a.document_version_id=? UNION ALL SELECT s.pipeline_id,'storyboard',s.revision,s.document_version_id,s.semantic_hash FROM storyboard_revisions s JOIN pipelines p ON p.id=s.pipeline_id WHERE p.project_id=? AND s.document_version_id=? UNION ALL SELECT r.pipeline_id,'prompt',r.revision,r.document_version_id,r.prompt_sha256 FROM prompt_revisions r JOIN pipelines p ON p.id=r.pipeline_id WHERE p.project_id=? AND r.document_version_id=?`, p, version, p, version, p, version).Scan(&b.PipelineID, &b.Gate, &b.Revision, &b.DocumentVersionID, &b.SemanticHash)
 	if errors.Is(e, sql.ErrNoRows) {
 		return b, &store.DomainError{Status: 404, Code: "not_found", Message: "Creative artifact not found"}
 	}
@@ -328,6 +357,11 @@ func Preview(ctx context.Context, tx query, b Binding) (string, error) {
 			return "", e
 		}
 		return board.Render(), nil
+	}
+	if b.Gate == "prompt" {
+		var content string
+		e := tx.QueryRowContext(ctx, "SELECT content FROM prompt_revisions WHERE pipeline_id=? AND revision=? AND document_version_id=?", b.PipelineID, b.Revision, b.DocumentVersionID).Scan(&content)
+		return content, e
 	}
 	var content string
 	e := tx.QueryRowContext(ctx, "SELECT content FROM creative_artifacts WHERE pipeline_id=? AND gate=? AND revision=? AND document_version_id=?", b.PipelineID, b.Gate, b.Revision, b.DocumentVersionID).Scan(&content)

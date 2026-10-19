@@ -100,4 +100,38 @@ func TestStoryboardHTTP(t *testing.T) {
 	if w.Code != 404 {
 		t.Fatal(w.Code)
 	}
+
+	// Write final_video_prompt.md and test /api/pipeline/prompt, /api/pipeline/preflight, /api/pipeline/compile, /api/pipeline/lineage
+	provBody := `{"requestId":"prov-1","action":"create","config":{"id":"seedream","name":"Seedream","kind":"image","protocol":"openai-images","base_url":"https://api.example.com/v1","model_id":"seedream-3.0","enabled":true,"capability":{"max_prompt_bytes":4000,"max_count":1,"max_references":2,"sizes":["1024x1024"]},"pricing":{"currency":"USD","unit":"image","unit_amount":5,"minor_unit_scale":2,"credit_numerator":1,"credit_denominator":1,"source":"declared","version":"v1"}}}`
+	if pw := call("POST", "/api/providers", provBody, "http://tauri.localhost"); pw.Code != 200 {
+		t.Fatalf("create provider: %d %s", pw.Code, pw.Body.String())
+	}
+	promptRaw := `{"requestId":"prompt-doc-1","mode":"create","format":"md","typedDocument":{"kind":"prompt","pipelineId":"film","expectedRevision":0,"content":"镜头一 [00:00-00:02] [近景]：讲述者说话。\r\n"},"output":{"resources":[{"key":"prompt","mode":"create","name":"final_video_prompt.md"}],"composition":{"name":"Film","type":{"label":"video"},"placements":[{"key":"prompt","role":"prompt"}]}}}`
+	pw := call("POST", url, promptRaw, "http://tauri.localhost")
+	if pw.Code != 200 {
+		t.Fatalf("write prompt: %d %s", pw.Code, pw.Body.String())
+	}
+	json.Unmarshal(pw.Body.Bytes(), &r)
+	promptVersion := r.Delivery.Versions[0].VersionID
+	getPrompt := "/api/pipeline/prompt?project_id=" + p.ID + "&versionId=" + promptVersion
+	if gw := call("GET", getPrompt, "", "http://tauri.localhost"); gw.Code != 200 || !strings.Contains(gw.Body.String(), `"revision":1`) {
+		t.Fatalf("get prompt: %d %s", gw.Code, gw.Body.String())
+	}
+	pfBody := `{"requestId":"pf-1","pipelineId":"film","capabilityId":"image:seedream","params":{"size":"1024x1024"}}`
+	if pfw := call("POST", "/api/pipeline/preflight?project_id="+p.ID, pfBody, "http://tauri.localhost"); pfw.Code != 200 || !strings.Contains(pfw.Body.String(), `"passed":true`) {
+		t.Fatalf("preflight: %d %s", pfw.Code, pfw.Body.String())
+	}
+	compBody := `{"requestId":"comp-1","pipelineId":"film","capabilityId":"image:seedream","params":{"size":"1024x1024"}}`
+	compW := call("POST", "/api/pipeline/compile?project_id="+p.ID, compBody, "http://tauri.localhost")
+	if compW.Code != 200 || !strings.Contains(compW.Body.String(), `"status":"ready"`) {
+		t.Fatalf("compile: %d %s", compW.Code, compW.Body.String())
+	}
+	// Replay same requestId + body returns identical 200 response
+	if compReplay := call("POST", "/api/pipeline/compile?project_id="+p.ID, compBody, "http://tauri.localhost"); compReplay.Code != 200 || compReplay.Body.String() != compW.Body.String() {
+		t.Fatalf("compile replay mismatch: %d %s", compReplay.Code, compReplay.Body.String())
+	}
+	linW := call("GET", "/api/pipeline/lineage?project_id="+p.ID+"&versionId="+promptVersion, "", "http://tauri.localhost")
+	if linW.Code != 200 || !strings.Contains(linW.Body.String(), `"pipelineId":"film"`) || !strings.Contains(linW.Body.String(), `"status":"ready"`) {
+		t.Fatalf("lineage: %d %s", linW.Code, linW.Body.String())
+	}
 }

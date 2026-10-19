@@ -84,6 +84,14 @@ func (s *Server) documents(server *sdk.Server, scope agent.ToolScope) {
 		if e != nil || i.TypedDocument == nil || r.Delivery.Status != "completed" {
 			return r, e
 		}
+		if i.TypedDocument.Kind == "prompt" {
+			if s.services.Questions != nil && s.services.Questions.DB != nil {
+				if view, err := pipeline.ReadPromptVersion(ctx, s.services.Questions.DB, scope.ProjectID, r.Delivery.Versions[0].VersionID); err == nil {
+					return map[string]any{"document": r, "prompt": view, "contract": view.Contract}, nil
+				}
+			}
+			return map[string]any{"document": r}, nil
+		}
 		if s.services.Questions == nil {
 			return map[string]any{"document": r, "approvalProposal": "pending", "reason": "Question service unavailable; retry the original document request"}, nil
 		}

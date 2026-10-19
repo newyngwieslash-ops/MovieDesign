@@ -33,6 +33,7 @@ type executeInput struct {
 	Count        *int            `json:"count,omitempty"`
 	Output       delivery.Output `json:"output"`
 	QuoteID      *string         `json:"quoteId,omitempty"`
+	ContractID   *string         `json:"contractId,omitempty"`
 }
 type taskInput struct {
 	TaskID string `json:"taskId"`
@@ -58,7 +59,7 @@ func (s *Server) register(server *sdk.Server, scope agent.ToolScope) {
 	s.documents(server, scope)
 	s.catalog(server, scope)
 	add(s, server, scope, "design_execute", "Execute image or configured-LLM text capability and wait through billing; always declare output and stable requestId.", func(ctx context.Context, i executeInput, raw []byte) (any, error) {
-		r, e := s.services.Generation.Admit(ctx, scope.ProjectID, generation.Request{RequestID: i.RequestID, SessionID: scope.SessionID, CapabilityID: i.CapabilityID, Prompt: i.Prompt, Params: i.Params, References: i.References, Count: i.Count, Output: i.Output, QuoteID: i.QuoteID}, raw, false, "mcp")
+		r, e := s.services.Generation.Admit(ctx, scope.ProjectID, generation.Request{RequestID: i.RequestID, SessionID: scope.SessionID, CapabilityID: i.CapabilityID, Prompt: i.Prompt, Params: i.Params, References: i.References, Count: i.Count, Output: i.Output, QuoteID: i.QuoteID, ContractID: i.ContractID}, raw, false, "mcp")
 		if e != nil {
 			return nil, e
 		}

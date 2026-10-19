@@ -250,6 +250,9 @@ func (s *Service) WriteDocument(ctx context.Context, p string, raw []byte) (Rece
 		if planned.TypedDocument.Kind == "storyboard" {
 			name = "storyboard_review.md"
 		}
+		if planned.TypedDocument.Kind == "prompt" {
+			name = "final_video_prompt.md"
+		}
 	}
 	stage, e := files.Stage(ctx, p, requestID, name, strings.NewReader(planned.Content))
 	if e != nil {
@@ -294,6 +297,9 @@ func commitDocument(ctx context.Context, tx *sql.Tx, p, key string, j *journal, 
 	v := versions[0]
 	if _, e = pipeline.Check(ctx, tx, p, *d, plan.Output.Resources[0].BaseVersionID); e != nil {
 		return e
+	}
+	if d.Kind == "prompt" {
+		return pipeline.SavePrompt(ctx, tx, p, *d, plan.Output.Resources[0].BaseVersionID, v.ResourceID, v.VersionID)
 	}
 	if d.Kind != "storyboard" {
 		return pipeline.SaveArtifact(ctx, tx, p, *d, plan.Output.Resources[0].BaseVersionID, v.ResourceID, v.VersionID)

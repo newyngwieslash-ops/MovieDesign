@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
 )
@@ -636,6 +637,23 @@ func (s *Service) commit(ctx context.Context, p, key string, j *journal) (Receip
 			return Receipt{}, invalid("Task completion is not installed")
 		}
 		b := pl.Sources[0].Task
+		delivered := make([]pipeline.DeliveredVersion, 0, len(r.Delivery.Versions))
+		for idx, v := range r.Delivery.Versions {
+			base := ""
+			if idx < len(pl.Sources) {
+				base = pl.Sources[idx].BaseVersionID
+			}
+			delivered = append(delivered, pipeline.DeliveredVersion{
+				Key:           v.Key,
+				ResourceID:    v.ResourceID,
+				VersionID:     v.VersionID,
+				AssetID:       v.AssetID,
+				BaseVersionID: base,
+			})
+		}
+		if e = pipeline.RecordTaskDeliveryLineage(ctx, tx, p, b.TaskID, delivered); e != nil {
+			return Receipt{}, e
+		}
 		if e = s.CompleteTask(ctx, tx, p, b.TaskID, b.Attempt); e != nil {
 			return Receipt{}, e
 		}

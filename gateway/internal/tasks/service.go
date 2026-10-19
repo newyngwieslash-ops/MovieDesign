@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"strings"
@@ -232,6 +233,20 @@ func validateInput(i Input) error {
 	return nil
 }
 
+func executionCheck(i Input) pipeline.ExecutionCheck {
+	refs := make([]string, len(i.References))
+	for idx, r := range i.References {
+		refs[idx] = r.AssetID
+	}
+	return pipeline.ExecutionCheck{
+		ContractID:   i.ContractID,
+		CapabilityID: i.CapabilityID,
+		Prompt:       i.Prompt,
+		Params:       i.Params,
+		References:   refs,
+	}
+}
+
 // ValidateAdmission shares output and project validation with estimate; it performs
 // no reservations, file operations or network calls inside the read transaction.
 func (s *Service) ValidateAdmission(ctx context.Context, p string, i Input) error {
@@ -246,7 +261,11 @@ func (s *Service) ValidateAdmission(ctx context.Context, p string, i Input) erro
 		return e
 	}
 	defer tx.Rollback()
-	return validateOwnership(ctx, tx, p, i)
+	if e := validateOwnership(ctx, tx, p, i); e != nil {
+		return e
+	}
+	_, e = pipeline.AuthorizeExecution(ctx, tx, p, "", executionCheck(i))
+	return e
 }
 func validateOwnership(ctx context.Context, tx *sql.Tx, p string, i Input) error {
 	var id string
@@ -383,6 +402,9 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 		provider, _ := json.Marshal(i.Provider)
 		now := time.Now().UnixMilli()
 		if _, e := tx.ExecContext(ctx, "INSERT INTO tasks(id,project_id,session_id,request_id,status,revision,current_attempt,frozen_input_json,provider_json,view_json,created_at,updated_at)VALUES(?,?,?,?,?,1,1,?,?,?,?,?)", v.ID, p, i.SessionID, i.RequestID, v.Status, string(raw), string(provider), string(view), now, now); e != nil {
+			return nil, e
+		}
+		if _, e := pipeline.BindExecutionTask(ctx, tx, p, v.ID, executionCheck(i)); e != nil {
 			return nil, e
 		}
 		if e := insertAttempt(ctx, tx, v, 1); e != nil {
@@ -616,6 +638,9 @@ func (s *Service) BillingInput(ctx context.Context, tx *sql.Tx, p, session, id s
 		return Input{}, conflict()
 	}
 	if e = validateOwnership(ctx, tx, p, a.Input); e != nil {
+		return Input{}, e
+	}
+	if _, e = pipeline.AuthorizeExecution(ctx, tx, p, id, executionCheck(a.Input)); e != nil {
 		return Input{}, e
 	}
 

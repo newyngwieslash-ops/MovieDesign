@@ -10,8 +10,12 @@ import (
 	"net/url"
 )
 
+func pipelineRoute(path string) bool {
+	return path == "/api/pipeline/storyboard" || path == "/api/pipeline/artifact" || path == "/api/pipeline/prompt" || path == "/api/pipeline/lineage" || path == "/api/pipeline/preflight" || path == "/api/pipeline/compile" || path == "/api/documents/write"
+}
+
 func pipelineMethod(path, method string) bool {
-	return (path == "/api/pipeline/storyboard" || path == "/api/pipeline/artifact") && method == "GET" || path == "/api/documents/write" && method == "POST"
+	return (path == "/api/pipeline/storyboard" || path == "/api/pipeline/artifact" || path == "/api/pipeline/prompt" || path == "/api/pipeline/lineage") && method == "GET" || (path == "/api/documents/write" || path == "/api/pipeline/preflight" || path == "/api/pipeline/compile") && method == "POST"
 }
 func (s *Server) servePipeline(w http.ResponseWriter, r *http.Request, d *delivery.Service) {
 	if !pipelineMethod(r.URL.Path, r.Method) {
@@ -48,6 +52,24 @@ func (s *Server) servePipeline(w http.ResponseWriter, r *http.Request, d *delive
 			respond(w, 200, b)
 			return
 		}
+		if r.URL.Path == "/api/pipeline/prompt" {
+			v, e := pipeline.ReadPromptVersion(r.Context(), s.db, p, q.Get("versionId"))
+			if e != nil {
+				objectError(w, e)
+				return
+			}
+			respond(w, 200, v)
+			return
+		}
+		if r.URL.Path == "/api/pipeline/lineage" {
+			l, e := pipeline.TraceLineage(r.Context(), s.db, p, q.Get("versionId"))
+			if e != nil {
+				objectError(w, e)
+				return
+			}
+			respond(w, 200, l)
+			return
+		}
 		v, e := pipeline.ReadVersion(r.Context(), s.db, p, q.Get("versionId"))
 		if e != nil {
 			objectError(w, e)
@@ -56,8 +78,6 @@ func (s *Server) servePipeline(w http.ResponseWriter, r *http.Request, d *delive
 		respond(w, 200, v)
 		return
 	}
-	// Shared WriteDocument strictly decodes the unchanged wire, preserving omitted
-	// versus explicit fields for durable replay across HTTP and MCP.
 	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, maxJSONBody))
 	if e != nil {
 		var large *http.MaxBytesError
@@ -68,6 +88,31 @@ func (s *Server) servePipeline(w http.ResponseWriter, r *http.Request, d *delive
 		}
 		return
 	}
+	if r.URL.Path == "/api/pipeline/preflight" || r.URL.Path == "/api/pipeline/compile" {
+		in, e := store.DecodeValue[pipeline.CompileInput](raw)
+		if e != nil {
+			reject(w, 400, "invalid_input", "Invalid preflight or compile schema")
+			return
+		}
+		if r.URL.Path == "/api/pipeline/preflight" {
+			report, e := pipeline.Preflight(r.Context(), s.db, p, in)
+			if e != nil {
+				objectError(w, e)
+				return
+			}
+			respond(w, 200, report)
+			return
+		}
+		contract, report, e := pipeline.Compile(r.Context(), s.db, p, in)
+		if e != nil {
+			objectError(w, e)
+			return
+		}
+		respond(w, 200, map[string]any{"contract": contract, "preflight": report})
+		return
+	}
+	// Shared WriteDocument strictly decodes the unchanged wire, preserving omitted
+	// versus explicit fields for durable replay across HTTP and MCP.
 	if d == nil {
 		reject(w, 503, "upstream", "Documents unavailable")
 		return

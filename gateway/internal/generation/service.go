@@ -22,6 +22,7 @@ type Request struct {
 	Count        *int            `json:"count,omitempty"`
 	Output       delivery.Output `json:"output"`
 	QuoteID      *string         `json:"quote_id,omitempty"`
+	ContractID   *string         `json:"contract_id,omitempty"`
 }
 
 type Service struct {
@@ -89,7 +90,7 @@ func (s Service) Admit(ctx context.Context, p string, r Request, wire []byte, es
 	if json.Unmarshal(wire, &fields) != nil {
 		return result, invalid("Invalid generation body")
 	}
-	for _, key := range []string{"prompt", "params", "references", "output", "count", "quote_id", "session_id", "quoteId"} {
+	for _, key := range []string{"prompt", "params", "references", "output", "count", "quote_id", "session_id", "quoteId", "contract_id", "contractId"} {
 		if b, ok := fields[key]; ok && string(b) == "null" {
 			return result, invalid(key + " cannot be null")
 		}
@@ -148,7 +149,11 @@ func (s Service) Admit(ctx context.Context, p string, r Request, wire []byte, es
 		return result, e
 	}
 	params, _ := json.Marshal(r.Params)
-	task := tasks.Input{RequestID: r.RequestID, SessionID: r.SessionID, CapabilityID: r.CapabilityID, Prompt: r.Prompt, Params: params, Output: r.Output, Count: count, Assets: input.Assets, Provider: f, OriginalWire: wire, Operation: operation}
+	contractID := ""
+	if r.ContractID != nil {
+		contractID = *r.ContractID
+	}
+	task := tasks.Input{RequestID: r.RequestID, SessionID: r.SessionID, CapabilityID: r.CapabilityID, Prompt: r.Prompt, Params: params, Output: r.Output, Count: count, ContractID: contractID, Assets: input.Assets, Provider: f, OriginalWire: wire, Operation: operation}
 	task.Actor = "user"
 	if operation == "mcp" {
 		task.Actor = "agent"

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/pipeline"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"time"
 )
@@ -103,6 +104,28 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 	if collect {
 		res, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='collecting' WHERE task_id=? AND attempt=? AND state IN ('collection_pending','adoption_pending')", id, attempt)
 	} else {
+		stale, claimErr := pipeline.ClaimExecution(ctx, tx, p, id, executionCheck(a.Input))
+		if claimErr != nil {
+			if !stale {
+				return claimErr
+			}
+			problem := &Problem{Source: "pipeline", Code: "STALE_CREATIVE_APPROVAL", Message: claimErr.Error(), Retryable: false}
+			encodedProblem, _ := json.Marshal(problem)
+			if _, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='failed',error_json=coalesce(error_json,?) WHERE task_id=? AND attempt=?", string(encodedProblem), id, attempt); e != nil {
+				return e
+			}
+			v.Status = Failed
+			v.Problem = problem
+			v.Actions = []string{}
+			v.Progress = Progress{Phase: "paused"}
+			if e = s.save(ctx, tx, p, session, &v, attempt); e != nil {
+				return e
+			}
+			if e = tx.Commit(); e == nil {
+				s.Events.Notify()
+			}
+			return e
+		}
 		res, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='submitting',submit_started_at=? WHERE task_id=? AND attempt=? AND state='approved' AND submit_started_at IS NULL", time.Now().UnixMilli(), id, attempt)
 	}
 	if e != nil {

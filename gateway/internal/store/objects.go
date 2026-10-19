@@ -518,6 +518,32 @@ func updateObject(ctx context.Context, tx *sql.Tx, p, kind, id string, raw json.
 	return getObject(ctx, tx, p, kind, id)
 }
 
+func checkPipelineReference(ctx context.Context, tx *sql.Tx, kind, id string) error {
+	var n int
+	var err error
+	switch kind {
+	case "projects":
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM pipelines WHERE project_id=?`, id).Scan(&n)
+	case "compositions":
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM resources r WHERE r.composition_id=? AND (EXISTS(SELECT 1 FROM pipelines WHERE resource_id=r.id) OR EXISTS(SELECT 1 FROM creative_artifacts WHERE resource_id=r.id) OR EXISTS(SELECT 1 FROM prompt_revisions WHERE resource_id=r.id))`, id).Scan(&n)
+	case "resources":
+		err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM pipelines WHERE resource_id=?)+(SELECT count(*) FROM creative_artifacts WHERE resource_id=?)+(SELECT count(*) FROM prompt_revisions WHERE resource_id=?)`, id, id, id).Scan(&n)
+	case "versions":
+		err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM storyboard_revisions WHERE document_version_id=?)+(SELECT count(*) FROM creative_artifacts WHERE document_version_id=? OR source_version_id=?)+(SELECT count(*) FROM prompt_revisions WHERE document_version_id=? OR source_version_id=?)+(SELECT count(*) FROM prompt_contracts WHERE document_version_id=?)+(SELECT count(*) FROM approvals WHERE document_version_id=?)+(SELECT count(*) FROM version_dependencies WHERE version_id=? OR source_version_id=?)`, id, id, id, id, id, id, id, id, id).Scan(&n)
+	case "assets":
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM prompt_contracts c, json_each(CASE WHEN json_type(c.content_json,'$.references')='array' THEN json_extract(c.content_json,'$.references') ELSE '[]' END) j WHERE json_extract(j.value,'$.assetId')=?`, id).Scan(&n)
+	default:
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return protected()
+	}
+	return nil
+}
+
 func deleteObject(ctx context.Context, tx *sql.Tx, kind, id string) (json.RawMessage, error) {
 	if e := checkTaskReference(ctx, tx, kind, id); e != nil {
 		return nil, e
@@ -526,6 +552,9 @@ func deleteObject(ctx context.Context, tx *sql.Tx, kind, id string) (json.RawMes
 		return nil, e
 	}
 	if e := checkDeliveryReference(ctx, tx, kind, id); e != nil {
+		return nil, e
+	}
+	if e := checkPipelineReference(ctx, tx, kind, id); e != nil {
 		return nil, e
 	}
 	var query, statement string
@@ -628,7 +657,7 @@ func CheckFilePending(ctx context.Context, tx *sql.Tx, p string, paths ...string
 // an authoritative creative artifact; generic unrelated Resources are unaffected.
 func CheckCreativeVersion(ctx context.Context, tx *sql.Tx, resource, version string) error {
 	var n int
-	e := tx.QueryRowContext(ctx, `SELECT (EXISTS(SELECT 1 FROM creative_artifacts WHERE resource_id=?) OR EXISTS(SELECT 1 FROM pipelines WHERE resource_id=?)) AND NOT (EXISTS(SELECT 1 FROM creative_artifacts WHERE document_version_id=?) OR EXISTS(SELECT 1 FROM storyboard_revisions WHERE document_version_id=?))`, resource, resource, version, version).Scan(&n)
+	e := tx.QueryRowContext(ctx, `SELECT (EXISTS(SELECT 1 FROM creative_artifacts WHERE resource_id=?) OR EXISTS(SELECT 1 FROM pipelines WHERE resource_id=?) OR EXISTS(SELECT 1 FROM prompt_revisions WHERE resource_id=?)) AND NOT (EXISTS(SELECT 1 FROM creative_artifacts WHERE document_version_id=?) OR EXISTS(SELECT 1 FROM storyboard_revisions WHERE document_version_id=?) OR EXISTS(SELECT 1 FROM prompt_revisions WHERE document_version_id=?))`, resource, resource, resource, version, version, version).Scan(&n)
 	if e != nil {
 		return e
 	}

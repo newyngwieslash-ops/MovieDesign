@@ -49,3 +49,17 @@ test('malformed nested frozen bodies fail closed before replay and retain exact 
   assert.equal(h.writes.length,0,'corrupt stored body must never POST');assert.equal(h.map.get(key),raw,'retain exact corrupted record');assert(find(h.render(),n=>n.props?.role==='alert'));h.unmount();
  });source.unmount();
 });
+test('prompt review renders locked byte digest, ordered references, 7-point preflight, and SQL lineage',async()=>{
+ let cursor=0,tree;const hooks=[],effects=[];
+ const react={useState(init){const i=cursor++;if(!(i in hooks))hooks[i]=init;return[hooks[i],v=>hooks[i]=v]},useEffect(fn,deps){const i=cursor++,old=hooks[i];if(!old||deps.some((v,j)=>v!==old.deps[j])){hooks[i]={deps};effects.push(()=>{old?.cleanup?.();hooks[i].cleanup=fn()})}}};
+ class APIError extends Error{constructor(status){super('rejected');this.status=status}}
+ const rawPrompt='镜头一 [00:00-00:05] [近景]：讲述者说话。\r\n ';
+ const gateway={APIError,api:(_p,path)=>Promise.resolve(path.includes('/pipeline/prompt')?{pipelineId:'film',revision:1,currentRevision:1,storyboardRevision:2,currentStoryboardRevision:2,documentVersionId:'pv-1',sourceVersionId:'sb-2',approvalId:'ap-2',content:rawPrompt,promptSha256:'abc123sha256',promptBytes:rawPrompt.length,promptStatus:'ready',contract:{id:'cid-1',status:'ready',capabilityId:'video:seedance',promptSha256:'abc123sha256',promptBytes:rawPrompt.length,approvalId:'ap-2',audio:{audioIntent:'中文口播与轻快背景音乐',required:true,narration:true,music:true,sfx:false,mode:'narration+music'},references:[{index:0,assetId:'a1',versionId:'v1',role:'subject',mediaKind:'image',mimeType:'image/png'}],preflight:{passed:true,checks:[{name:'approval',passed:true,message:'ok'},{name:'prompt_bytes',passed:true,message:'ok'},{name:'placeholders',passed:true,message:'ok'},{name:'capability',passed:true,message:'ok'},{name:'references',passed:true,message:'ok'},{name:'duration_aspect',passed:true,message:'ok'},{name:'audio',passed:true,message:'ok'}]}}} :{pipelineId:'film',intent:{gate:'intent',revision:1,documentVersionId:'iv-1'},script:{gate:'script',revision:1,documentVersionId:'sv-1'},storyboard:{gate:'storyboard',revision:2,documentVersionId:'sb-2'},prompt:{gate:'prompt',revision:1,documentVersionId:'pv-1'},outputs:[{taskId:'t1',versionId:'mv-1',sourceVersionId:'pv-1'}]})};
+ const jsx=(type,props)=>({type,props});
+ const {PromptReview}=load('features/pipeline/PromptReview.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'../../gateway':gateway,'../../events':{subscribeEvents:()=>()=>{}}});
+ const render=()=>{cursor=0;tree=PromptReview({projectID:'p',versionID:'pv-1',text:rawPrompt});while(effects.length)effects.shift()();return tree};
+ render();for(let i=0;i<4;i++){render();await tick()}const root=render();
+ assert.equal(root.props.className,'prompt-review');
+ const pre=find(root,n=>n.type==='pre');assert.equal(pre.props['data-prompt-sha256'],'abc123sha256');assert.equal(pre.props.children,rawPrompt);
+ const ul=find(root,n=>n.type==='ul');assert.equal(ul.props.children.length,7);
+});

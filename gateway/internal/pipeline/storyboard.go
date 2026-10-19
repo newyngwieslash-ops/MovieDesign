@@ -43,12 +43,13 @@ type Storyboard struct {
 	Timeline Timeline `json:"timeline"`
 }
 type Document struct {
-	Kind             string     `json:"kind"`
-	PipelineID       string     `json:"pipelineId"`
-	ExpectedRevision int64      `json:"expectedRevision"`
-	Storyboard       Storyboard `json:"storyboard,omitempty"`
-	Content          string     `json:"content,omitempty"`
-	SourceVersionID  string     `json:"sourceVersionId,omitempty"`
+	Kind             string         `json:"kind"`
+	PipelineID       string         `json:"pipelineId"`
+	ExpectedRevision int64          `json:"expectedRevision"`
+	Storyboard       Storyboard     `json:"storyboard,omitempty"`
+	Content          string         `json:"content,omitempty"`
+	SourceVersionID  string         `json:"sourceVersionId,omitempty"`
+	Contract         *ContractDraft `json:"contract,omitempty"`
 }
 type Revision struct {
 	PipelineID        string     `json:"pipelineId"`
@@ -124,8 +125,11 @@ func conflict() error {
 	return &store.DomainError{Status: 409, Code: "invalid_input", Message: "Storyboard revision changed; reload and submit a new requestId"}
 }
 func (d Document) Validate() error {
-	if (d.Kind != "storyboard" && d.Kind != "intent" && d.Kind != "script") || d.ExpectedRevision < 0 || (store.Scope{ProjectID: d.PipelineID, Operation: "storyboard", RequestID: "validate"}).Validate() != nil {
+	if (d.Kind != "storyboard" && d.Kind != "intent" && d.Kind != "script" && d.Kind != "prompt") || d.ExpectedRevision < 0 || (store.Scope{ProjectID: d.PipelineID, Operation: "storyboard", RequestID: "validate"}).Validate() != nil {
 		return invalid("Invalid typed storyboard identity")
+	}
+	if d.Kind != "prompt" && d.Contract != nil {
+		return invalid("Contract draft is only supported for prompt documents")
 	}
 	if d.Kind != "storyboard" {
 		if len(d.Storyboard.Panels) != 0 || len(d.Storyboard.Shots) != 0 || d.Storyboard.Timeline.DurationMS != 0 {
@@ -133,6 +137,9 @@ func (d Document) Validate() error {
 		}
 		if d.Kind == "intent" && d.SourceVersionID != "" {
 			return invalid("Intent has no upstream source")
+		}
+		if d.Kind == "prompt" {
+			return validatePromptContent(d.Content)
 		}
 		return d.ValidateContent()
 	}
@@ -235,6 +242,9 @@ func Check(ctx context.Context, tx *sql.Tx, p string, d Document, base string) (
 	if e := d.Validate(); e != nil {
 		return "", e
 	}
+	if d.Kind == "prompt" {
+		return checkPrompt(ctx, tx, p, d, base)
+	}
 	if d.Kind != "storyboard" {
 		return checkArtifact(ctx, tx, p, d, base)
 	}
@@ -321,6 +331,11 @@ func SaveStoryboard(ctx context.Context, tx *sql.Tx, scope store.Scope, requestI
 	source, e := ApprovedSource(ctx, tx, scope.ProjectID, pipelineID, "storyboard")
 	if e != nil {
 		return Revision{}, e
+	}
+	if base == "" {
+		if _, e = tx.ExecContext(ctx, "UPDATE versions SET source_version_id=? WHERE id=?", source, version); e != nil {
+			return Revision{}, e
+		}
 	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO version_dependencies(version_id,source_version_id,kind) VALUES(?,?,'creative_source')", version, source); e != nil {
 		return Revision{}, e

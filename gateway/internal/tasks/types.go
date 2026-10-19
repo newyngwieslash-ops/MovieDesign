@@ -41,6 +41,7 @@ type Input struct {
 	Output       delivery.Output            `json:"output"`
 	Count        int                        `json:"count,omitempty"`
 	QuoteID      string                     `json:"quote_id,omitempty"`
+	ContractID   string                     `json:"contract_id,omitempty"`
 	Assets       []providers.ReferenceAsset `json:"assets,omitempty"`
 	// Supplied by trusted capability admission; never accepted from HTTP/MCP JSON.
 	Provider providers.FrozenProvider `json:"-"`
