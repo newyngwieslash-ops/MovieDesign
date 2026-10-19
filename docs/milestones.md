@@ -1,6 +1,6 @@
 # 里程碑验收
 
-完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)。M2–M4 已通过全量检查与独立整阶段审查并推送。M5.1–M5.5 单任务复审均通过，整M5审查问题在9f497a6修复并复审通过，main@bb20c6f已推送核验；M6.1工程任务复审通过，M6.2工程任务复审通过，M6.3接续，其余M6–M7待实施。真实凭据支持的LLM、图像和视频验收未执行。计划中的命令不是已执行结果，各阶段证据另行记录。
+完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)。M2–M4 已通过全量检查与独立整阶段审查并推送。M5.1–M5.5 单任务复审均通过，整M5审查问题在9f497a6修复并复审通过，main@bb20c6f已推送核验；M6.1–M6.3工程任务复审通过，M6.4实施中，其余M6–M7待实施。真实凭据支持的LLM、图像和视频验收未执行。计划中的命令不是已执行结果，各阶段证据另行记录。
 
 | 里程碑 | 范围 | 状态 |
 | --- | --- | --- |
@@ -9,7 +9,7 @@
 | M3 | 八图形编辑器、历史、标注、持久创作画布 | 验证通过 |
 | M4 | 图像模型、能力契约、任务状态机、计费与事件 | 工程验收与整阶段复审通过；真实调用未执行 |
 | M5 | opencode、MCP、提示词、聊天与确认卡 | 单任务与整阶段工程复审通过，真实调用未执行；远程交付见后文 |
-| M6 | 两个技能、分镜批准、Prompt 锁定与 Preflight | M6.1/M6.2任务复审通过，M6.3接续；整阶段未完成 |
+| M6 | 两个技能、分镜批准、Prompt 锁定与 Preflight | M6.1–M6.3任务复审通过，M6.4接续；整阶段未完成 |
 | M7 | 视频、任务中心完善、更新策略 | 待实施 |
 
 ## M1 验收项
@@ -259,3 +259,10 @@ M6.1 在b859a62复审通过（Spec compliant / Task quality Approved），无Cri
 控制器查看最终分镜截图并独立复算20份提交源码、20份工作源码、3制品、14证据共57项SHA-256一致。构建生成media_prompt.go的CRLF输入与HEAD字节差异独立记录，未冒称逐字相同。报告与清单见本地m6.2-report.md、m6.2-evidence-manifest.json。当前等待独立规格/质量审查；人类批准与Preflight分别属于M6.3/M6.4，未提前声明完成。真实LLM、付费视频和NSIS实际安装未执行。
 
 M6.2 独立审查先发现I1：损坏冻结请求缺Composition仍能POST并在400后删除记录；2e9b032补齐结构校验。复审再发现I2：新提交能保存恢复读取器拒绝的候选；070886c使首次保存与恢复共用同一校验，在持久化和POST前拦截。两个问题均有实际组件RED→GREEN；最终20/20及类型/构建通过，原记录零POST保留、正常unknown逐字重放和所有权保护仍通过。原审查者最终Spec Compliant / Quality Approved，无Critical/Important。现有914.13kB体积警告保留；修复仅前端，原生证据明确对应修复前4c3580c，未重复未变更后端套件。后续M6构建纳入修复；继续M6.3，整阶段尚未完成或推送。
+
+### M6.3 人类回执绑定批准与定向失效传播（2026-10-19）
+
+4ee7b84实现意图、脚本、分镜三门禁的人类回执绑定批准与定向失效传播。000013_creative_approvals新增不可变creative_artifacts与关联question_receipts(id)/versions(id)/semantic_hash的approvals表；五张核心表与000001–000012未变。ApproveStoryboard仅在questions.Reply人类回执同一SQLite事务内执行，校验上游已批准版本及version_dependencies(creative_source)，拒绝agent/自由文本/过期卡片/跨项目回执，通过store.CheckCreativeVersion阻止未分型Version绕过。修改分镜使分镜批准、待决卡片及pending/ready合同原子失效，但保留上游意图/脚本有效批准与submitted已冻结任务合同。
+
+全量scripts/check.ps1通过（Go/vet、78项组件含20项分镜与审批UI检查、69项TS、前端构建、3项Rust及M1冒烟 ef353633b448495f9158ed09c13133a5）；生产构建41.77秒通过；真实生产WebView＋固定opencode1.19.0三阶段39110e0240bf4d55908f299f55ad0249通过（意图→脚本→分镜rev1人工批准→WebView编辑产生rev2自动失效rev1并保留上游批准→rev2再次人工批准→物理重启保持“此版本已批准 · Prompt pending”且零修改请求/零残留进程）。独立任务审查结论Spec Compliant / Quality Approved，无Critical/Important，清单25源码＋3制品＋10证据SHA-256全部一致。继续M6.4精确Prompt合同与Preflight。
+

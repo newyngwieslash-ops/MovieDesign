@@ -55,7 +55,7 @@ M6.2 engineering gate approved at070886c after two bounded recovery-validation f
 
 **Interfaces:** `ApproveStoryboard(ctx,HumanReceipt)(Approval,error)`是questions回执后的内部调用；没有agent可调用的approve工具。Approval绑定project/pipeline/revision/semantic_hash/question_receipt_id。失效不是删除历史回执，而是该回执不能授权当前revision。
 
-- [ ] 构造revision1批准→修改Panel得revision2→提交旧卡/旧合同失败；覆盖改变Shot和Timeline、先修改后收到晚回执、双击批准、跨项目卡片、纯provider参数改变不使分镜批准失效。
+- [x] 构造revision1批准→修改Panel得revision2→提交旧卡/旧合同失败；覆盖改变Shot和Timeline、先修改后收到晚回执、双击批准、跨项目卡片、纯provider参数改变不使分镜批准失效。
 
 ```go
 func ApprovalMatches(current Revision, approved Approval) bool {
@@ -66,10 +66,13 @@ func ApprovalMatches(current Revision, approved Approval) bool {
 }
 ```
 
-- [ ] `go -C gateway test ./internal/pipeline -run 'TestApproval|TestInvalidation' -v`，确保缺revision/hash检查时至少一个竞态用例失败。
-- [ ] 回执消费与当前revision比较在SQLite事务内；UI已经展示旧卡不代表仍有效。revision2创建时将旧卡置过时、阻止未提交任务继续；对已提交任务提示其属于旧revision，由用户显式决定取消，不擅自重复生成。
-- [ ] 意图、脚本门禁使用同一questions机制，保存artifact version/hash依赖；改脚本使依赖它的分镜批准和Prompt合同不可用于新执行。只改价格/分辨率等参数生成新报价/合同，分镜语义批准保留。
-- [ ] 同一确认组件呈现明确的批准对象和版本，批准按钮不使用模糊“继续聊天”。提交 `feat(M6.3): invalidate stale creative approvals atomically`。
+- [x] `go -C gateway test ./internal/pipeline -run 'TestApproval|TestInvalidation' -v`，确保缺revision/hash检查时至少一个竞态用例失败。
+- [x] 回执消费与当前revision比较在SQLite事务内；UI已经展示旧卡不代表仍有效。revision2创建时将旧卡置过时、阻止未提交任务继续；对已提交任务提示其属于旧revision，由用户显式决定取消，不擅自重复生成。
+- [x] 意图、脚本门禁使用同一questions机制，保存artifact version/hash依赖；改脚本使依赖它的分镜批准和Prompt合同不可用于新执行。只改价格/分辨率等参数生成新报价/合同，分镜语义批准保留。
+- [x] 同一确认组件呈现明确的批准对象和版本，批准按钮不使用模糊“继续聊天”。提交 `feat(M6.3): invalidate stale creative approvals atomically`。
+
+M6.3 engineering gate approved at 4ee7b84 (full check, 78 rendered UI checks, production build, and native release desktop smoke 39110e0240bf4d55908f299f55ad0249 PASS). True provider calls remain unexecuted.
+
 
 ### Task M6.4：精确 Prompt 合同、Preflight 与全血缘
 
