@@ -168,7 +168,7 @@ func ValidateConfig(c Config) error {
 		if !regexp.MustCompile(`^[A-Z]{3}$`).MatchString(p.Currency) || p.MinorUnitScale < 0 || p.MinorUnitScale > 6 || p.UnitAmount < 0 || p.UnitAmount > 1e12 || p.CreditNumerator < 0 || p.CreditNumerator > 1e9 || p.CreditDenominator < 1 || p.CreditDenominator > 1e9 || p.EffectiveAt < 0 || strings.TrimSpace(p.Source) == "" || len(p.Source) > 200 || strings.TrimSpace(p.Version) == "" || len(p.Version) > 100 {
 			return invalid("Invalid pricing declaration")
 		}
-		if c.Kind == "image" && p.Unit != "image" || c.Kind == "video" && p.Unit != "second" || c.Kind == "llm" && p.Unit != "token" {
+		if c.Kind == "image" && p.Unit != "image" || c.Kind == "video" && p.Unit != "second" && p.Unit != "video" || c.Kind == "llm" && p.Unit != "token" {
 			return invalid("Unsupported price unit")
 		}
 	}

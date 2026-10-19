@@ -20,6 +20,20 @@ func collectImages(s *providers.Service, d *delivery.Service) func(context.Conte
 		return s.CollectImages(ctx, a.ProjectID, result, a.Provider, keys)
 	})
 }
+
+func collectVideos(s *providers.Service, d *delivery.Service) func(context.Context, Attempt) (Outcome, error) {
+	return collectOutputs(s, d, func(ctx context.Context, a Attempt, keys []string) ([]string, error) {
+		var result providers.ProviderResult
+		if e := json.Unmarshal(a.Result, &result); e != nil {
+			return nil, e
+		}
+		input, e := GenerationInput(a.ProjectID, a.Input)
+		if e != nil {
+			return nil, e
+		}
+		return s.CollectVideos(ctx, a.ProjectID, input, result, a.Provider, keys)
+	})
+}
 func collectOutputs(s *providers.Service, d *delivery.Service, collect func(context.Context, Attempt, []string) ([]string, error)) func(context.Context, Attempt) (Outcome, error) {
 	return func(ctx context.Context, a Attempt) (Outcome, error) {
 		d := d

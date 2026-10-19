@@ -43,5 +43,10 @@ func InstallText(base *Executor, s *providers.Service, d *delivery.Service, subm
 			return base.Query(ctx, a)
 		}
 		return Outcome{Status: Unknown}, nil
+	}, Cancel: func(ctx context.Context, a Attempt) (Outcome, error) {
+		if a.Provider.Config.Kind != "llm" && base.Cancel != nil {
+			return base.Cancel(ctx, a)
+		}
+		return Outcome{Status: Cancelled}, nil
 	}}
 }

@@ -45,6 +45,8 @@ func (s Service) Capabilities(ctx context.Context) ([]providers.Capability, erro
 		for _, item := range items {
 			if item.Config.Enabled && item.Config.Kind == "image" {
 				caps = append(caps, providers.ImageCapability(item.Config))
+			} else if item.Config.Enabled && item.Config.Kind == "video" {
+				caps = append(caps, providers.VideoCapability(item.Config))
 			}
 		}
 	}
@@ -106,28 +108,41 @@ func (s Service) Admit(ctx context.Context, p string, r Request, wire []byte, es
 		r.References = []string{}
 	}
 	isText := r.CapabilityID == "text:configured-llm"
-	if !isText && (!strings.HasPrefix(r.CapabilityID, "image:") || len(r.CapabilityID) <= 6) {
-		return result, invalid("Expected an explicit image capability ID")
+	isImage := strings.HasPrefix(r.CapabilityID, "image:") && len(r.CapabilityID) > 6
+	isVideo := strings.HasPrefix(r.CapabilityID, "video:") && len(r.CapabilityID) > 6
+	if !isText && !isImage && !isVideo {
+		return result, invalid("Expected an explicit image, video, or text capability ID")
 	}
 	var f providers.FrozenProvider
 	var e error
-	if isText {
+	switch {
+	case isText:
 		if s.TextProvider == nil {
 			return result, invalid("Text runtime unavailable")
 		}
 		f, e = s.TextProvider(ctx)
-	} else {
+	case isVideo:
+		f, e = s.Providers.Resolve(strings.TrimPrefix(r.CapabilityID, "video:"))
+	default:
 		f, e = s.Providers.Resolve(strings.TrimPrefix(r.CapabilityID, "image:"))
 	}
 	if e != nil {
 		return result, e
 	}
-	cap := providers.ImageCapability(f.Config)
-	if isText {
+	var cap providers.Capability
+	switch {
+	case isText:
 		cap = providers.TextCapability(f.Config)
-	}
-	if f.Config.Kind != "image" && !isText {
-		return result, invalid("Unsupported image capability")
+	case isVideo:
+		if f.Config.Kind != "video" {
+			return result, invalid("Unsupported video capability")
+		}
+		cap = providers.VideoCapability(f.Config)
+	default:
+		if f.Config.Kind != "image" {
+			return result, invalid("Unsupported image capability")
+		}
+		cap = providers.ImageCapability(f.Config)
 	}
 	output, e := json.Marshal(r.Output)
 	if e != nil {

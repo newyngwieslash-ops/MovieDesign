@@ -15,7 +15,7 @@ import (
 )
 
 func generationMethod(path, method string) bool {
-	return (path == "/api/generate/image" || path == "/api/generate/text" || path == "/api/generate/estimate" || path == "/api/generate/mask" || path == "/api/v3/capabilities/get") && method == "POST" || (path == "/api/v3/capabilities" || path == "/api/knowledge/providers/openai-images.md" || path == "/api/knowledge/providers/text.md") && method == "GET"
+	return (path == "/api/generate/image" || path == "/api/generate/video" || path == "/api/generate/text" || path == "/api/generate/estimate" || path == "/api/generate/mask" || path == "/api/v3/capabilities/get") && method == "POST" || (path == "/api/v3/capabilities" || path == "/api/knowledge/providers/openai-images.md" || path == "/api/knowledge/providers/ark-video.md" || path == "/api/knowledge/providers/text.md") && method == "GET"
 }
 func generationRoute(path string) bool {
 	return generationMethod(path, "GET") || generationMethod(path, "POST")
@@ -66,7 +66,7 @@ func serveGenerate(w http.ResponseWriter, r *http.Request, service generation.Se
 		reject(w, 400, "invalid_input", "Invalid generation schema")
 		return
 	}
-	if r.URL.Path == "/api/generate/text" && request.CapabilityID != "text:configured-llm" || r.URL.Path == "/api/generate/image" && !strings.HasPrefix(request.CapabilityID, "image:") {
+	if r.URL.Path == "/api/generate/text" && request.CapabilityID != "text:configured-llm" || r.URL.Path == "/api/generate/image" && !strings.HasPrefix(request.CapabilityID, "image:") || r.URL.Path == "/api/generate/video" && !strings.HasPrefix(request.CapabilityID, "video:") {
 		reject(w, 400, "invalid_input", "Capability does not match generation route")
 		return
 	}
@@ -83,7 +83,7 @@ func serveGenerate(w http.ResponseWriter, r *http.Request, service generation.Se
 }
 
 func serveCapabilities(w http.ResponseWriter, r *http.Request, s generation.Service) {
-	if r.URL.Path == "/api/knowledge/providers/openai-images.md" || r.URL.Path == "/api/knowledge/providers/text.md" {
+	if r.URL.Path == "/api/knowledge/providers/openai-images.md" || r.URL.Path == "/api/knowledge/providers/ark-video.md" || r.URL.Path == "/api/knowledge/providers/text.md" {
 		if r.URL.RawQuery != "" {
 			reject(w, 400, "invalid_input", "Knowledge card accepts no query")
 			return
@@ -92,6 +92,8 @@ func serveCapabilities(w http.ResponseWriter, r *http.Request, s generation.Serv
 		card := providers.ImageKnowledgeCard
 		if strings.HasSuffix(r.URL.Path, "/text.md") {
 			card = providers.TextKnowledgeCard
+		} else if strings.HasSuffix(r.URL.Path, "/ark-video.md") {
+			card = providers.VideoKnowledgeCard
 		}
 		w.Write([]byte(card))
 		return

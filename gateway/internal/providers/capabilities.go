@@ -237,6 +237,9 @@ func validateDeclaration(c Config) error {
 		return invalid("Catalog identity is gateway-owned")
 	}
 	if c.Kind != "image" {
+		if c.Kind == "video" {
+			return validateVideoDeclaration(c)
+		}
 		if len(d.ParamSchema) > 0 || len(d.ReferenceRoles) > 0 || d.Constraints != (Constraints{}) {
 			return invalid("Video schema is not implemented")
 		}
@@ -315,6 +318,9 @@ func ImageCapability(c Config) Capability {
 	return cap
 }
 func Validate(cap Capability, in GenerationInput) error {
+	if cap.Operation == "video" && cap.Protocol == "ark-video" {
+		return ValidateVideo(cap, in)
+	}
 	if cap.Operation != "image" || cap.Protocol != "openai-images" {
 		return invalid("Unsupported capability protocol")
 	}
@@ -365,6 +371,9 @@ func Validate(cap Capability, in GenerationInput) error {
 func ReferenceRole(cap Capability, index int) string {
 	if len(cap.ReferenceRoles) > index {
 		return cap.ReferenceRoles[index]
+	}
+	if cap.Operation == "video" {
+		return fmt.Sprintf("reference_%d", index)
 	}
 	return "image"
 }

@@ -439,10 +439,10 @@ func (s *Service) Commit(ctx context.Context, p, key, stage string) (store.Asset
 }
 func asset(id, v string, f FileFingerprint) store.Asset {
 	now := time.Now().UnixMilli()
-	return store.Asset{ID: id, Path: v, Status: "active", Size: f.Size, MtimeMS: f.MtimeMS, DevID: &f.DevID, Inode: &f.Inode, QuickHash: &f.QuickHash, Width: f.Width, Height: f.Height, MIMEType: &f.MIME, Name: path.Base(v), CreatedAt: now, UpdatedAt: now}
+	return store.Asset{ID: id, Path: v, Status: "active", Size: f.Size, MtimeMS: f.MtimeMS, DevID: &f.DevID, Inode: &f.Inode, QuickHash: &f.QuickHash, Width: f.Width, Height: f.Height, DurationMS: f.DurationMS, MIMEType: &f.MIME, Name: path.Base(v), Metadata: f.Metadata, CreatedAt: now, UpdatedAt: now}
 }
 func insertAsset(ctx context.Context, tx *sql.Tx, p string, a store.Asset) error {
-	_, e := tx.ExecContext(ctx, `INSERT INTO assets(id,path,status,size,mtime_ms,dev_id,inode,quick_hash,full_hash,width,height,mime_type,name,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, a.Path, a.Status, a.Size, a.MtimeMS, a.DevID, a.Inode, a.QuickHash, a.FullHash, a.Width, a.Height, a.MIMEType, a.Name, a.CreatedAt, a.UpdatedAt)
+	_, e := tx.ExecContext(ctx, `INSERT INTO assets(id,path,status,size,mtime_ms,dev_id,inode,quick_hash,full_hash,width,height,duration_ms,mime_type,name,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, a.ID, a.Path, a.Status, a.Size, a.MtimeMS, a.DevID, a.Inode, a.QuickHash, a.FullHash, a.Width, a.Height, a.DurationMS, a.MIMEType, a.Name, a.Metadata, a.CreatedAt, a.UpdatedAt)
 	if e == nil {
 		_, e = tx.ExecContext(ctx, "INSERT INTO asset_projects(asset_id,project_id) VALUES(?,?)", a.ID, p)
 	}

@@ -142,6 +142,9 @@ func pngAlpha(data []byte) bool {
 }
 func (s *Service) FreezeReferences(ctx context.Context, p string, in GenerationInput, f FrozenProvider) ([]ReferenceAsset, error) {
 	cap := ImageCapability(f.Config)
+	if f.Config.Kind == "video" {
+		cap = VideoCapability(f.Config)
+	}
 	if e := Validate(cap, in); e != nil {
 		return nil, e
 	}

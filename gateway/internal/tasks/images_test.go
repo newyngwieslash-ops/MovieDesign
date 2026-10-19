@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestImageAdapterPersistsResultWithoutDeliveryOrResubmit(t *testing.T) {
@@ -131,5 +133,116 @@ func TestImageExecutorPreservesJSONNumbers(t *testing.T) {
 				t.Fatal("numeric wire token changed", token, wire, calls, e)
 			}
 		})
+	}
+}
+
+func TestVideoExecutorRestartPollResumptionAndLateResult(t *testing.T) {
+	s, p, in := setup(t)
+	ctx := context.Background()
+
+	var (
+		mu          sync.Mutex
+		postCalls   int
+		getCalls    int
+		deleteCalls int
+		status      = "running"
+		serverURL   string
+	)
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/contents/generations/tasks":
+			postCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "cgt-restart-001", "status": "queued"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/contents/generations/tasks/cgt-restart-001":
+			getCalls++
+			w.Header().Set("Content-Type", "application/json")
+			resp := map[string]any{"id": "cgt-restart-001", "status": status}
+			if status == "succeeded" {
+				resp["content"] = map[string]any{"video_url": serverURL + "/cdn/restart.mp4"}
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == http.MethodDelete:
+			deleteCalls++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	defer remote.Close()
+	serverURL = remote.URL
+
+	in.CapabilityID = "video:ark-test"
+	in.Count = 1
+	in.References = nil
+	in.Provider.CredentialVersion = ""
+	in.Provider.Config.ID = "ark-test"
+	in.Provider.Config.Name = "Ark Video Test"
+	in.Provider.Config.Kind = "video"
+	in.Provider.Config.Protocol = "ark-video"
+	in.Provider.Config.BaseURL = remote.URL + "/api/v3"
+	in.Provider.Config.ModelID = "doubao-seedance-2-0"
+	in.Provider.Config.Enabled = true
+	in.Provider.Config.Capability.MaxCount = 1
+	in.Provider.Config.Capability.MaxPromptBytes = 16384
+	in.Provider.Config.Capability.MaxReferences = 4
+	in.Provider.Config.Capability.Sizes = []string{"1080x1920"}
+	in.Provider.Config.Capability.DurationSeconds = []int{5, 10, 15}
+	in.Provider.Config.Capability.Audio = true
+	in.Params = json.RawMessage(`{"duration":15,"aspect_ratio":"9:16","resolution":"1080p","size":"1080x1920","generate_audio":true,"audio_mode":"narration+music"}`)
+
+	providerSvc := providers.NewService(s.DB, nil)
+	s.Executor = ImageExecutor(providerSvc)
+
+	v, err := s.Submit(ctx, p, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an interrupted running attempt that had already saved upstream_task_id="cgt-restart-001"
+	if _, err := s.DB.Exec(`UPDATE tasks SET status='running', updated_at=1 WHERE id=?`, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`UPDATE task_attempts SET state='running', submit_started_at=1, upstream_id='cgt-restart-001' WHERE task_id=? AND attempt=1`, v.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recover while upstream is still "running": must call GET (never POST) and keep task Running while spawning pollAcceptedAttempt
+	if err := s.Recover(ctx); err != nil {
+		t.Fatalf("Recover failed: %v", err)
+	}
+	mu.Lock()
+	if postCalls != 0 || getCalls == 0 {
+		mu.Unlock()
+		t.Fatalf("expected postCalls=0 and getCalls>0 during Recover, got post=%d get=%d", postCalls, getCalls)
+	}
+	// Now transition upstream to succeeded and verify background poll settles the task without ever calling POST
+	status = "succeeded"
+	mu.Unlock()
+
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		cur, qErr := s.Query(ctx, p, v.ID)
+		if qErr != nil {
+			t.Fatal(qErr)
+		}
+		if cur.Status != Running {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	mu.Lock()
+	finalPosts := postCalls
+	finalDeletes := deleteCalls
+	mu.Unlock()
+	if finalPosts != 0 || finalDeletes != 0 {
+		t.Fatalf("expected 0 POSTs and 0 DELETEs on restart poll resumption, got post=%d delete=%d", finalPosts, finalDeletes)
+	}
+	var savedResult string
+	if err := s.DB.QueryRow(`SELECT coalesce(result_json,'') FROM task_attempts WHERE task_id=? AND attempt=1`, v.ID).Scan(&savedResult); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(savedResult, "/cdn/restart.mp4") {
+		t.Fatalf("expected saved video_url in result_json after poll resumption, got %s", savedResult)
 	}
 }

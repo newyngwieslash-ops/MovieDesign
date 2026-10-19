@@ -232,6 +232,15 @@ func validateVideoParams(cap providers.Capability, params map[string]any) error 
 			if !ok || seed < 0 {
 				return invalid("Invalid video parameter: seed")
 			}
+		case "resolution":
+			s, ok := v.(string)
+			if !ok || !slices.Contains([]string{"480p", "720p", "1080p"}, s) {
+				return invalid("Invalid video parameter: resolution")
+			}
+		case "camera_fixed", "watermark":
+			if _, ok := v.(bool); !ok {
+				return invalid("Invalid video parameter: " + k)
+			}
 		default:
 			return invalid("Invalid or undeclared parameter: " + k)
 		}

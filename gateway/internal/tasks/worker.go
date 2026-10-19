@@ -32,6 +32,7 @@ type Executor struct {
 	Submit  func(context.Context, Attempt, func(string) error) (Outcome, error)
 	Query   func(context.Context, Attempt) (Outcome, error)
 	Collect func(context.Context, Attempt) (Outcome, error)
+	Cancel  func(context.Context, Attempt) (Outcome, error)
 }
 
 func loadAttempt(ctx context.Context, q rowQuery, p, id string) (a Attempt, state string, started bool, e error) {
@@ -97,12 +98,15 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 	}
 	adopt := v.Status == Cancelled && state == "adoption_pending"
 	collect := (state == "collection_pending" || adopt) && s.Executor.Collect != nil
-	if Terminal(v.Status) && !adopt || !collect && (state != "approved" || started || s.Executor.Submit == nil) {
+	resumePoll := v.Status == Running && (state == "submitted" || state == "running") && a.UpstreamID != "" && a.Provider.Config.Kind == "video" && s.Executor.Submit != nil
+	if Terminal(v.Status) && !adopt || !collect && !resumePoll && (state != "approved" || started || s.Executor.Submit == nil) {
 		return nil
 	}
 	var res sql.Result
 	if collect {
 		res, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='collecting' WHERE task_id=? AND attempt=? AND state IN ('collection_pending','adoption_pending')", id, attempt)
+	} else if resumePoll {
+		res, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='running' WHERE task_id=? AND attempt=? AND state IN ('submitted','running') AND upstream_id<>''", id, attempt)
 	} else {
 		stale, claimErr := pipeline.ClaimExecution(ctx, tx, p, id, executionCheck(a.Input))
 		if claimErr != nil {
@@ -136,7 +140,7 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 	if e != nil || n != 1 {
 		return e
 	}
-	if !adopt {
+	if !adopt && !resumePoll {
 		v.Status = Running
 		v.Problem = nil
 		v.Actions = []string{"cancel"}
@@ -154,7 +158,11 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 		return s.finish(a, outcome, collectErr)
 	}
 	outcome, submitErr := s.Executor.Submit(ctx, a, func(upstream string) error { return s.checkpoint(a, upstream) })
-	if submitErr == nil && len(outcome.Result) > 0 && outcome.Problem != nil && outcome.Problem.Code == "RESULT_AWAITING_DELIVERY" && s.Executor.Collect != nil {
+	return s.finishOrCollect(ctx, a, outcome, submitErr)
+}
+
+func (s *Service) finishOrCollect(ctx context.Context, a Attempt, outcome Outcome, callErr error) error {
+	if callErr == nil && len(outcome.Result) > 0 && outcome.Problem != nil && outcome.Problem.Code == "RESULT_AWAITING_DELIVERY" && s.Executor != nil && s.Executor.Collect != nil {
 		// Durable accepted response must precede any download or archive.
 		res, err := s.DB.ExecContext(context.Background(), "UPDATE task_attempts SET result_json=coalesce(result_json,?),state='collecting' WHERE task_id=? AND attempt=?", string(outcome.Result), a.TaskID, a.Number)
 		if err != nil {
@@ -165,7 +173,7 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 			return conflict()
 		}
 		a.Result = outcome.Result
-		current, err := s.Query(context.Background(), p, id)
+		current, err := s.Query(context.Background(), a.ProjectID, a.TaskID)
 		if err != nil {
 			return err
 		}
@@ -175,7 +183,7 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 		collected, err := s.Executor.Collect(ctx, a)
 		return s.finish(a, collected, err)
 	}
-	return s.finish(a, outcome, submitErr)
+	return s.finish(a, outcome, callErr)
 }
 func (s *Service) checkpoint(a Attempt, upstream string) error {
 	if upstream == "" || len(upstream) > 2048 {
@@ -393,8 +401,11 @@ func (s *Service) Recover(_ context.Context) error {
 		}
 		if (a.UpstreamID != "" || a.Provider.Config.Kind == "llm") && s.Executor != nil && s.Executor.Query != nil {
 			out, queryErr := s.Executor.Query(ctx, a)
-			if e = s.finish(a, out, queryErr); e != nil {
+			if e = s.finishOrCollect(ctx, a, out, queryErr); e != nil {
 				return e
+			}
+			if queryErr == nil && out.Status == Running && a.UpstreamID != "" && a.Provider.Config.Kind == "video" {
+				s.pollAcceptedAttempt(a)
 			}
 		} else {
 			if e = s.finish(a, Outcome{Status: Unknown}, errors.New("interrupted submission")); e != nil {
@@ -403,6 +414,56 @@ func (s *Service) Recover(_ context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Service) pollAcceptedAttempt(a Attempt) {
+	if e := s.begin(); e != nil {
+		return
+	}
+	go func() {
+		defer s.end()
+		ctx := s.ctx
+		delay := 50 * time.Millisecond
+		maxDelay := 1500 * time.Millisecond
+		transientFailures := 0
+		for {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			var status string
+			var savedResult string
+			if err := s.DB.QueryRowContext(ctx, "SELECT t.status, coalesce(a.result_json,'null') FROM tasks t JOIN task_attempts a ON a.task_id=t.id AND a.attempt=t.current_attempt WHERE t.id=? AND t.project_id=? AND a.attempt=?", a.TaskID, a.ProjectID, a.Number).Scan(&status, &savedResult); err != nil {
+				return
+			}
+			if savedResult != "null" || (Status(status) != Running && Status(status) != Cancelled) {
+				return
+			}
+			out, queryErr := s.Executor.Query(ctx, a)
+			if queryErr != nil && out.Status == "" {
+				transientFailures++
+				if transientFailures >= 3 {
+					_ = s.finishOrCollect(ctx, a, out, queryErr)
+					return
+				}
+			} else {
+				transientFailures = 0
+				if out.Status != Running {
+					_ = s.finishOrCollect(ctx, a, out, queryErr)
+					return
+				}
+			}
+			if delay < maxDelay {
+				delay *= 2
+				if delay > maxDelay {
+					delay = maxDelay
+				}
+			}
+		}
+	}()
 }
 
 // CompleteDelivery shares the final Delivery receipt transaction: cancellation

@@ -37,20 +37,28 @@ func Estimate(in GenerationInput, f FrozenProvider) (Quote, error) {
 	if e := ValidateConfig(f.Config); e != nil {
 		return q, e
 	}
-	validate := Validate(ImageCapability(f.Config), in)
-	if f.Config.Kind == "llm" {
+	var validate error
+	switch f.Config.Kind {
+	case "llm":
 		validate = ValidateText(in, f)
+	case "video":
+		validate = Validate(VideoCapability(f.Config), in)
+	default:
+		validate = Validate(ImageCapability(f.Config), in)
 	}
 	if e := validate; e != nil {
 		return q, e
 	}
 	p := f.Config.Pricing
-	if p == nil || (p.Unit != "image" && !(f.Config.Kind == "llm" && p.Unit == "token")) || p.EffectiveAt > time.Now().Unix() {
-		return q, invalid("A current explicit image price is required; unknown price cannot be free")
+	validUnit := p != nil && ((f.Config.Kind == "image" && p.Unit == "image") || (f.Config.Kind == "video" && (p.Unit == "second" || p.Unit == "video")) || (f.Config.Kind == "llm" && p.Unit == "token"))
+	if !validUnit || p.EffectiveAt > time.Now().Unix() {
+		return q, invalid("A current explicit price is required; unknown price cannot be free")
 	}
 	adapter := "openai-images-m4.3-v1"
 	if f.Config.Kind == "llm" {
 		adapter = "opencode-text-m5.5-v1"
+	} else if f.Config.Kind == "video" {
+		adapter = "ark-video-m7.1-v1"
 	}
 	raw, e := json.Marshal(struct {
 		Input          GenerationInput `json:"input"`
@@ -66,8 +74,20 @@ func Estimate(in GenerationInput, f FrozenProvider) (Quote, error) {
 	}
 	hash := sha256.Sum256(raw)
 	amount := p.UnitAmount * int64(in.Count)
+	var videoSeconds int64 = 1
 	if f.Config.Kind == "llm" {
 		amount = p.UnitAmount * int64(f.Config.TextContext)
+	} else if f.Config.Kind == "video" {
+		if rawDur, hasDur := in.Params["duration"]; hasDur {
+			if d, ok := intParam(rawDur); ok && d > 0 {
+				videoSeconds = d
+			}
+		} else if len(f.Config.Capability.DurationSeconds) > 0 {
+			videoSeconds = int64(f.Config.Capability.DurationSeconds[0])
+		}
+		if p.Unit == "second" {
+			amount = p.UnitAmount * videoSeconds * int64(in.Count)
+		}
 	}
 	credits := new(big.Int).Mul(big.NewInt(amount), big.NewInt(p.CreditNumerator))
 	credits.Add(credits, big.NewInt(p.CreditDenominator-1))
@@ -78,6 +98,12 @@ func Estimate(in GenerationInput, f FrozenProvider) (Quote, error) {
 	q = Quote{QuoteID: uuid.NewString(), Currency: p.Currency, EstimatedAmount: amount, MinorUnitScale: p.MinorUnitScale, EstimatedCredits: credits.Int64(), ExpiresAt: time.Now().Add(5 * time.Minute).UnixMilli(), InputHash: hex.EncodeToString(hash[:]), Source: p.Source, Version: p.Version}
 	if f.Config.Kind == "llm" {
 		q.Basis = fmt.Sprintf("保守估算：上下文上限 %d token × 声明的单 token 最高价；输出最多 %d token。不是供应商实测费用。", f.Config.TextContext, f.Config.TextOutput)
+	} else if f.Config.Kind == "video" {
+		if p.Unit == "second" {
+			q.Basis = fmt.Sprintf("用户声明视频单秒价估算：%d 秒 × %d 最小货币单位/秒。不是供应商实测账单。", videoSeconds, p.UnitAmount)
+		} else {
+			q.Basis = fmt.Sprintf("用户声明单条视频价估算：%d 条 × %d 最小货币单位/条。不是供应商实测账单。", in.Count, p.UnitAmount)
+		}
 	}
 	return q, nil
 }

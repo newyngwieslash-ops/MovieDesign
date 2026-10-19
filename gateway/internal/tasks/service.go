@@ -656,11 +656,21 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 	})
 	if e == nil {
 		e = json.Unmarshal(result, &v)
-		if e == nil && freshResolve && i.Action == "query" {
-			if updated, ok := s.reconcileUnknown(ctx, p, id); ok {
-				v = updated
-				if encoded, err := json.Marshal(v); err == nil {
-					_, _ = s.DB.ExecContext(ctx, "UPDATE write_requests SET response_json=? WHERE project_id=? AND operation=? AND request_id=?", string(encoded), p, "tasks.resolve."+id, i.RequestID)
+		if e == nil && freshResolve {
+			switch i.Action {
+			case "query":
+				if updated, ok := s.reconcileUnknown(ctx, p, id); ok {
+					v = updated
+					if encoded, err := json.Marshal(v); err == nil {
+						_, _ = s.DB.ExecContext(ctx, "UPDATE write_requests SET response_json=? WHERE project_id=? AND operation=? AND request_id=?", string(encoded), p, "tasks.resolve."+id, i.RequestID)
+					}
+				}
+			case "cancel":
+				if updated, ok := s.reconcileCancel(ctx, p, id); ok {
+					v = updated
+					if encoded, err := json.Marshal(v); err == nil {
+						_, _ = s.DB.ExecContext(ctx, "UPDATE write_requests SET response_json=? WHERE project_id=? AND operation=? AND request_id=?", string(encoded), p, "tasks.resolve."+id, i.RequestID)
+					}
 				}
 			}
 		}
@@ -678,7 +688,7 @@ func (s *Service) reconcileUnknown(ctx context.Context, p, id string) (TaskView,
 		return TaskView{}, false
 	}
 	out, queryErr := s.Executor.Query(ctx, a)
-	if err := s.finish(a, out, queryErr); err != nil {
+	if err := s.finishOrCollect(ctx, a, out, queryErr); err != nil {
 		return TaskView{}, false
 	}
 	v, err := s.Query(ctx, p, id)
@@ -686,6 +696,55 @@ func (s *Service) reconcileUnknown(ctx context.Context, p, id string) (TaskView,
 		return TaskView{}, false
 	}
 	return v, true
+}
+
+func (s *Service) reconcileCancel(ctx context.Context, p, id string) (TaskView, bool) {
+	if s.Executor == nil || s.Executor.Cancel == nil {
+		return TaskView{}, false
+	}
+	a, _, started, err := loadAttempt(ctx, s.DB, p, id)
+	if err != nil || !started || a.UpstreamID == "" {
+		return TaskView{}, false
+	}
+	out, _ := s.Executor.Cancel(ctx, a)
+	if len(out.Result) > 0 && out.Problem != nil && out.Problem.Code == "RESULT_AWAITING_DELIVERY" {
+		if err := s.finish(a, out, nil); err != nil {
+			return TaskView{}, false
+		}
+		v, err := s.Query(ctx, p, id)
+		return v, err == nil
+	}
+	if out.Problem != nil {
+		tx, err := s.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return TaskView{}, false
+		}
+		defer tx.Rollback()
+		v, attempt, session, err := query(ctx, tx, p, id)
+		if err != nil || attempt != a.Number || v.Status != Cancelled {
+			return TaskView{}, false
+		}
+		encodedProb, _ := json.Marshal(out.Problem)
+		state := "cancelled"
+		if out.Status == Running {
+			state = "running"
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE task_attempts SET state=?,error_json=coalesce(error_json,?) WHERE task_id=? AND attempt=?", state, string(encodedProb), id, attempt); err != nil {
+			return TaskView{}, false
+		}
+		v.Problem = out.Problem
+		if err := s.save(ctx, tx, p, session, &v, attempt); err != nil {
+			return TaskView{}, false
+		}
+		if err := tx.Commit(); err != nil {
+			return TaskView{}, false
+		}
+		if out.Status == Running && a.UpstreamID != "" && a.Provider.Config.Kind == "video" {
+			s.pollAcceptedAttempt(a)
+		}
+		return v, true
+	}
+	return TaskView{}, false
 }
 
 // BillingInput is SQL-only; questions must pass their own transaction.

@@ -14,6 +14,9 @@ func KnowledgeCard(operation string) string {
 	if operation == "text" {
 		return TextKnowledgeCard
 	}
+	if operation == "video" {
+		return VideoKnowledgeCard
+	}
 	return ImageKnowledgeCard
 }
 
