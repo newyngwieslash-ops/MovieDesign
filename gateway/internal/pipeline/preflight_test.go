@@ -381,6 +381,18 @@ func TestPreflightAllSevenGates(t *testing.T) {
 	}); err == nil {
 		t.Fatal("missing reference asset accepted")
 	}
+	var docAssetID string
+	if err := f.db.QueryRow("SELECT asset_id FROM versions WHERE id=?", sbBind.DocumentVersionID).Scan(&docAssetID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pipeline.Preflight(ctx, f.db, f.p, pipeline.CompileInput{
+		PipelineID:   "film",
+		CapabilityID: "video:seedance",
+		References:   []string{docAssetID},
+		Params:       map[string]any{"duration": 15, "audio_mode": "narration+music"},
+	}); err == nil {
+		t.Fatal("non-media text/plain asset accepted as reference in Preflight")
+	}
 
 	// 5. Duration and aspect ratio mismatch
 	if _, err := pipeline.Preflight(ctx, f.db, f.p, pipeline.CompileInput{
@@ -434,7 +446,7 @@ func TestPreflightAllSevenGates(t *testing.T) {
 	if err != nil || !report.Passed || contract.Status != "ready" {
 		t.Fatalf("Compile failed: %+v %+v %v", contract, report, err)
 	}
-	if len(contract.References) != 2 || contract.References[0].AssetID != refA || contract.References[1].AssetID != refB || !contract.Audio.RequiresNarration || !contract.Audio.RequiresMusic {
+	if len(contract.References) != 2 || contract.References[0].AssetID != refA || contract.References[1].AssetID != refB || !contract.Audio.RequiresNarration || !contract.Audio.RequiresMusic || contract.Audio.Mode != "narration+music" || contract.References[0].MediaKind != "image" {
 		t.Fatalf("compiled contract metadata mismatch: %+v", contract)
 	}
 }
@@ -487,10 +499,21 @@ func TestContractAdmissionOmitBypassLineageAndWorkerRace(t *testing.T) {
 		return r, raw
 	}
 
-	// 1. Omit-bypass prevention: omitting contract_id in a pipeline project is rejected even with a different composition name!
-	reqOmit, rawOmit := makeGenReq("omit-bypass", nil, exactPrompt, []string{refA, refB}, "UnrelatedComp")
-	if _, err := f.gen.Admit(ctx, f.p, reqOmit, rawOmit, false, ""); err == nil {
-		t.Fatal("omitting contractId in pipeline project bypassed admission gate")
+	// 1. Omit-bypass prevention: omitting contract_id when targeting the active pipeline composition ("Film") is rejected,
+	// whereas ordinary non-pipeline image generation targeting a separate standalone composition ("UnrelatedComp") remains legitimate!
+	reqOmitPipe, rawOmitPipe := makeGenReq("omit-bypass-pipe", nil, exactPrompt, []string{refA, refB}, "Film")
+	if _, err := f.gen.Admit(ctx, f.p, reqOmitPipe, rawOmitPipe, false, ""); err == nil {
+		t.Fatal("omitting contractId on active pipeline composition bypassed admission gate")
+	}
+	reqStandalone, rawStandalone := makeGenReq("standalone-est", nil, exactPrompt, []string{refA, refB}, "UnrelatedComp")
+	if estRes, err := f.gen.Admit(ctx, f.p, reqStandalone, rawStandalone, true, ""); err != nil || estRes.Quote == nil {
+		t.Fatalf("expected ordinary non-pipeline image estimate on standalone composition to succeed, got %+v %v", estRes, err)
+	}
+
+	// Pre-delivery delete guard: deleting reference version refVerA before task delivery is blocked with 409 Conflict
+	objs := store.Objects{DB: f.db}
+	if _, delErr := objs.Mutate(ctx, f.p, "versions", store.Mutation{RequestID: "del-refver-pre", Action: "delete", ID: refVerA}); delErr == nil {
+		t.Fatal("deleting reference Version before task delivery should be blocked by checkPipelineReference")
 	}
 
 	// 2. Modified prompt bytes (\n instead of \r\n) or reordered references ([refB, refA]) rejected!
@@ -655,6 +678,11 @@ func TestContractAdmissionOmitBypassLineageAndWorkerRace(t *testing.T) {
 		len(lineage.Outputs) != 1 || lineage.Outputs[0].VersionID != mediaVersionID || lineage.Outputs[0].SourceVersionID != promptVersionID2 {
 		t.Fatalf("incomplete SQL lineage: %+v", lineage)
 	}
+	// Verify TraceLineage for older storyboard revision 1 returns revision 1's prompt & contract (not revision 2's)
+	lineageOldSB, err := pipeline.TraceLineage(ctx, f.db, f.p, sbBind.DocumentVersionID)
+	if err != nil || lineageOldSB.Storyboard == nil || lineageOldSB.Storyboard.Revision != 1 || lineageOldSB.Prompt == nil || lineageOldSB.Prompt.DocumentVersionID != promptVersionID || lineageOldSB.Contract == nil || lineageOldSB.Contract.ID != cid {
+		t.Fatalf("older storyboard revision lineage mismatch: %+v %v", lineageOldSB, err)
+	}
 	if lineage.Prompt.SourceVersionID != sbBind2.DocumentVersionID || lineage.Storyboard.SourceVersionID != scriptBind.DocumentVersionID || lineage.Script.SourceVersionID != intentBind.DocumentVersionID {
 		t.Fatalf("broken versions.source_version_id chain: prompt=%+v sb=%+v script=%+v", lineage.Prompt, lineage.Storyboard, lineage.Script)
 	}
@@ -672,12 +700,13 @@ func TestContractAdmissionOmitBypassLineageAndWorkerRace(t *testing.T) {
 	}
 
 	// Verify delete guards return 409 Conflict (protected) instead of 500
-	objs := store.Objects{DB: f.db}
 	for _, tc := range []struct{ kind, id string }{
 		{"versions", promptVersionID2},
 		{"versions", sbBind2.DocumentVersionID},
 		{"versions", scriptBind.DocumentVersionID},
 		{"versions", intentBind.DocumentVersionID},
+		{"versions", refVerA},
+		{"versions", refVerB},
 		{"resources", lineage.Prompt.ResourceID},
 		{"assets", refA},
 		{"projects", f.p},

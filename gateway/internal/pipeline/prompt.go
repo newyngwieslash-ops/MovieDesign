@@ -27,6 +27,7 @@ type AudioRequirement struct {
 	RequiresAudio     bool   `json:"requiresAudio"`
 	RequiresNarration bool   `json:"requiresNarration"`
 	RequiresMusic     bool   `json:"requiresMusic"`
+	Mode              string `json:"mode,omitempty"`
 }
 
 type PromptReference struct {
@@ -34,6 +35,8 @@ type PromptReference struct {
 	AssetID   string `json:"assetId"`
 	VersionID string `json:"versionId,omitempty"`
 	Role      string `json:"role"`
+	MediaKind string `json:"mediaKind,omitempty"`
+	MIMEType  string `json:"mimeType,omitempty"`
 	SHA256    string `json:"sha256,omitempty"`
 }
 

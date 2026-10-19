@@ -66,6 +66,7 @@ try{
    const canvas2=await get('/api/canvas/nodes'+query),pNode=Object.values(canvas2.nodes).find(n=>n.activeItem?.versionId===expected.promptVersion),pAfter={...pNode,position:{x:700,y:25},size:{width:650,height:700}};
    await post('/api/canvas/commands'+query,{requestId:'prompt-layout',expectedRevision:canvas2.revision,command:{type:'canvas.patch',nodes:[{id:pNode.id,before:pNode,after:pAfter}],edges:[]}});
    await wait(`document.querySelector('.prompt-review')?.innerText.includes('Preflight 七项门禁：全部通过')`);
+   await wait(`document.querySelector('.prompt-review')?.innerText.includes('音轨契约：narration+music（口播：是 · 配乐：是')`);
    await wait(`document.querySelector('.prompt-review')?.innerText.includes('SQL 血缘链路：意图 r1 → 脚本 r1 → 分镜 r2 → Prompt r1')`);
    const promptView=await get('/api/pipeline/prompt'+query+'&versionId='+expected.promptVersion),lineage=await get('/api/pipeline/lineage'+query+'&versionId='+expected.promptVersion);
    assert.equal(promptView.content,promptText);assert.equal(promptView.contract.status,'ready');assert.equal(promptView.contract.preflight.passed,true);assert.equal(promptView.contract.preflight.checks.length,7);assert.equal(lineage.storyboard.revision,2);assert.equal(lineage.prompt.revision,1);

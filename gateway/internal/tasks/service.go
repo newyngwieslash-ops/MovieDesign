@@ -238,12 +238,22 @@ func executionCheck(i Input) pipeline.ExecutionCheck {
 	for idx, r := range i.References {
 		refs[idx] = r.AssetID
 	}
+	baseVers := make([]string, 0, len(i.Output.Resources))
+	for _, r := range i.Output.Resources {
+		if r.BaseVersionID != "" {
+			baseVers = append(baseVers, r.BaseVersionID)
+		}
+	}
 	return pipeline.ExecutionCheck{
-		ContractID:   i.ContractID,
-		CapabilityID: i.CapabilityID,
-		Prompt:       i.Prompt,
-		Params:       i.Params,
-		References:   refs,
+		ContractID:           i.ContractID,
+		CapabilityID:         i.CapabilityID,
+		Prompt:               i.Prompt,
+		Params:               i.Params,
+		References:           refs,
+		CompositionName:      i.Output.Composition.Name,
+		CompositionTypeID:    i.Output.Composition.Type.ID,
+		CompositionTypeLabel: i.Output.Composition.Type.Label,
+		BaseVersionIDs:       baseVers,
 	}
 }
 

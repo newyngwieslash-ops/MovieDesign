@@ -100,6 +100,12 @@ func RecordTaskDeliveryLineage(ctx context.Context, tx *sql.Tx, projectID, taskI
 		}
 		for _, ref := range contract.References {
 			refVersionID := ref.VersionID
+			if refVersionID != "" {
+				var exists string
+				if tx.QueryRowContext(ctx, `SELECT id FROM versions WHERE id=?`, refVersionID).Scan(&exists) != nil {
+					refVersionID = ""
+				}
+			}
 			if refVersionID == "" {
 				_ = tx.QueryRowContext(ctx, `SELECT v.id FROM versions v JOIN resources r ON r.id=v.resource_id JOIN compositions c ON c.id=r.composition_id WHERE v.asset_id=? AND c.project_id=? ORDER BY v.created_at DESC, v.id DESC LIMIT 1`, ref.AssetID, projectID).Scan(&refVersionID)
 			}
@@ -190,6 +196,7 @@ func TraceLineage(ctx context.Context, db *sql.DB, projectID, targetID string) (
 		Dependencies: []VersionDependency{},
 	}
 	var pipelineID, contractID, promptVersionID, sbVersionID, scriptVersionID, intentVersionID string
+	var sbRevision int64
 
 	// Resolve targetID across delivered media versions, prompt contracts, tasks, prompt revisions, storyboard revisions, creative artifacts, or pipelines.
 	_ = db.QueryRowContext(ctx, `SELECT c.pipeline_id,c.id,c.document_version_id
@@ -211,9 +218,9 @@ func TraceLineage(ctx context.Context, db *sql.DB, projectID, targetID string) (
 			WHERE p.project_id=? AND r.document_version_id=?`, projectID, targetID).Scan(&pipelineID, &promptVersionID, &sbVersionID)
 	}
 	if pipelineID == "" {
-		_ = db.QueryRowContext(ctx, `SELECT s.pipeline_id,s.document_version_id
+		_ = db.QueryRowContext(ctx, `SELECT s.pipeline_id,s.document_version_id,s.revision
 			FROM storyboard_revisions s JOIN pipelines p ON p.id=s.pipeline_id
-			WHERE p.project_id=? AND s.document_version_id=?`, projectID, targetID).Scan(&pipelineID, &sbVersionID)
+			WHERE p.project_id=? AND s.document_version_id=?`, projectID, targetID).Scan(&pipelineID, &sbVersionID, &sbRevision)
 	}
 	if pipelineID == "" {
 		var gate string
@@ -238,6 +245,9 @@ func TraceLineage(ctx context.Context, db *sql.DB, projectID, targetID string) (
 		if promptVersionID != "" {
 			q += ` AND document_version_id=?`
 			args = append(args, promptVersionID)
+		} else if sbRevision > 0 {
+			q += ` AND revision=?`
+			args = append(args, sbRevision)
 		}
 		q += ` ORDER BY CASE status WHEN 'submitted' THEN 0 WHEN 'ready' THEN 1 ELSE 2 END, created_at DESC, rowid DESC LIMIT 1`
 		_ = db.QueryRowContext(ctx, q, args...).Scan(&contractID, &promptVersionID)
@@ -267,7 +277,12 @@ func TraceLineage(ctx context.Context, db *sql.DB, projectID, targetID string) (
 		}
 	}
 
-	out.Prompt = loadGateNode(ctx, db, pipelineID, "prompt", promptVersionID, 0)
+	if promptVersionID == "" && sbVersionID != "" {
+		_ = db.QueryRowContext(ctx, `SELECT document_version_id FROM prompt_revisions WHERE pipeline_id=? AND source_version_id=? ORDER BY revision DESC LIMIT 1`, pipelineID, sbVersionID).Scan(&promptVersionID)
+	}
+	if promptVersionID != "" || sbVersionID == "" {
+		out.Prompt = loadGateNode(ctx, db, pipelineID, "prompt", promptVersionID, 0)
+	}
 	if out.Prompt != nil && sbVersionID == "" {
 		sbVersionID = out.Prompt.SourceVersionID
 	}

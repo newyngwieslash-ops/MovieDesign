@@ -54,11 +54,15 @@ type CompileInput struct {
 }
 
 type ExecutionCheck struct {
-	ContractID   string
-	CapabilityID string
-	Prompt       string
-	Params       json.RawMessage
-	References   []string
+	ContractID           string
+	CapabilityID         string
+	Prompt               string
+	Params               json.RawMessage
+	References           []string
+	CompositionName      string
+	CompositionTypeID    string
+	CompositionTypeLabel string
+	BaseVersionIDs       []string
 }
 
 var (
@@ -433,10 +437,20 @@ func preflightTx(ctx context.Context, tx *sql.Tx, projectID string, in CompileIn
 				refErr = err
 				break
 			}
-			var fullHash sql.NullString
-			err := tx.QueryRowContext(ctx, `SELECT a.full_hash FROM assets a JOIN asset_projects ap ON ap.asset_id=a.id WHERE a.id=? AND ap.project_id=? AND a.status='active'`, assetID, projectID).Scan(&fullHash)
+			var fullHash, mimeType sql.NullString
+			err := tx.QueryRowContext(ctx, `SELECT a.full_hash, a.mime_type FROM assets a JOIN asset_projects ap ON ap.asset_id=a.id WHERE a.id=? AND ap.project_id=? AND a.status='active'`, assetID, projectID).Scan(&fullHash, &mimeType)
 			if err != nil {
 				refErr = invalid("Reference asset not active in project: " + assetID)
+				break
+			}
+			rawMime := strings.ToLower(strings.TrimSpace(mimeType.String))
+			mediaKind := ""
+			if strings.HasPrefix(rawMime, "image/") {
+				mediaKind = "image"
+			} else if strings.HasPrefix(rawMime, "video/") {
+				mediaKind = "video"
+			} else {
+				refErr = invalid(fmt.Sprintf("Reference asset %s has unsupported media mime_type %q", assetID, mimeType.String))
 				break
 			}
 			var refVersionID sql.NullString
@@ -450,6 +464,8 @@ func preflightTx(ctx context.Context, tx *sql.Tx, projectID string, in CompileIn
 				AssetID:   assetID,
 				VersionID: refVersionID.String,
 				Role:      role,
+				MediaKind: mediaKind,
+				MIMEType:  mimeType.String,
 				SHA256:    fullHash.String,
 			})
 		}
@@ -560,6 +576,19 @@ func preflightTx(ctx context.Context, tx *sql.Tx, projectID string, in CompileIn
 					audioErr = invalid("Storyboard requires music; audio_mode=" + audioMode + " cannot satisfy music")
 				}
 			}
+			if hasAudioMode && audioMode != "" {
+				audioReq.Mode = audioMode
+			} else if !audioReq.RequiresAudio {
+				audioReq.Mode = "none"
+			} else if audioReq.RequiresNarration && audioReq.RequiresMusic {
+				audioReq.Mode = "narration+music"
+			} else if audioReq.RequiresNarration {
+				audioReq.Mode = "narration"
+			} else if audioReq.RequiresMusic {
+				audioReq.Mode = "music"
+			} else {
+				audioReq.Mode = "audio"
+			}
 		}
 		if audioErr != nil {
 			record("audio", false, "AUDIO_CONTRACT_MISMATCH", audioErr.Error(), audioErr)
@@ -635,6 +664,14 @@ func compileTx(ctx context.Context, tx *sql.Tx, projectID string, in CompileInpu
 		contract.PromptRevision, contract.PromptSHA256, contract.ApprovalID, now); err != nil {
 		return PromptContract{}, report, err
 	}
+	for _, ref := range contract.References {
+		if ref.VersionID != "" && ref.VersionID != contract.PromptVersionID {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO version_dependencies(version_id,source_version_id,kind) VALUES(?,?,?)`,
+				contract.PromptVersionID, ref.VersionID, fmt.Sprintf("reference:%d", ref.Ordinal)); err != nil {
+				return PromptContract{}, report, err
+			}
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE pipelines SET prompt_status='ready' WHERE id=? AND project_id=?`, contract.PipelineID, projectID); err != nil {
 		return PromptContract{}, report, err
 	}
@@ -688,26 +725,75 @@ func Compile(ctx context.Context, db *sql.DB, projectID string, in CompileInput)
 	return contract, report, nil
 }
 
-func hasProjectPipeline(ctx context.Context, tx *sql.Tx, projectID string) (bool, error) {
+func isCompositionPipelineBound(ctx context.Context, tx *sql.Tx, projectID, compID string) (bool, error) {
+	if compID == "" {
+		return false, nil
+	}
 	var n int
-	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pipelines WHERE project_id=?`, projectID).Scan(&n)
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM resources r
+		WHERE r.composition_id=? AND (
+			EXISTS(SELECT 1 FROM pipelines p WHERE p.project_id=? AND p.resource_id=r.id) OR
+			EXISTS(SELECT 1 FROM creative_artifacts a JOIN pipelines p ON p.id=a.pipeline_id WHERE p.project_id=? AND a.resource_id=r.id) OR
+			EXISTS(SELECT 1 FROM prompt_revisions pr JOIN pipelines p ON p.id=pr.pipeline_id WHERE p.project_id=? AND pr.resource_id=r.id)
+		)`, compID, projectID, projectID, projectID).Scan(&n)
 	return n > 0, err
 }
 
-// AuthorizeExecution enforces that any media generation in a pipeline project
-// (or any request carrying a contractId) matches a ready/submitted PromptContract
-// byte-for-byte and passes live Preflight in the same SQLite transaction.
+func hasTargetPipeline(ctx context.Context, tx *sql.Tx, projectID string, in ExecutionCheck) (bool, error) {
+	var totalPipelines int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pipelines WHERE project_id=?`, projectID).Scan(&totalPipelines); err != nil || totalPipelines == 0 {
+		return false, err
+	}
+	if strings.HasPrefix(in.CapabilityID, "video:") {
+		return true, nil
+	}
+	for _, baseVerID := range in.BaseVersionIDs {
+		if baseVerID == "" {
+			continue
+		}
+		var compID string
+		if err := tx.QueryRowContext(ctx, `SELECT r.composition_id FROM versions v JOIN resources r ON r.id=v.resource_id JOIN compositions c ON c.id=r.composition_id WHERE v.id=? AND c.project_id=?`, baseVerID, projectID).Scan(&compID); err == nil {
+			if bound, err := isCompositionPipelineBound(ctx, tx, projectID, compID); err != nil || bound {
+				return bound, err
+			}
+		}
+	}
+	if in.CompositionName != "" {
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM compositions WHERE project_id=? AND name=?`, projectID, in.CompositionName)
+		if err != nil {
+			return false, err
+		}
+		var compIDs []string
+		for rows.Next() {
+			var cid string
+			if err := rows.Scan(&cid); err == nil {
+				compIDs = append(compIDs, cid)
+			}
+		}
+		rows.Close()
+		for _, cid := range compIDs {
+			if bound, err := isCompositionPipelineBound(ctx, tx, projectID, cid); err != nil || bound {
+				return bound, err
+			}
+		}
+	}
+	return false, nil
+}
+
+// AuthorizeExecution enforces that any media generation targeting an active pipeline composition
+// (or any video generation in a pipeline project, or any request carrying a contractId)
+// matches a ready/submitted PromptContract byte-for-byte and passes live Preflight in the same SQLite transaction.
 func AuthorizeExecution(ctx context.Context, tx *sql.Tx, projectID, expectedTaskID string, in ExecutionCheck) (*PromptContract, error) {
 	if in.CapabilityID == "text:configured-llm" && in.ContractID == "" {
 		return nil, nil
 	}
-	hasPipe, err := hasProjectPipeline(ctx, tx, projectID)
+	hasPipe, err := hasTargetPipeline(ctx, tx, projectID, in)
 	if err != nil {
 		return nil, err
 	}
 	if in.ContractID == "" {
 		if hasPipe {
-			return nil, &store.DomainError{Status: 409, Code: "waiting_user", Message: "Pipeline project requires a ready prompt contractId; omitting contractId is not permitted"}
+			return nil, &store.DomainError{Status: 409, Code: "waiting_user", Message: "Pipeline composition requires a ready prompt contractId; omitting contractId is not permitted"}
 		}
 		return nil, nil
 	}
@@ -818,7 +904,7 @@ func ClaimExecution(ctx context.Context, tx *sql.Tx, projectID, taskID string, i
 	if in.CapabilityID == "text:configured-llm" && in.ContractID == "" {
 		return false, nil
 	}
-	hasPipe, err := hasProjectPipeline(ctx, tx, projectID)
+	hasPipe, err := hasTargetPipeline(ctx, tx, projectID, in)
 	if err != nil {
 		return false, err
 	}
