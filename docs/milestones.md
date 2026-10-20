@@ -324,5 +324,13 @@ M6.2 独立审查先发现I1：损坏冻结请求缺Composition仍能POST并在4
   - `TestAcceptanceThreeInterruptionDrillsAndIdempotentDelivery`：排队/运行中取消、上游 `429` 零自动重试与人工重试、改分镜方向性失效重门禁、8 并发同 `requestId` 唯一 `Version` 与 `unknown` 崩溃重放通过。
   - `TestAcceptanceSecurityBoundaries`：真实 `open-design-gateway` 子进程验证缺失/`null`/外站 `Origin` 在普通路由、`OPTIONS` 和 `/mcp` 均返回 `403`，缺失 MCP 令牌返回 `401`，路径穿越、Windows 目录联接（junction）、跨项目资产引用、未声明能力参数、禁用原生工具及旧版数据库升级保留全部通过。
   - 生产 WebView2 冒烟回归通过：`m1`（`.runtime/desktop-release-743fc988efec4df7974a8a50581c87a1`）、`video`（`.runtime/desktop-release-9460b02d1bb04cd88cb85b41a1e9254a`）、`interruptions`（`.runtime/desktop-release-1c51369d935b4a2798e32bb3c892622f`）。
+  - `M7.5` 独立任务审查结论 **Spec: ✅ Compliant for M7.5. Quality: Approved.**（零 Critical/Important 问题，见 `.superpowers/sdd/m7.5-review.md`）。
+
+## M7 工程整体验收（2026-10-20）
+
+- 独立整阶段复审范围 `1f13834..26a30ac`（66份文件、M7.1–M7.5全部任务）结论 **Ready to merge: Yes**，无 Critical 或 Important 问题，报告归档于 `.superpowers/sdd/m7-whole-review.md`。
+- 五张核心表（`projects`、`compositions`、`resources`、`versions`、`assets`）与迁移 `000001`–`000014` 完全未改；全量 `scripts/check.ps1`（含 `verify-lineage.ps1` 与 `release.ps1 -DryRun`）及生产 WebView2 冒烟（`m1`、`video`、`interruptions`）全部通过。
+- 四阶交付门槛核算：**功能已编码（PASS）**、**离线测试通过（PASS）**、**真实生成通过（UNEXECUTED — 本机未配置真实付费/可用云端或本地模型凭据）**、**签名发布完成（UNEXECUTED — 未注入正式 `TAURI_SIGNING_PRIVATE_KEY`）**。
+
 
 
