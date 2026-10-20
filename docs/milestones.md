@@ -1,6 +1,6 @@
 # 里程碑验收
 
-完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)。M2–M6 已通过单任务与独立整阶段工程审查。M6.1–M6.5 单任务复审及整M6（bb20c6f..2cbcb87）审查均通过（Ready to merge: Yes），M7实施中。真实凭据支持的LLM、图像和视频验收未执行。计划中的命令不是已执行结果，各阶段证据另行记录。
+完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)，全规格逐项映射与四阶交付门槛见[全规格验收报告](acceptance.md)。M1–M7 全部 30 个任务已通过单任务与整阶段独立工程审查。按四阶交付门槛纪律：**功能已编码（PASS）**、**离线测试通过（PASS）**、**真实生成通过（UNEXECUTED — 本机未配置真实付费/可用模型凭据）**、**签名发布完成（UNEXECUTED — 未注入正式 `TAURI_SIGNING_PRIVATE_KEY`，已通过 `-DryRun` 与签名校验测试）**。
 
 | 里程碑 | 范围 | 状态 |
 | --- | --- | --- |
@@ -8,9 +8,9 @@
 | M2 | 对象模型 CRUD、幂等投递、unknown 重放 | 验证通过 |
 | M3 | 八图形编辑器、历史、标注、持久创作画布 | 验证通过 |
 | M4 | 图像模型、能力契约、任务状态机、计费与事件 | 工程验收与整阶段复审通过；真实调用未执行 |
-| M5 | opencode、MCP、提示词、聊天与确认卡 | 单任务与整阶段工程复审通过，真实调用未执行；远程交付见后文 |
+| M5 | opencode、MCP、提示词、聊天与确认卡 | 单任务与整阶段工程复审通过；真实调用未执行 |
 | M6 | 两个技能、分镜批准、Prompt 锁定与 Preflight | 单任务与整阶段工程复审通过；真实LLM/供应商调用未执行 |
-| M7 | 视频、任务中心完善、更新策略 | 实施中 |
+| M7 | 视频适配器、15s 口播成片与画布播放、任务恢复与取消对账、签名更新策略、全规格验收 | 工程验收与独立审查通过；真实供应商调用与正式私钥签名发布未执行 |
 
 ## M1 验收项
 
@@ -291,4 +291,38 @@ M6.2 独立审查先发现I1：损坏冻结请求缺Composition仍能POST并在4
 - 独立整阶段复审范围 `bb20c6f..2cbcb87`（75份文件、M6.1–M6.5全部任务）结论 **Ready to merge: Yes**，无 Critical 或 Important 问题，报告归档于 `.superpowers/sdd/m6-whole-review.md`。
 - 五张核心表（`projects`、`compositions`、`resources`、`versions`、`assets`）与迁移 `000001`–`000011` 完全未改；单调递增支撑迁移 `000012_pipeline`、`000013_creative_approvals`、`000014_prompt_contracts` 保持触发器不可变保护；零新增第三方依赖。
 - 真实凭据支持的 LLM 方法遵循、真实图像/视频供应商调用及签名发布仍为 **未执行（UNEXECUTED）**。按总计划§6快进合并 `codex/m6-storyboard-pipeline` 至 `main` 并推送，随后在 `codex/m7-video-release` 启动 M7 实施。
+
+### M7.1 视频能力与 `ark-video` 异步适配器（2026-10-20，独立复审通过）
+
+- `9d03cd7` 实现并通过独立任务审查（Spec Compliant / Quality Approved，零 Critical/Important 问题，见 `.superpowers/sdd/m7.1-review.md`）：
+  - `gateway/internal/providers/video.go` 与 `video_capability.go` 实现 `ark-video` 协议：`POST /contents/generations/tasks` 发送原始 UTF-8 提示词（零 `--` CLI 拼接污染）、有序受管图片 `data:<mime>;base64,...` 引用（经原生句柄 identity + SHA-256 校验）与显式顶层参数（`size`、`aspect_ratio`、`resolution`、`duration`、`generate_audio`、`audio_mode`、`fps`、`seed`、`camera_fixed`、`watermark`）；`GET /contents/generations/tasks/{id}` 只读轮询；`DELETE /contents/generations/tasks/{id}` 仅在实时状态为 `queued` 时调用，`running` 返回 `RUNNING_UNCANCELLABLE` 且绝不发 `DELETE`。
+  - 支持按秒（`unit: "second"`）与按条（`unit: "video"`）整数报价、持久化 `upstream_id` 重启只读续轮询（零重发 `POST`）、取消后晚到结果转 `delivery` 采纳确认卡、以及 MP4 容器/尺寸/时长/音轨校验（`InspectMP4Bytes` + `probeMP4WithFFprobe`）。
+
+### M7.2 15 秒口播配乐成片、画布播放器与血缘（2026-10-20，独立复审通过）
+
+- `0d4b166` 实现并通过独立任务审查（Spec Compliant / Quality Approved，零 Critical/Important 问题，见 `.superpowers/sdd/m7.2-review.md`）：
+  - 7 门禁 `Preflight` 对 `video:*` 能力返回 `stage: "video_generation_ready"`，强制单次完整渲染、`duration: 15`、`generate_audio: true`、`audio_mode: "narration+music"` 与三门禁有效人类批准；损坏 MP4、无音轨、时长不符在 `collecting` 阶段拦截，且 `POST /api/tasks/{id}/collection/retry` 仅重下已保存 `result_json` 而不重发上游 `POST`。
+  - `CanvasNode.tsx` 支持 `<video>` 播放、元数据徽章（`15s`、`1280×720`、timebase、音轨数）与同 `Resource` 下 `v1/v2` 版本切换；生产 WebView2 三阶段冒烟（`.runtime/desktop-release-880813a0fed94cdf9dac92901f1a06f8` 与 `.runtime/desktop-release-9460b02d1bb04cd88cb85b41a1e9254a`）验证通过。
+
+### M7.3 任务中心完善、打断恢复零重发与健康生命周期（2026-10-20，独立复审通过）
+
+- `6837dac` 实现并通过独立任务审查（Spec Compliant / Quality Approved，零 Critical/Important 问题，见 `.superpowers/sdd/m7.3-review.md`）：
+  - 完整覆盖已批准未发送（`Recover` 零自动发送）、发送中断未拿到 `upstream_id`（进入 `unknown`，禁 `retry`，仅允许只读 `query` 或 `cancel`）、`running` 轮询中断（优雅退出保留 `running`，重启后只读 `GET` 续轮询且单 poller 去重）、`collecting` 下载中断（`COLLECTION_INTERRUPTED` 同 attempt 重试下载）及旧 attempt 晚到 CAS 防护。
+  - 阶段感知取消与真实计费对账（`not_submitted` / `remote_cancelled_queued` / `local_cancelled_remote_may_charge`）、`Server.Health()` 精确忙碌状态与幂等 `BeginShutdown()`、以及已解决确认卡默认折叠与画布生成占位防重叠在生产 WebView2 三阶段冒烟（`.runtime/desktop-release-1c51369d935b4a2798e32bb3c892622f`）验证通过。
+
+### M7.4 签名更新、`manual_only` 发布策略与 24h 缓存门禁（2026-10-20，独立复审通过）
+
+- `d1aa130` 实现并通过独立任务审查（Spec Compliant / Quality Approved，零 Critical/Important 问题，见 `.superpowers/sdd/m7.4-review.md`）：
+  - `gateway/internal/updates/policy.go` 忠实实现 `ParseCDNPolicy` 与 `ManualOnlyRuleMatches`（平台映射 `windows -> win32`、半开区间 `[min_version_inclusive, max_version_exclusive)`、非法 URL 降级忽略、3s 超时 × 3 次 5xx 退避重试、24h 原子缓存、时钟回拨过期适配与断网 LKG 兜底）。
+  - `desktop/src-tauri/src/updates.rs` 在 `manual_only`、策略失败或任务忙碌时阻断自动安装，校验 minisign 签名与 `newyngwieslash-ops/MovieDesign` 源地址；`scripts/release.ps1` 在无私钥时 fail-closed，`-DryRun` 验证通过（`.runtime/release-dry-run/`）。
+
+### M7.5 端到端全规格验收、`sqlite3 .dump` 血缘核验与发布收尾（2026-10-20）
+
+- 新增 `gateway/internal/pipeline/acceptance_test.go`、`scripts/verify-lineage.ps1` 与 [全规格验收报告 `docs/acceptance.md`](acceptance.md)，并将 `verify-lineage.ps1` 与 `release.ps1 -DryRun` 纳入 `scripts/check.ps1`：
+  - `TestAcceptanceProviderSaveSwitchRestartAndLocalFixture`：本地/云端图像与视频供应商保存、默认切换、重启恢复、DPAPI 零明文泄漏与免费探测通过。
+  - `TestAcceptanceEndToEndNarratedVideoAndLineageExport` + `scripts/verify-lineage.ps1`：两张有序参考图 → `口播视频` 技能 → `intent/script/storyboard` 人类批准 → 字节级锁定 `final_video_prompt.md` → 7 门禁 Preflight → 15s 带音轨 MP4 `v1` 与修订版 `v2` → 项目级脱敏导出库 `sqlite3 .dump` 与多表 SQL JOIN 全血缘验证通过（`.runtime/acceptance-lineage/verify-lineage-report.json`）。
+  - `TestAcceptanceThreeInterruptionDrillsAndIdempotentDelivery`：排队/运行中取消、上游 `429` 零自动重试与人工重试、改分镜方向性失效重门禁、8 并发同 `requestId` 唯一 `Version` 与 `unknown` 崩溃重放通过。
+  - `TestAcceptanceSecurityBoundaries`：真实 `open-design-gateway` 子进程验证缺失/`null`/外站 `Origin` 在普通路由、`OPTIONS` 和 `/mcp` 均返回 `403`，缺失 MCP 令牌返回 `401`，路径穿越、Windows 目录联接（junction）、跨项目资产引用、未声明能力参数、禁用原生工具及旧版数据库升级保留全部通过。
+  - 生产 WebView2 冒烟回归通过：`m1`（`.runtime/desktop-release-743fc988efec4df7974a8a50581c87a1`）、`video`（`.runtime/desktop-release-9460b02d1bb04cd88cb85b41a1e9254a`）、`interruptions`（`.runtime/desktop-release-1c51369d935b4a2798e32bb3c892622f`）。
+
 

@@ -94,3 +94,6 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<optional-password>"
    - 备份时只需在应用空闲（`/api/health` 返回 `safe_to_suspend: true`）或关闭后完整复制 `<dataDir>` 目录；版本升级不会覆盖或清空既有数据库、版本血缘、人类批准记录与幂等回执。
 4. **第三方许可证**：
    - 详见随安装包分发的 [`docs/third-party.md`](third-party.md)（打包路径 `resources/licenses/third-party.md`）。
+5. **端到端验收与 SQLite 血缘导出校验**：
+   - 运行 `./scripts/verify-lineage.ps1` 可执行端到端 15 秒口播视频流水线、生成单项目脱敏 SQLite 导出库并调用 `sqlite3.exe .dump` 验证从 `storyboard_revisions` 到 `assets` 的完整多表 SQL 血缘与跨项目/凭据零泄漏。
+   - 完整规格覆盖表与四阶交付门槛状态（`功能已编码: PASS`、`离线测试通过: PASS`、`真实生成通过: UNEXECUTED`、`签名发布完成: UNEXECUTED`）见 [`docs/acceptance.md`](acceptance.md)。

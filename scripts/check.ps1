@@ -23,3 +23,5 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed.' }
 } finally { Pop-Location }
 & (Join-Path $PSScriptRoot 'smoke-m1.ps1')
+& (Join-Path $PSScriptRoot 'verify-lineage.ps1')
+& (Join-Path $PSScriptRoot 'release.ps1') -DryRun

@@ -729,3 +729,18 @@ This is an explicit MovieDesign typed port addition. The existing 18 design tool
 3. **Native Signature Verification & Release Script (`desktop/src-tauri/src/updates.rs`, `scripts/release.ps1`, `.github/workflows/release.yml`, `docs/releasing.md`)**:
    - `desktop/src-tauri/src/updates.rs` gates `tauri-plugin-updater` behind `status == "ready" && !manual_only && !busy`, preserves `tauri-plugin-updater`'s minisign signature and trusted-comment `version:<semver>` verification, and rejects non-`newyngwieslash-ops/MovieDesign` release asset URLs.
    - `scripts/release.ps1` builds media tools, `open-design-gateway`, `moviedesign-opencode`, frontend assets, and the signed Tauri NSIS installer + `latest.json` + `SHA256SUMS.txt` + `RELEASE-NOTES.md` + `third-party.md`, reading `TAURI_SIGNING_PRIVATE_KEY` from the host environment or GitHub Secrets and failing explicitly if signing keys are missing in non-`-DryRun` mode.
+
+## M7.5: end-to-end acceptance, project-scoped lineage export, and four-stage delivery threshold
+
+1. **Project-Scoped Lineage Export & Credential Sanitization (`gateway/internal/pipeline/acceptance_test.go`, `scripts/verify-lineage.ps1`)**:
+   - Acceptance SQLite export (`exportScopedProjectAcceptanceDB`) opens a clean migrated SQLite database and copies only the target project's rows across `projects`, `composition_types`, `compositions`, `resources`, `assets`, `asset_projects`, `versions`, `composition_members`, `deliveries`, `delivery_sources`, `price_quotes`, `questions`, `question_receipts`, `pipelines`, `creative_artifacts`, `storyboard_revisions`, `approvals`, `prompt_revisions`, `prompt_contracts`, `version_dependencies`, `tasks`, `task_attempts`, `task_outputs`, and `generation_inputs`.
+   - `provider_configs`, `llm_settings`, DPAPI ciphertext pointers, and `tasks.provider_json` headers/endpoints are never exported (`provider_json = '{}'`), and `PRAGMA foreign_key_check` must return zero rows.
+   - `scripts/verify-lineage.ps1` invokes `sqlite3.exe .dump` on the exported database and executes multi-table SQL joins verifying the full chain (`storyboard_revisions -> approvals -> prompt_revisions -> prompt_contracts -> tasks/generation_inputs -> task_outputs -> versions v1/v2 -> assets` + `version_dependencies` + ordered multi-reference restoration), confirming that lineage relies on explicit relational support tables rather than `versions.source_version_id` alone.
+
+2. **Four-Stage Delivery Threshold Discipline (`docs/acceptance.md`, `docs/milestones.md`, `docs/releasing.md`)**:
+   - Delivery readiness is tracked across four independent gates:
+     1. `功能已编码` (Implemented): **PASS** across M1–M7 (`30/30` tasks).
+     2. `离线测试通过` (Offline & local-fixture tests + production WebView2 smokes): **PASS**.
+     3. `真实生成通过` (Live credential-backed cloud/local LLM, image, and 15s narrated video generation): **UNEXECUTED** when live provider credentials/endpoints are not configured; local protocol fixtures never masquerade as live provider acceptance.
+     4. `签名发布完成` (Production minisign-signed NSIS installer & clean Windows account upgrade): **UNEXECUTED** when `TAURI_SIGNING_PRIVATE_KEY` is not injected; `scripts/release.ps1` fails closed in production mode and verifies build/packaging readiness in `-DryRun` mode.
+

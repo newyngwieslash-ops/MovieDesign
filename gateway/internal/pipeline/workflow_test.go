@@ -621,21 +621,6 @@ func TestOneSentenceWorkflowVideoFixtureRestartAndEditorLineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var billRaw string
-	if err := f.db.QueryRow("SELECT question_json FROM questions WHERE task_id=? AND kind='billing'", admittedImg.Task.ID).Scan(&billRaw); err != nil {
-		t.Fatal(err)
-	}
-	var billQ questions.Question
-	_ = json.Unmarshal([]byte(billRaw), &billQ)
-	if _, err := f.q.Reply(ctx, f.p, billQ.ID, questions.HumanReply{
-		SessionID:        "human-session",
-		RequestID:        "approve-wf-img-v1",
-		ExpectedRevision: billQ.Revision,
-		Answers:          [][]string{{billQ.Questions[0].Options[0].Label}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	pngBytes := []byte{
 		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -682,10 +667,25 @@ func TestOneSentenceWorkflowVideoFixtureRestartAndEditorLineage(t *testing.T) {
 			return deliverPNG(a, a.Input.Output.Resources[0].Key)
 		},
 	}
+
+	var billRaw string
+	if err := f.db.QueryRow("SELECT question_json FROM questions WHERE task_id=? AND kind='billing'", admittedImg.Task.ID).Scan(&billRaw); err != nil {
+		t.Fatal(err)
+	}
+	var billQ questions.Question
+	_ = json.Unmarshal([]byte(billRaw), &billQ)
+	if _, err := f.q.Reply(ctx, f.p, billQ.ID, questions.HumanReply{
+		SessionID:        "human-session",
+		RequestID:        "approve-wf-img-v1",
+		ExpectedRevision: billQ.Revision,
+		Answers:          [][]string{{billQ.Questions[0].Options[0].Label}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.tasks.Run(ctx, f.p, admittedImg.Task.ID); err != nil {
 		t.Fatal(err)
 	}
-	doneImg1, err := f.tasks.Query(ctx, f.p, admittedImg.Task.ID)
+	doneImg1, err := f.tasks.Wait(ctx, f.p, admittedImg.Task.ID)
 	if err != nil || doneImg1.Status != tasks.Completed || doneImg1.Outputs[0].VersionID == nil || doneImg1.Outputs[0].AssetID == nil {
 		t.Fatalf("expected completed keyframe v1, got %+v %v", doneImg1, err)
 	}
@@ -742,7 +742,7 @@ func TestOneSentenceWorkflowVideoFixtureRestartAndEditorLineage(t *testing.T) {
 	if err := f.tasks.Run(ctx, f.p, admittedRepair.Task.ID); err != nil {
 		t.Fatal(err)
 	}
-	doneImg2, err := f.tasks.Query(ctx, f.p, admittedRepair.Task.ID)
+	doneImg2, err := f.tasks.Wait(ctx, f.p, admittedRepair.Task.ID)
 	if err != nil || doneImg2.Status != tasks.Completed || doneImg2.Outputs[0].VersionID == nil {
 		t.Fatalf("expected completed M3 repair v2, got %+v %v", doneImg2, err)
 	}
