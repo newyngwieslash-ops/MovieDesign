@@ -15,6 +15,10 @@
 需要 Node.js 22.12+（当前验证 24.16）、pnpm 12.8.1、Rust stable / MSVC C++ Build Tools、WebView2，以及支持自动工具链下载的 Go。`gateway/go.mod` 指定 Go 1.25.8 工具链；不会替换机器全局 Go。
 
 ```powershell
+# 一键停止本仓库已有进程并启动生产版（若尚未构建则自动构建）
+./restart.bat
+# 其他模式：./restart.bat build（重新构建并启动） | ./restart.bat dev（开发热重载） | ./restart.bat stop（仅停止）
+
 cd desktop
 pnpm install --frozen-lockfile
 pnpm desktop:dev
