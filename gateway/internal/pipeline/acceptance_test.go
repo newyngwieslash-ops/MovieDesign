@@ -63,10 +63,14 @@ func scrubProviderSnapshotJSON(raw string) string {
 	delete(doc, "key")
 	delete(doc, "credential_version")
 	delete(doc, "credentialVersion")
+	delete(doc, "base_url")
+	delete(doc, "baseUrl")
 	if cfg, ok := doc["config"].(map[string]any); ok {
 		delete(cfg, "headers")
 		delete(cfg, "apiKey")
 		delete(cfg, "key")
+		delete(cfg, "base_url")
+		delete(cfg, "baseUrl")
 	}
 	b, err := json.Marshal(doc)
 	if err != nil {

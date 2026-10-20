@@ -61,9 +61,15 @@ if (-not (Test-Path $dbPath) -or -not (Test-Path $manifestPath)) {
 }
 
 $manifest = Get-Content -Raw -Path $manifestPath | ConvertFrom-Json
-$dumpLines = & $sqlite3 $dbPath '.dump'
-if ($LASTEXITCODE -ne 0) {
-    throw 'sqlite3 .dump failed.'
+$prevOutputEncoding = [Console]::OutputEncoding
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try {
+    $dumpLines = & $sqlite3 $dbPath '.dump'
+    if ($LASTEXITCODE -ne 0) {
+        throw 'sqlite3 .dump failed.'
+    }
+} finally {
+    [Console]::OutputEncoding = $prevOutputEncoding
 }
 $dumpText = ($dumpLines -join "`n")
 Set-Content -Path $dumpPath -Value $dumpText -Encoding UTF8

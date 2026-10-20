@@ -109,8 +109,10 @@ func TestPromptBytesAreSignificant(t *testing.T) {
 
 **Interfaces:** `ClassifyFailure(problem)(parameter|semantic|upstream|unknown)`是建议回流位置，不是自动重试指令。用户选择修参数→新合同；用户改语义→新分镜revision；未知受理→查询/对账。每条恢复操作保留requestId、原task/contract引用和人类回执。
 
-- [ ] 表驱动测试参数错误不改分镜revision但生成新合同；语义修改使旧批准失效；upstream临时错误也不自动重发；unknown不会进入生成器；用户retry原任务只重放冻结输入；改输入创建新任务/合同并保留旧记录。
-- [ ] `go -C gateway test ./internal/pipeline ./internal/tasks ./internal/delivery -v`，运行以本地假provider支持视频协议的smoke-pipeline；fixture显著标记测试，不写为真实视频验收。
-- [ ] UI错误卡明确“修改参数”“修改分镜”“原样重试”“继续查询”的差异，按钮由服务端actions决定；结构化卡选择后进入对应阶段。不以聊天“我帮你重新生成”作为执行授权。
-- [ ] 测试一句话→意图/脚本确认→分镜文档节点→批准→精确Prompt→报价确认→任务→版本→画布，以及中途退出重启。批准后改分镜，旧Prompt必须无法执行；媒体新版本可继续进入M3编辑器并保持血缘。
+- [x] 表驱动测试参数错误不改分镜revision但生成新合同；语义修改使旧批准失效；upstream临时错误也不自动重发；unknown不会进入生成器；用户retry原任务只重放冻结输入；改输入创建新任务/合同并保留旧记录。
+- [x] `go -C gateway test ./internal/pipeline ./internal/tasks ./internal/delivery -v`，运行以本地假provider支持视频协议的smoke-pipeline；fixture显著标记测试，不写为真实视频验收。
+- [x] UI错误卡明确“修改参数”“修改分镜”“原样重试”“继续查询”的差异，按钮由服务端actions决定；结构化卡选择后进入对应阶段。不以聊天“我帮你重新生成”作为执行授权。
+- [x] 测试一句话→意图/脚本确认→分镜文档节点→批准→精确Prompt→报价确认→任务→版本→画布，以及中途退出重启。批准后改分镜，旧Prompt必须无法执行；媒体新版本可继续进入M3编辑器并保持血缘。
 - [ ] 跑 `./scripts/check.ps1`与真实LLM技能流程，记录M6视频适配器仍为测试环境；提交 `feat(M6.5): route failures through revisioned creative gates`，推送M6，进入M7真实视频验收。
+
+M6.5 在 `2cbcb87` 通过独立任务审查，整 M6（`bb20c6f..2cbcb87`）在 `1f13834` 通过独立整阶段审查（Ready to merge: Yes）；`./scripts/check.ps1` 与生产 WebView2 三阶段 `smoke-pipeline`（`4fd2fc18483f4026b7dfe9c4fb4ab4ef`）通过；真实 LLM 技能流程因未配置真实凭据保持未执行。
