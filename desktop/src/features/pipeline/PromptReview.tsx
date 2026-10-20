@@ -38,7 +38,7 @@ export function PromptReview({projectID,versionID,text}:{projectID:string;versio
   {view.currentRevision!==view.revision&&<p>历史 Prompt 版本只读；当前 revision {view.currentRevision}</p>}
   {c&&<>
    <p>契约 ID：{c.id} · 目标能力：{c.capabilityId}{c.taskId?` · 任务：${c.taskId}`:''}</p>
-   {c.capabilityId.startsWith('video:')&&<p data-video-adapter-status="m6-test-only">M6 视频适配器状态：当前仅支持离线审阅、批准与编译视频契约（测试环境仅使用显式 fixture，真实 ark-video 执行适配器将在 M7.1 接入）。</p>}
+   {c.capabilityId.startsWith('video:')&&<p data-video-adapter-status="ark-video-ready">M6 视频适配器状态已升级为 M7 ark-video 完整异步执行：支持 15 秒口播配乐门禁、远端任务轮询、容器音轨校验与画布成片交付（测试环境使用显式本地协议 fixture；真实付费供应商验收单列记录）。</p>}
    {c.recovery&&<p data-contract-recovery={c.recovery.fromTaskId}>回流溯源：源自任务 {c.recovery.fromTaskId}{c.recovery.fromContractId?` · 原合同 ${c.recovery.fromContractId}`:''}{c.recovery.requestId?` · 请求 ${c.recovery.requestId}`:''}</p>}
    <p>音轨契约：{audioMode}（口播：{hasNarration?'是':'否'} · 配乐：{hasMusic?'是':'否'} · 意图：{c.audio.audioIntent}）</p>
    <p>有序参考资产（{c.references.length}）：{c.references.length?c.references.map((r,idx)=>`#${r.ordinal??r.index??idx} ${r.assetId}(${r.role}/${r.mediaKind||(r.mimeType?.startsWith('video/')?'video':r.mimeType?.startsWith('image/')?'image':r.mimeType)||'asset'})`).join(' → '):'无'}</p>

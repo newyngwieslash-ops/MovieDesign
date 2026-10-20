@@ -42,6 +42,9 @@ func (s *Server) documents(server *sdk.Server, scope agent.ToolScope) {
 		if i.FilePath == "knowledge/providers/text.md" {
 			return workspace.TextPage(providers.TextKnowledgeCard, i.Offset, i.Limit)
 		}
+		if i.FilePath == "knowledge/providers/ark-video.md" {
+			return workspace.TextPage(providers.VideoKnowledgeCard, i.Offset, i.Limit)
+		}
 		if s.services.Files == nil {
 			return nil, invalid("Workspace unavailable")
 		}

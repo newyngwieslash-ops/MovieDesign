@@ -61,7 +61,7 @@ test('prompt review renders locked byte digest, ordered references, 7-point pref
  render();for(let i=0;i<4;i++){render();await tick()}const root=render();
  assert.equal(root.props.className,'prompt-review');
  const pre=find(root,n=>n.type==='pre');assert.equal(pre.props['data-prompt-sha256'],'abc123sha256');assert.equal(pre.props.children,rawPrompt);
- const serialized=JSON.stringify(root);assert(serialized.includes('narration+music'));assert(serialized.includes('口播：'));assert(serialized.includes('#0 a1(subject/image)'));assert(serialized.includes('m6-test-only'));assert(serialized.includes('task-failed-1'));
+ const serialized=JSON.stringify(root);assert(serialized.includes('narration+music'));assert(serialized.includes('口播：'));assert(serialized.includes('#0 a1(subject/image)'));assert(serialized.includes('ark-video-ready'));assert(serialized.includes('task-failed-1'));
  const ul=find(root,n=>n.type==='ul');assert.equal(ul.props.children.length,7);
  find(root,n=>n.type==='textarea'&&n.props['aria-label']==='回流参数 JSON').props.onChange({target:{value:'{"audio_mode":"narration+music","quality":"medium"}'}});
  find(render(),n=>n.type==='button'&&n.props.children==='编译新参数契约').props.onClick();

@@ -229,7 +229,7 @@ func validateVideoParams(cap providers.Capability, params map[string]any) error 
 			}
 		case "seed":
 			seed, ok := parseIntParam(v)
-			if !ok || seed < 0 {
+			if !ok || seed < 0 || seed > 2147483647 {
 				return invalid("Invalid video parameter: seed")
 			}
 		case "resolution":
@@ -408,11 +408,7 @@ func preflightTx(ctx context.Context, tx *sql.Tx, projectID string, in CompileIn
 					record("capability_params", true, "", "Parameters match declared image capability schema", nil)
 				}
 			} else {
-				cap = cfg.Capability
-				cap.ID = in.CapabilityID
-				cap.Operation = "video"
-				cap.Protocol = cfg.Protocol
-				cap.ModelID = cfg.ModelID
+				cap = providers.VideoCapability(cfg)
 				chars := cap.Constraints.MaxPromptCharacters
 				if chars == 0 {
 					chars = 32000
