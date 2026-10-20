@@ -5,7 +5,7 @@ import {useCallback,useEffect,useRef,useState,type PointerEvent} from 'react';
 import {useQuery,useQueryClient} from '@tanstack/react-query';
 import {allPages,api,APIError,newRequestID} from '../../gateway';
 import {CanvasNode,type CanvasAsset,type CanvasVersion} from './CanvasNode';
-import {emptyDocument,patch,pendingKey,readPending,visibleNodes,worldPosition,type CanvasDocument,type Command,type Content,type Node,type Pending,type Receipt,type View} from './canvas';
+import {emptyDocument,nextGenerationPositions,patch,pendingKey,readPending,visibleNodes,worldPosition,type CanvasDocument,type Command,type Content,type Node,type Pending,type Receipt,type View} from './canvas';
 
 export function CanvasWorkspace({projectID,onEdit}:{projectID?:string;onEdit?:(id:string)=>void}) {
  if(!projectID)return <section className="canvas-workspace" aria-label="空创作画布"><div className="canvas-empty"><span className="eyebrow">A SPACE FOR YOUR NEXT IDEA</span><h2>留白，也是创作的开始</h2><p>创建或选择项目，开始整理你的创作。</p></div></section>;
@@ -56,7 +56,7 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
   if(!alive.current)throw Error('项目已切换，保留原请求');
   const saved=readPending(localStorage.getItem(pendingKey(projectID)),projectID);
   if(saved){if(JSON.parse(saved.body).requestId!==`generation-${input.requestId}`)throw Error('请先确认原画布命令');if(!await send(saved))throw Error('画布结果待确认');return}
-  const nodes=input.output.resources.map((r,i)=>{const after:Node={id:`generation-${input.requestId}-${i}`,kind:'placeholder',expectedKind:'image',draft:null,pendingGeneration:{requestId:input.requestId,outputKey:r.key},parentId:null,position:{x:40+i*370,y:50},size:{width:350,height:350},zIndex:Object.keys(current.current.nodes).length+i+1,hidden:false};return {id:after.id,before:null,after}});
+  const positions=nextGenerationPositions(current.current,input.output.resources.length);const nodes=input.output.resources.map((r,i)=>{const after:Node={id:`generation-${input.requestId}-${i}`,kind:'placeholder',expectedKind:'image',draft:null,pendingGeneration:{requestId:input.requestId,outputKey:r.key},parentId:null,position:positions[i],size:{width:350,height:350},zIndex:Object.keys(current.current.nodes).length+i+1,hidden:false};return {id:after.id,before:null,after}});
   const p:Pending={schema:1,projectID,body:JSON.stringify({requestId:`generation-${input.requestId}`,expectedRevision:current.current.revision,command:{type:'canvas.patch',nodes,edges:[]}})};
   localStorage.setItem(pendingKey(projectID),JSON.stringify(p));setPending(p);if(!await send(p))throw Error('画布结果待确认');
  }
@@ -68,7 +68,7 @@ function PersistentCanvas({projectID,onEdit}:{projectID:string;onEdit:(id:string
  const disabled=!ready||busy||!!pending||!!storageError;
  const node=document.nodes[selected];
  function add(kind:'frame'|'placeholder'|'composition') {
-  const base={id:newRequestID(),parentId:null,position:{x:(40-view.x)/view.scale,y:(50-view.y)/view.scale},size:{width:kind==='frame'?500:350,height:kind==='frame'?400:350},zIndex:Object.values(document.nodes).reduce((m,n)=>Math.max(m,n.zIndex),0)+1,hidden:false};
+  const [pos]=nextGenerationPositions(document,1,{x:(40-view.x)/view.scale,y:(50-view.y)/view.scale});const base={id:newRequestID(),parentId:null,position:pos,size:{width:kind==='frame'?500:350,height:kind==='frame'?400:350},zIndex:Object.values(document.nodes).reduce((m,n)=>Math.max(m,n.zIndex),0)+1,hidden:false};
   let next:Node;
   if(kind==='frame')next={...base,kind,title:'画框',collapsed:false};else if(kind==='placeholder')next={...base,kind,expectedKind:'image',draft:null};else{const version=versions.data?.find(v=>v.id===choice),resource=resources.data?.find(r=>r.id===version?.resource_id);if(!version||!resource){setError('请先导入素材并选择一个版本');return;}next={...base,kind,compositionId:resource.composition_id,activeItem:{type:'version',resourceId:resource.id,versionId:version.id},draft:null};}
   setSelected(next.id);commit(patch(null,next));

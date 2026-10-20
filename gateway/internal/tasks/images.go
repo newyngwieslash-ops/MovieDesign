@@ -24,7 +24,15 @@ func videoOutcomeFromObservation(obs providers.VideoTaskObservation, callErr err
 		}
 		return out, nil
 	}
-	if obs.Status == "failed" || obs.Status == "expired" || obs.Status == "cancelled" {
+	if obs.Status == "cancelled" {
+		out.Status = Cancelled
+		if obs.Failure != nil {
+			out.NotAccepted = obs.Failure.NotAccepted
+			out.Problem = &Problem{Source: "provider", Code: obs.Failure.Code, Message: obs.Failure.Message, Upstream: &Upstream{Code: obs.Failure.Code, Message: obs.Failure.Message}, Retryable: false}
+		}
+		return out, nil
+	}
+	if obs.Status == "failed" || obs.Status == "expired" {
 		out.Status = Failed
 		if obs.Failure != nil {
 			out.NotAccepted = obs.Failure.NotAccepted
@@ -44,13 +52,13 @@ func videoOutcomeFromObservation(obs providers.VideoTaskObservation, callErr err
 
 // VideoExecutor adapts Ark asynchronous video tasks (create -> checkpoint upstream_id -> poll -> collect -> deliver).
 func VideoExecutor(s *providers.Service, deliveries ...*delivery.Service) *Executor {
-	isCancelled := func(a Attempt) bool {
+	isRemoteCancelled := func(a Attempt) bool {
 		if s == nil || s.DB == nil {
 			return false
 		}
-		var status string
-		if err := s.DB.QueryRow("SELECT status FROM tasks WHERE id=? AND project_id=?", a.TaskID, a.ProjectID).Scan(&status); err == nil {
-			return Status(status) == Cancelled
+		var state string
+		if err := s.DB.QueryRow("SELECT state FROM task_attempts WHERE task_id=? AND attempt=?", a.TaskID, a.Number).Scan(&state); err == nil {
+			return state == "cancelled"
 		}
 		return false
 	}
@@ -76,7 +84,7 @@ func VideoExecutor(s *providers.Service, deliveries ...*delivery.Service) *Execu
 					return Outcome{}, e
 				}
 			}
-			obs, pollErr := s.PollVideoTask(ctx, a.Provider, upstreamID, func() bool { return isCancelled(a) })
+			obs, pollErr := s.PollVideoTask(ctx, a.Provider, upstreamID, func() bool { return isRemoteCancelled(a) })
 			return videoOutcomeFromObservation(obs, pollErr)
 		},
 		Query: func(ctx context.Context, a Attempt) (Outcome, error) {

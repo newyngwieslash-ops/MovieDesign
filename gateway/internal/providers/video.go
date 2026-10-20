@@ -429,29 +429,19 @@ func (s *Service) PollVideoTask(ctx context.Context, f FrozenProvider, upstreamI
 	transientFailures := 0
 	for {
 		if isCancelled != nil && isCancelled() {
-			cancelRes, _ := s.CancelVideoTask(ctx, f, upstreamID)
-			if cancelRes.Result != nil && len(cancelRes.Result.Data) > 0 {
-				return VideoTaskObservation{
-					UpstreamID: upstreamID,
-					Status:     "succeeded",
-					VideoURL:   cancelRes.Result.Data[0].URL,
-					Result:     *cancelRes.Result,
-				}, nil
-			}
-			if cancelRes.RemoteCancelled {
-				err := videoError("TASK_CANCELLED_QUEUED", cancelRes.Message, false, 200)
-				return VideoTaskObservation{UpstreamID: upstreamID, Status: "cancelled", Failure: err}, nil
-			}
-			err := videoError("RUNNING_UNCANCELLABLE", cancelRes.Message, false, 200)
-			return VideoTaskObservation{UpstreamID: upstreamID, Status: cancelRes.Status, Failure: err}, nil
+			err := videoError("TASK_CANCELLED_QUEUED", "Video task was cancelled while queued", false, 200)
+			return VideoTaskObservation{UpstreamID: upstreamID, Status: "cancelled", Failure: err}, nil
 		}
 		obs, err := s.QueryVideoTask(ctx, f, upstreamID)
 		if err != nil {
 			if obs.Status == "failed" || obs.Status == "expired" || obs.Status == "cancelled" || obs.Status == "succeeded" {
 				return obs, err
 			}
+			if ctx.Err() != nil {
+				return VideoTaskObservation{UpstreamID: upstreamID, Status: "running"}, nil
+			}
 			transientFailures++
-			if transientFailures >= 3 || ctx.Err() != nil {
+			if transientFailures >= 3 {
 				return obs, err
 			}
 		} else {
@@ -470,8 +460,7 @@ func (s *Service) PollVideoTask(ctx context.Context, f FrozenProvider, upstreamI
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			err := videoError("OUTCOME_UNKNOWN", "Video task polling interrupted; do not resubmit", false, 0)
-			return VideoTaskObservation{UpstreamID: upstreamID, Status: "unknown", Failure: err}, err
+			return VideoTaskObservation{UpstreamID: upstreamID, Status: "running"}, nil
 		case <-timer.C:
 		}
 		if delay < maxDelay {

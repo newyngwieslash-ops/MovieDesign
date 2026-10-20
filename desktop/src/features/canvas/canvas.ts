@@ -39,3 +39,12 @@ export function visibleNodes(doc:CanvasDocument,view:View,width:number,height:nu
  return Object.values(doc.nodes).filter(n=>{const p=resolve(n);return !hidden.get(n.id)&&(p.x+n.size.width)*view.scale+view.x>=0&&(p.y+n.size.height)*view.scale+view.y>=0&&p.x*view.scale+view.x<=width&&p.y*view.scale+view.y<=height;}).sort((a,b)=>a.zIndex-b.zIndex);
 }
 export function patch(before:Node|null,after:Node|null):Command {return {type:'canvas.patch',nodes:[{id:(after??before)!.id,before,after}],edges:[]};}
+export function nextGenerationPositions(doc:CanvasDocument,count:number,origin:Point={x:40,y:50},stepX=370,cascadeStep=48):Point[] {
+ const occupied=Object.values(doc.nodes).filter(n=>n.parentId===null&&!n.hidden).map(n=>n.position);
+ for(let slot=0;slot<256;slot++){
+  const dx=(slot%5)*cascadeStep,dy=(slot%5)*cascadeStep+Math.floor(slot/5)*64;
+  const candidate=Array.from({length:Math.max(1,count)},(_,i)=>({x:origin.x+i*stepX+dx,y:origin.y+dy}));
+  if(candidate.every(pt=>!occupied.some(o=>Math.abs(o.x-pt.x)<24&&Math.abs(o.y-pt.y)<24)))return candidate;
+ }
+ return Array.from({length:Math.max(1,count)},(_,i)=>({x:origin.x+i*stepX,y:origin.y}));
+}

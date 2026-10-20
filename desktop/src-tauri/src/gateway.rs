@@ -241,4 +241,22 @@ mod tests {
             assert!(parse_response(invalid, 1).is_err());
         }
     }
+    #[test]
+    fn shutdown_operates_only_on_owned_handles_and_is_idempotent() {
+        let (_tx, rx) = mpsc::channel();
+        let mut gw = Gateway {
+            child: None,
+            stdin: None,
+            responses: rx,
+            connection: Connection {
+                port: Some(8001),
+                error: None,
+            },
+            agent: None,
+        };
+        gw.shutdown();
+        assert_eq!(gw.connection.port, None);
+        gw.shutdown();
+        assert_eq!(gw.connection.port, None);
+    }
 }

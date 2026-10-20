@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/delivery"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
@@ -33,6 +34,16 @@ type Service struct {
 	work        sync.WaitGroup
 	active      atomic.Int64
 	textSlot    chan struct{}
+	polling     sync.Map
+}
+
+func (s *Service) beginPoll(taskID string, attempt int) bool {
+	_, loaded := s.polling.LoadOrStore(fmt.Sprintf("%s:%d", taskID, attempt), struct{}{})
+	return !loaded
+}
+
+func (s *Service) endPoll(taskID string, attempt int) {
+	s.polling.Delete(fmt.Sprintf("%s:%d", taskID, attempt))
 }
 
 func NewService(db *sql.DB, e *events.Service, executor *Executor) *Service {
@@ -64,9 +75,102 @@ type rowQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+func describeTaskProvider(cfg providers.Config) *TaskProviderView {
+	if cfg.ID == "" {
+		return nil
+	}
+	stages := []string{}
+	summary := "同步图像请求发出后不支持远端中断；取消仅停止本地接收与投递"
+	if cfg.Kind == "video" || cfg.Protocol == "ark-video" {
+		stages = []string{"queued"}
+		summary = "仅远端排队阶段（queued）支持 DELETE 取消；running 阶段远端不可中断"
+	} else if cfg.Kind == "llm" {
+		summary = "已发出推理请求仅停止本地流与工具轮次；供应商可能已计费"
+	}
+	return &TaskProviderView{
+		ID:                  cfg.ID,
+		Name:                cfg.Name,
+		Kind:                cfg.Kind,
+		Protocol:            cfg.Protocol,
+		ModelID:             cfg.ModelID,
+		RemoteCancelStages:  stages,
+		RemoteCancelSummary: summary,
+	}
+}
+
+func populateQuoteBilling(ctx context.Context, q rowQuery, p, id string, v *TaskView) {
+	if v.Billing.EstimatedAmount != nil || v.Billing.EstimatedCredits == nil {
+		return
+	}
+	var quoteFrozen string
+	_ = q.QueryRowContext(ctx, "SELECT coalesce(pq.frozen_json,'') FROM questions q JOIN price_quotes pq ON pq.id=q.quote_id WHERE q.project_id=? AND q.task_id=? AND q.kind='billing' ORDER BY q.created_at DESC, q.rowid DESC LIMIT 1", p, id).Scan(&quoteFrozen)
+	if quoteFrozen != "" {
+		var quoted providers.QuotedInput
+		if json.Unmarshal([]byte(quoteFrozen), &quoted) == nil {
+			credits := quoted.Quote.EstimatedCredits
+			amount := quoted.Quote.EstimatedAmount
+			scale := quoted.Quote.MinorUnitScale
+			v.Billing.EstimatedCredits = &credits
+			v.Billing.Currency = quoted.Quote.Currency
+			v.Billing.EstimatedAmount = &amount
+			v.Billing.MinorUnitScale = &scale
+		}
+	}
+}
+
+func enrichTaskView(attempt int, providerRaw, attemptState, upstreamID, errorRaw string, submitStarted sql.NullInt64, v *TaskView) {
+	v.Attempt = attempt
+	v.AttemptState = attemptState
+	v.UpstreamID = upstreamID
+	var fp providers.FrozenProvider
+	if providerRaw != "" && json.Unmarshal([]byte(providerRaw), &fp) == nil {
+		v.Provider = describeTaskProvider(fp.Config)
+	}
+	if v.Billing.Currency == "" && fp.Config.Pricing != nil && fp.Config.Pricing.Currency != "" {
+		scale := fp.Config.Pricing.MinorUnitScale
+		v.Billing.Currency = fp.Config.Pricing.Currency
+		v.Billing.MinorUnitScale = &scale
+	}
+	switch {
+	case v.Status == WaitingUser && v.Problem != nil && v.Problem.Source == "billing":
+		v.Billing.ChargeStatus = "awaiting_approval"
+		v.Billing.BillingNote = "等待人工批准费用；尚未向供应商发送请求"
+	case !submitStarted.Valid:
+		zero := int64(0)
+		v.Billing.ActualAmount = &zero
+		v.Billing.ActualCredits = &zero
+		v.Billing.ChargeStatus = "not_submitted"
+		v.Billing.BillingNote = "取消发生在向供应商发送请求前（实际费用 0）"
+	case v.Status == Cancelled && strings.Contains(errorRaw, "TASK_CANCELLED_QUEUED"):
+		zero := int64(0)
+		v.Billing.ActualAmount = &zero
+		v.Billing.ActualCredits = &zero
+		v.Billing.ChargeStatus = "remote_cancelled_queued"
+		v.Billing.BillingNote = "已在远端排队阶段（queued）取消，未进入生成执行（实际费用 0）"
+	case v.Status == Cancelled:
+		v.Billing.ChargeStatus = "local_cancelled_remote_may_charge"
+		v.Billing.BillingNote = "已向供应商发送请求；本地已停止自动投递，远端可能继续执行并计费（API 不返回实时扣费金额）"
+	case v.Status == Completed:
+		v.Billing.ChargeStatus = "completed"
+		v.Billing.BillingNote = "已向供应商提交并完成产物交付（实际账单以供应商结算为准）"
+	default:
+		v.Billing.ChargeStatus = "submitted"
+		v.Billing.BillingNote = "请求已提交至供应商（实际账单以供应商结算为准）"
+	}
+}
+
+func enrichTaskViewFromDB(ctx context.Context, q rowQuery, p string, v *TaskView, attempt int) {
+	populateQuoteBilling(ctx, q, p, v.ID, v)
+	var providerRaw, attemptState, upstreamID, errorRaw string
+	var submitStarted sql.NullInt64
+	_ = q.QueryRowContext(ctx, "SELECT t.provider_json,coalesce(a.state,''),coalesce(a.upstream_id,''),a.submit_started_at,coalesce(a.error_json,'') FROM tasks t LEFT JOIN task_attempts a ON a.task_id=t.id AND a.attempt=? WHERE t.project_id=? AND t.id=?", attempt, p, v.ID).Scan(&providerRaw, &attemptState, &upstreamID, &submitStarted, &errorRaw)
+	enrichTaskView(attempt, providerRaw, attemptState, upstreamID, errorRaw, submitStarted, v)
+}
+
 func query(ctx context.Context, q rowQuery, p, id string) (v TaskView, attempt int, session string, err error) {
-	var raw string
-	err = q.QueryRowContext(ctx, "SELECT view_json,current_attempt,session_id,request_id FROM tasks WHERE project_id=? AND id=?", p, id).Scan(&raw, &attempt, &session, &v.RequestID)
+	var raw, providerRaw, attemptState, upstreamID, errorRaw string
+	var submitStarted sql.NullInt64
+	err = q.QueryRowContext(ctx, "SELECT t.view_json,t.current_attempt,t.session_id,t.request_id,t.provider_json,coalesce(a.state,''),coalesce(a.upstream_id,''),a.submit_started_at,coalesce(a.error_json,'') FROM tasks t LEFT JOIN task_attempts a ON a.task_id=t.id AND a.attempt=t.current_attempt WHERE t.project_id=? AND t.id=?", p, id).Scan(&raw, &attempt, &session, &v.RequestID, &providerRaw, &attemptState, &upstreamID, &submitStarted, &errorRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = &store.DomainError{Status: 404, Code: "not_found", Message: "Task not found in this project"}
 	}
@@ -82,6 +186,7 @@ func query(ctx context.Context, q rowQuery, p, id string) (v TaskView, attempt i
 					return
 				}
 			}
+			enrichTaskView(attempt, providerRaw, attemptState, upstreamID, errorRaw, submitStarted, &v)
 		}
 	}
 	return
@@ -406,7 +511,13 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 			if json.Unmarshal([]byte(frozen), &quoted) != nil {
 				return nil, invalid("Invalid saved quote")
 			}
-			v.Billing.EstimatedCredits = &quoted.Quote.EstimatedCredits
+			credits := quoted.Quote.EstimatedCredits
+			amount := quoted.Quote.EstimatedAmount
+			scale := quoted.Quote.MinorUnitScale
+			v.Billing.EstimatedCredits = &credits
+			v.Billing.Currency = quoted.Quote.Currency
+			v.Billing.EstimatedAmount = &amount
+			v.Billing.MinorUnitScale = &scale
 		}
 		view, _ := json.Marshal(v)
 		provider, _ := json.Marshal(i.Provider)
@@ -470,6 +581,7 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 				return nil, e
 			}
 		}
+		enrichTaskViewFromDB(ctx, tx, p, &v, 1)
 		view, _ = json.Marshal(v)
 		if _, e = tx.ExecContext(ctx, "UPDATE tasks SET view_json=? WHERE id=?", string(view), v.ID); e != nil {
 			return nil, e
@@ -488,6 +600,7 @@ func (s *Service) Submit(ctx context.Context, p string, i Input) (TaskView, erro
 func (s *Service) save(ctx context.Context, tx *sql.Tx, p, session string, v *TaskView, attempt int) error {
 	old := v.Revision
 	v.Revision++
+	enrichTaskViewFromDB(ctx, tx, p, v, attempt)
 	b, e := json.Marshal(v)
 	if e != nil {
 		return e
@@ -537,6 +650,7 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 		raw = i.raw
 	}
 	freshResolve := false
+	alreadyCancelled := false
 	result, e := store.WriteRequest(ctx, s.DB, store.Scope{ProjectID: p, Operation: "tasks.resolve." + id, RequestID: i.RequestID}, raw, func(tx *sql.Tx) ([]byte, error) {
 		freshResolve = true
 		view, attempt, session, e := query(ctx, tx, p, id)
@@ -544,6 +658,10 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 			return nil, e
 		}
 		v = view
+		if i.Action == "cancel" && v.Status == Cancelled && i.ExpectedRevision <= v.Revision {
+			alreadyCancelled = true
+			return json.Marshal(v)
+		}
 		if v.Revision != i.ExpectedRevision {
 			return nil, conflict()
 		}
@@ -572,6 +690,9 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 			if _, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='cancelled' WHERE task_id=? AND attempt=? AND (submit_started_at IS NULL OR state='collection_pending')", id, attempt); e != nil {
 				return nil, e
 			}
+			if _, e = tx.ExecContext(ctx, "UPDATE questions SET state='stale',revision=revision+1,question_json=json_set(question_json,'$.state','stale','$.revision',revision+1,'$.reason','任务已取消') WHERE task_id=? AND state='pending'", id); e != nil {
+				return nil, e
+			}
 			v.Status = Cancelled
 			v.Problem = nil
 			v.Actions = []string{}
@@ -597,6 +718,9 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 			rec, _, err := pipeline.ApplyRecoveryActionTx(ctx, tx, p, id, input.ContractID, i.RequestID, "retry", v.Recovery)
 			if err != nil {
 				return nil, err
+			}
+			if _, e = tx.ExecContext(ctx, "UPDATE task_attempts SET state='failed' WHERE task_id=? AND attempt=? AND state NOT IN ('succeeded','failed','cancelled')", id, attempt); e != nil {
+				return nil, e
 			}
 			v.Recovery = rec
 			v.Outputs = declarations(input)
@@ -666,10 +790,12 @@ func (s *Service) Resolve(ctx context.Context, p, id string, i ResolveInput) (Ta
 					}
 				}
 			case "cancel":
-				if updated, ok := s.reconcileCancel(ctx, p, id); ok {
-					v = updated
-					if encoded, err := json.Marshal(v); err == nil {
-						_, _ = s.DB.ExecContext(ctx, "UPDATE write_requests SET response_json=? WHERE project_id=? AND operation=? AND request_id=?", string(encoded), p, "tasks.resolve."+id, i.RequestID)
+				if !alreadyCancelled {
+					if updated, ok := s.reconcileCancel(ctx, p, id); ok {
+						v = updated
+						if encoded, err := json.Marshal(v); err == nil {
+							_, _ = s.DB.ExecContext(ctx, "UPDATE write_requests SET response_json=? WHERE project_id=? AND operation=? AND request_id=?", string(encoded), p, "tasks.resolve."+id, i.RequestID)
+						}
 					}
 				}
 			}
@@ -690,6 +816,9 @@ func (s *Service) reconcileUnknown(ctx context.Context, p, id string) (TaskView,
 	out, queryErr := s.Executor.Query(ctx, a)
 	if err := s.finishOrCollect(ctx, a, out, queryErr); err != nil {
 		return TaskView{}, false
+	}
+	if out.Status == Running && a.UpstreamID != "" && a.Provider.Config.Kind == "video" {
+		s.pollAcceptedAttempt(a)
 	}
 	v, err := s.Query(ctx, p, id)
 	if err != nil {

@@ -100,6 +100,22 @@ type Progress struct {
 }
 type Billing struct {
 	EstimatedCredits *int64 `json:"estimated_credits"`
+	Currency         string `json:"currency,omitempty"`
+	EstimatedAmount  *int64 `json:"estimated_amount,omitempty"`
+	MinorUnitScale   *int   `json:"minor_unit_scale,omitempty"`
+	ActualAmount     *int64 `json:"actual_amount,omitempty"`
+	ActualCredits    *int64 `json:"actual_credits,omitempty"`
+	ChargeStatus     string `json:"charge_status,omitempty"`
+	BillingNote      string `json:"billing_note,omitempty"`
+}
+type TaskProviderView struct {
+	ID                  string   `json:"id"`
+	Name                string   `json:"name,omitempty"`
+	Kind                string   `json:"kind,omitempty"`
+	Protocol            string   `json:"protocol,omitempty"`
+	ModelID             string   `json:"model_id,omitempty"`
+	RemoteCancelStages  []string `json:"remote_cancel_stages"`
+	RemoteCancelSummary string   `json:"remote_cancel_summary"`
 }
 type Output struct {
 	ResourceID    string  `json:"resource_id,omitempty"`
@@ -119,6 +135,9 @@ type TaskView struct {
 	ContractID   string                  `json:"contract_id,omitempty"`
 	Status       Status                  `json:"status"`
 	Revision     int64                   `json:"revision"`
+	Attempt      int                     `json:"attempt,omitempty"`
+	AttemptState string                  `json:"attempt_state,omitempty"`
+	UpstreamID   string                  `json:"upstream_id,omitempty"`
 	Prompt       string                  `json:"prompt"`
 	Outputs      []Output                `json:"outputs"`
 	Problem      *Problem                `json:"problem,omitempty"`
@@ -126,6 +145,7 @@ type TaskView struct {
 	Actions      []string                `json:"actions"`
 	Progress     Progress                `json:"progress"`
 	Billing      Billing                 `json:"billing"`
+	Provider     *TaskProviderView       `json:"provider,omitempty"`
 }
 
 func invalid(message string) error {

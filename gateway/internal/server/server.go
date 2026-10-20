@@ -62,6 +62,10 @@ type Server struct {
 
 func (s *Server) BeginShutdown() {
 	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		return
+	}
 	s.stopping = true
 	s.mu.Unlock()
 	if s.chat != nil {
@@ -81,7 +85,7 @@ func (s *Server) Close() error {
 	}
 	s.tasks.Close()
 	if s.workspace != nil {
-		if s.chat.Skills != nil {
+		if s.chat != nil && s.chat.Skills != nil {
 			_ = s.chat.Skills.Close()
 		}
 		return s.workspace.Close()
@@ -105,7 +109,7 @@ func (s *Server) Health() Health {
 		return h
 	}
 	var pending int
-	e := s.db.QueryRow(`SELECT (SELECT count(*) FROM task_attempts WHERE state IN ('approved','submitting','submitted','running','unknown','collection_pending','collecting','adoption_pending'))+(SELECT count(*) FROM file_operations WHERE stage='prepared')+(SELECT count(*) FROM deliveries WHERE status='unknown')+(SELECT count(*) FROM chat_dispatch WHERE terminal=0)`).Scan(&pending)
+	e := s.db.QueryRow(`SELECT (SELECT count(*) FROM task_attempts WHERE state IN ('approved','submitting','submitted','running','unknown','collection_pending','collecting','adoption_pending'))+(SELECT count(*) FROM file_operations WHERE stage='prepared')+(SELECT count(*) FROM deliveries WHERE status='unknown')+(SELECT count(*) FROM chat_dispatch WHERE terminal=0)+(SELECT count(*) FROM chat_turns WHERE state='active')+(SELECT count(*) FROM write_requests WHERE state='pending')`).Scan(&pending)
 	h.SafeToSuspend = h.SafeToSuspend && e == nil && pending == 0
 	return h
 }

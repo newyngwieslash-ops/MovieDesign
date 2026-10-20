@@ -293,4 +293,22 @@ mod tests {
         );
         assert!(owner.local_addr().is_ok());
     }
+    #[test]
+    fn shutdown_cleans_bootstrap_without_name_kill() {
+        let dir = std::env::temp_dir().join(format!(
+            "moviedesign_opencode_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let dpapi = dir.join("launch.dpapi");
+        let _ = fs::write(&dpapi, b"ephemeral");
+        let mut host = Opencode {
+            child: None,
+            directory: dir.clone(),
+        };
+        host.shutdown();
+        assert!(!dpapi.exists());
+        host.shutdown();
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

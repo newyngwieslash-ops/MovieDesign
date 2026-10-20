@@ -157,14 +157,26 @@ func (s *Service) Run(_ context.Context, p, id string) error {
 		outcome, collectErr := s.Executor.Collect(ctx, a)
 		return s.finish(a, outcome, collectErr)
 	}
+	if a.Provider.Config.Kind == "video" {
+		s.beginPoll(a.TaskID, a.Number)
+		defer s.endPoll(a.TaskID, a.Number)
+	}
 	outcome, submitErr := s.Executor.Submit(ctx, a, func(upstream string) error { return s.checkpoint(a, upstream) })
 	return s.finishOrCollect(ctx, a, outcome, submitErr)
 }
 
 func (s *Service) finishOrCollect(ctx context.Context, a Attempt, outcome Outcome, callErr error) error {
 	if callErr == nil && len(outcome.Result) > 0 && outcome.Problem != nil && outcome.Problem.Code == "RESULT_AWAITING_DELIVERY" && s.Executor != nil && s.Executor.Collect != nil {
+		var currentAttempt int
+		if err := s.DB.QueryRowContext(context.Background(), "SELECT current_attempt FROM tasks WHERE id=? AND project_id=?", a.TaskID, a.ProjectID).Scan(&currentAttempt); err != nil {
+			return err
+		}
+		if currentAttempt != a.Number {
+			_, _ = s.DB.ExecContext(context.Background(), "UPDATE task_attempts SET result_json=coalesce(result_json,?),state=CASE WHEN state IN ('completed','cancelled') THEN state ELSE 'failed' END WHERE task_id=? AND attempt=?", string(outcome.Result), a.TaskID, a.Number)
+			return conflict()
+		}
 		// Durable accepted response must precede any download or archive.
-		res, err := s.DB.ExecContext(context.Background(), "UPDATE task_attempts SET result_json=coalesce(result_json,?),state='collecting' WHERE task_id=? AND attempt=?", string(outcome.Result), a.TaskID, a.Number)
+		res, err := s.DB.ExecContext(context.Background(), "UPDATE task_attempts SET result_json=coalesce(result_json,?),state='collecting' WHERE task_id=? AND attempt=? AND (SELECT current_attempt FROM tasks WHERE id=? AND project_id=?)=?", string(outcome.Result), a.TaskID, a.Number, a.TaskID, a.ProjectID, a.Number)
 		if err != nil {
 			return err
 		}
@@ -215,6 +227,17 @@ func (s *Service) finish(a Attempt, out Outcome, callErr error) error {
 		return e
 	}
 	if attempt != a.Number {
+		var staleResult any
+		if len(out.Result) > 0 && json.Valid(out.Result) {
+			staleResult = string(out.Result)
+		}
+		var staleProblem any
+		if out.Problem != nil {
+			encoded, _ := json.Marshal(out.Problem)
+			staleProblem = string(encoded)
+		}
+		_, _ = tx.ExecContext(ctx, "UPDATE task_attempts SET state=CASE WHEN state IN ('completed','cancelled') THEN state ELSE 'failed' END,error_json=coalesce(error_json,?),result_json=coalesce(result_json,?) WHERE task_id=? AND attempt=?", staleProblem, staleResult, a.TaskID, a.Number)
+		_ = tx.Commit()
 		return conflict()
 	}
 	persisted, state, _, e := loadAttempt(ctx, tx, a.ProjectID, a.TaskID)
@@ -231,7 +254,7 @@ func (s *Service) finish(a Attempt, out Outcome, callErr error) error {
 			status = Failed
 		}
 	}
-	if status != Running && status != WaitingUser && status != Unknown && status != Failed && status != Completed {
+	if status != Running && status != WaitingUser && status != Unknown && status != Failed && status != Completed && status != Cancelled {
 		return invalid("Invalid executor outcome")
 	}
 	if len(out.Result) > 0 && !json.Valid(out.Result) {
@@ -310,6 +333,9 @@ func (s *Service) finish(a Attempt, out Outcome, callErr error) error {
 		}
 		if status == Running {
 			v.Progress.Phase = "active"
+		}
+		if status == Cancelled {
+			v.Progress.Phase = "stopped"
 		}
 		if status == Completed {
 			percent := 100
@@ -417,11 +443,16 @@ func (s *Service) Recover(_ context.Context) error {
 }
 
 func (s *Service) pollAcceptedAttempt(a Attempt) {
+	if !s.beginPoll(a.TaskID, a.Number) {
+		return
+	}
 	if e := s.begin(); e != nil {
+		s.endPoll(a.TaskID, a.Number)
 		return
 	}
 	go func() {
 		defer s.end()
+		defer s.endPoll(a.TaskID, a.Number)
 		ctx := s.ctx
 		delay := 50 * time.Millisecond
 		maxDelay := 1500 * time.Millisecond
@@ -435,14 +466,18 @@ func (s *Service) pollAcceptedAttempt(a Attempt) {
 			case <-timer.C:
 			}
 			var status string
+			var attemptState string
 			var savedResult string
-			if err := s.DB.QueryRowContext(ctx, "SELECT t.status, coalesce(a.result_json,'null') FROM tasks t JOIN task_attempts a ON a.task_id=t.id AND a.attempt=t.current_attempt WHERE t.id=? AND t.project_id=? AND a.attempt=?", a.TaskID, a.ProjectID, a.Number).Scan(&status, &savedResult); err != nil {
+			if err := s.DB.QueryRowContext(ctx, "SELECT t.status, coalesce(a.state,''), coalesce(a.result_json,'null') FROM tasks t JOIN task_attempts a ON a.task_id=t.id AND a.attempt=t.current_attempt WHERE t.id=? AND t.project_id=? AND a.attempt=?", a.TaskID, a.ProjectID, a.Number).Scan(&status, &attemptState, &savedResult); err != nil {
 				return
 			}
-			if savedResult != "null" || (Status(status) != Running && Status(status) != Cancelled) {
+			if savedResult != "null" || (Status(status) != Running && Status(status) != Cancelled) || (attemptState != "submitted" && attemptState != "running") {
 				return
 			}
 			out, queryErr := s.Executor.Query(ctx, a)
+			if ctx.Err() != nil {
+				return
+			}
 			if queryErr != nil && out.Status == "" {
 				transientFailures++
 				if transientFailures >= 3 {
