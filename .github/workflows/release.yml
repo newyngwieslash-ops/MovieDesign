@@ -1,0 +1,81 @@
+name: Release MovieDesign
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.1.0)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Run release verification in dry-run mode without publishing'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows-x64:
+    if: github.repository == 'newyngwieslash-ops/MovieDesign'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Run full verification suite
+        shell: pwsh
+        run: ./scripts/check.ps1
+
+      - name: Run release script (Dry-Run)
+        if: ${{ inputs.dry_run == true }}
+        shell: pwsh
+        run: ./scripts/release.ps1 -DryRun -Version "${{ inputs.version }}" -OutputDir ".runtime/release-artifacts"
+
+      - name: Build signed release artifacts
+        if: ${{ inputs.dry_run != true }}
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: ./scripts/release.ps1 -Version "${{ inputs.version }}" -OutputDir ".runtime/release-artifacts"
+
+      - name: Upload release artifacts to GitHub Release
+        if: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: .runtime/release-artifacts/RELEASE-NOTES.md
+          files: |
+            .runtime/release-artifacts/*-setup.exe
+            .runtime/release-artifacts/*-setup.exe.sig
+            .runtime/release-artifacts/latest.json
+            .runtime/release-artifacts/SHA256SUMS.txt
+            .runtime/release-artifacts/third-party.md

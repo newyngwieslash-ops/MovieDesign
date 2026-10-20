@@ -12,6 +12,7 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/updates"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -50,6 +51,7 @@ type Server struct {
 	db                     *sql.DB
 	tasks                  *tasks.Service
 	events                 *events.Service
+	updates                *updates.Service
 	mu                     sync.Mutex
 	stopping               bool
 	requests               sync.WaitGroup
@@ -126,6 +128,7 @@ func New(origin string, db *sql.DB, workspaceRoot string) (*Server, error) {
 	}
 	srv := newHandler(origin, db, workspace.NewService(db, ws), providers.NewService(db, secrets)).(*Server)
 	srv.workspace = ws
+	srv.updates.CacheDir = filepath.Dir(workspaceRoot)
 	srv.chat.Skills, err = agent.InstallSkills(filepath.Join(filepath.Dir(workspaceRoot), "skills"))
 	if err != nil {
 		srv.Close()
@@ -157,7 +160,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		agentDeliveries = delivery.NewService(db, files.Workspace, "agent")
 	}
 	ev := events.NewService(db)
-	srv := &Server{db: db, events: ev, tasks: tasks.NewService(db, ev, nil)}
+	srv := &Server{db: db, events: ev, tasks: tasks.NewService(db, ev, nil), updates: updates.NewService("")}
 	if providerService != nil {
 		srv.llm = &agent.Settings{DB: db, Secrets: providerService.Secrets}
 	}
@@ -208,7 +211,7 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")
-			allowed := pipelineMethod(r.URL.Path, method) || (r.URL.Path == "/api/skills" && method == "GET") || chatMethod(r.URL.Path, method) || agentMethod(r.URL.Path, method) || questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
+			allowed := updateMethod(r.URL.Path, method) || pipelineMethod(r.URL.Path, method) || (r.URL.Path == "/api/skills" && method == "GET") || chatMethod(r.URL.Path, method) || agentMethod(r.URL.Path, method) || questionMethod(r.URL.Path, method) || generationMethod(r.URL.Path, method) || (r.URL.Path == "/api/events" && method == "GET") || taskMethod(r.URL.Path, method) || (r.URL.Path == "/api/health" && method == "GET") || (r.URL.Path == "/api/providers" && (method == "GET" || method == "POST")) || (r.URL.Path == "/api/providers/receipt" && method == "GET") || (r.URL.Path == "/api/deliver" && method == "POST") || (kind != "" && (method == "GET" || method == "POST")) || (fileRoute(r.URL.Path) && fileMethod(r.URL.Path, method)) || (canvasRoute(r.URL.Path) && canvasMethod(r.URL.Path, method))
 			if !allowed || !allowedPreflightHeaders(r.Header.Values("Access-Control-Request-Headers")) {
 				reject(w, http.StatusForbidden, "invalid_input", "Preflight is not allowed")
 				return
@@ -268,6 +271,10 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		if pipelineRoute(r.URL.Path) {
 			srv.servePipeline(w, r, deliveries)
+			return
+		}
+		if updateRoute(r.URL.Path) {
+			srv.serveUpdates(w, r)
 			return
 		}
 		if r.URL.Path == "/api/deliver" {

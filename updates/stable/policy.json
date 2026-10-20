@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "enabled": true,
+  "min_supported_version": "0.1.0",
+  "force_reason": {
+    "zh": "当前版本已停止支持，请升级到最新签名版本。",
+    "en": "This version is no longer supported. Please update to the latest signed release."
+  },
+  "manual_download_url": "https://github.com/newyngwieslash-ops/MovieDesign/releases/latest",
+  "updated_at": "2026-10-15T00:00:00Z",
+  "manual_only": {
+    "platforms": [
+      "win32"
+    ],
+    "min_version_inclusive": "0.0.1",
+    "max_version_exclusive": "0.1.0",
+    "reason": {
+      "zh": "0.1.0 之前的测试版本需从 GitHub Releases 手动下载签名安装包升级。",
+      "en": "Pre-0.1.0 test builds require manual upgrade from signed GitHub Releases."
+    }
+  }
+}

@@ -693,3 +693,39 @@ This is an explicit MovieDesign typed port addition. The existing 18 design tool
 
 
 
+## M7.3: TaskCenter, interruption recovery without duplicate submission, and health lifecycle
+
+1. **Interruption & Restart Recovery Matrix (`gateway/internal/tasks/service.go`, `gateway/internal/tasks/worker.go`, `gateway/internal/providers/video.go`)**:
+   - **Approved-but-unsent (`state='approved'`, `submit_started_at IS NULL`)**: startup `Recover()` never automatically submits unstarted attempts; human-approved tasks that were interrupted before dispatch can be explicitly resumed without creating a new attempt or re-billing.
+   - **Interrupted `POST` before `upstream_id` is saved (`state='submitting'`, `submit_started_at IS NOT NULL`, `upstream_id=''`)**: transitions to `status='unknown'` (`PROVIDER_OUTCOME_UNKNOWN`, `Retryable:false`, `actions:["query","cancel"]`). `Resolve(action:"query")` reconciles strictly via read-only `Executor.Query` without ever calling `Executor.Submit`.
+   - **Interrupted `running` video task with saved `upstream_id`**: `PollVideoTask` preserves `Status:"running"` on graceful shutdown (`ctx.Done()`), and startup `Recover()` queries upstream once via `GET` and resumes background read-only polling (`pollAcceptedAttempt`) with per-attempt deduplication (`beginPoll`/`endPoll`) and zero duplicate `POST` calls.
+   - **Interrupted `collecting` with saved `result_json`**: transitions to `COLLECTION_INTERRUPTED` (`source:"delivery"`, `Retryable:true`); human `retry` re-runs local collection/download on the same attempt without re-submitting to the provider.
+   - **Stale Attempt CAS Guard**: `finishOrCollect` and `finish` verify `current_attempt == a.Number` so a late completion from an older attempt never overwrites a newer retried attempt or remains stuck in `collecting`.
+
+2. **Stage-Aware Cancellation & Billing Truthfulness (`gateway/internal/tasks/service.go`, `gateway/internal/tasks/images.go`, `desktop/src/features/tasks/TaskCenter.tsx`)**:
+   - **Before send (`submit_started_at IS NULL`)**: cancels locally, marks any pending billing card `stale` (`任务已取消`), and reports `charge_status:"not_submitted"`, `actual_amount:0`, `actual_credits:0`.
+   - **`ark-video` `queued`**: verifies live upstream `queued` status via `GET` before sending `DELETE /contents/generations/tasks/{id}`; on `200`/`204`, reports `TASK_CANCELLED_QUEUED`, `charge_status:"remote_cancelled_queued"`, `actual_amount:0`, `actual_credits:0`. Duplicate `cancel` is idempotent.
+   - **`ark-video` `running`**: never sends `DELETE`; records `RUNNING_UNCANCELLABLE`, `charge_status:"local_cancelled_remote_may_charge"`, continues read-only background polling, and routes late `succeeded` output to a `kind:"delivery"` confirmation card (`LateResult`) instead of auto-writing Canvas.
+
+3. **Health & Owned-Handle Lifecycle (`gateway/internal/server/server.go`, `desktop/src-tauri/src/gateway.rs`, `desktop/src-tauri/src/opencode.rs`)**:
+   - `GET /api/health` and stdio JSON-RPC `gateway.health` report `status` (`"ok"` | `"stopping"`), `idle`, and `safe_to_suspend` across in-memory HTTP/task/turn counters and SQLite pending states (`task_attempts`, `file_operations`, `deliveries`, `chat_dispatch`, `chat_turns`, `write_requests`).
+   - `Server.BeginShutdown()` is idempotent, and Rust `Gateway` / `Opencode` shutdown routines terminate only their owned `Child` handles.
+
+## M7.4: signed updates, `manual_only` release policy, and 24-hour LKG cache
+
+1. **Hosted Endpoints & Wire Schema (`gateway/internal/updates/policy.go`, `updates/stable/policy.json`)**:
+   - Fixed repository: `newyngwieslash-ops/MovieDesign`.
+   - Policy URL: `https://raw.githubusercontent.com/newyngwieslash-ops/MovieDesign/main/updates/stable/policy.json`.
+   - Signed static manifest URL: `https://github.com/newyngwieslash-ops/MovieDesign/releases/latest/download/latest.json`.
+   - `ParseCDNPolicy` preserves the recovered `parseCdnPolicy` wire fields (`update-policy-fetcher-CYQPhXS_.js:79`): required `schema_version:1`, `enabled:bool`, `min_supported_version:string`; optional `force_reason:{zh,en}`, `manual_download_url` (HTTP/HTTPS only; invalid URL emits a warning and is ignored without failing policy parsing), `updated_at`, and `manual_only:{platforms,min_version_inclusive,max_version_exclusive,reason:{zh,en}}`.
+   - `ManualOnlyRuleMatches` (`index-WiZKxTAT.js:2158`) requires valid `manual_download_url`, non-empty `platforms` within `{"win32","darwin","linux"}` matching the normalized platform (Rust `"windows"` mapped to `"win32"`), valid `max_version_exclusive <= min_supported_version`, optional `min_version_inclusive < max_version_exclusive` and `< min_supported_version`, and matches the half-open interval `[min_version_inclusive, max_version_exclusive)`. When `enabled == false` or `currentVersion >= min_supported_version`, `forced` and `manualOnly` are `false`. `min_supported_version` is a threshold (`targetVersion:null` in policy resolution); actual target version comes from the signed `latest.json` manifest.
+
+2. **HTTPS Fetch, Retry, 24h Atomic Cache & LKG Fallback (`gateway/internal/updates/policy.go`, `gateway/internal/server/updates.go`)**:
+   - Policy HTTPS requests use a `3s` per-attempt timeout, up to `3` attempts total, retrying only on `5xx` or network/timeout errors with backoff `min(250ms * 2^(n-1), 1000ms)` (`4xx` and `invalid_schema` do not retry).
+   - Cache file `<dataDir>/update-policy-cache.json` stores `{policy, cachedAt, metadata:{region:"global", channel:"stable", platform:"win32"}}` via atomic temporary-file `Sync` + `Rename`.
+   - `CacheFresh(now, fetched)` returns `age >= 0 && age <= 24*time.Hour`. Fresh cache (`age <= 24h`) serves startup reads immediately and refreshes in the background. Expired cache or negative age (`clockSkew:true` from future timestamps / clock rollback, documented adaptation) refreshes first and falls back to metadata-matching LKG cache (`source:"cache"`, `stale:true`, `policyFallbackReason`) if refresh fails. Mismatched metadata is discarded. When no LKG exists and refresh fails, returns `status:"failed"`, `source:"none"`, `autoUpdateAllowed:false` without fabricating a server `manual_only` rule.
+   - `GET /api/updates/policy` returns the evaluated `PolicySnapshot`; `POST /api/updates/check` enforces `requestId` idempotency via `store.WriteRequest` and appends an `app_update_check` event into SQLite `events`.
+
+3. **Native Signature Verification & Release Script (`desktop/src-tauri/src/updates.rs`, `scripts/release.ps1`, `.github/workflows/release.yml`, `docs/releasing.md`)**:
+   - `desktop/src-tauri/src/updates.rs` gates `tauri-plugin-updater` behind `status == "ready" && !manual_only && !busy`, preserves `tauri-plugin-updater`'s minisign signature and trusted-comment `version:<semver>` verification, and rejects non-`newyngwieslash-ops/MovieDesign` release asset URLs.
+   - `scripts/release.ps1` builds media tools, `open-design-gateway`, `moviedesign-opencode`, frontend assets, and the signed Tauri NSIS installer + `latest.json` + `SHA256SUMS.txt` + `RELEASE-NOTES.md` + `third-party.md`, reading `TAURI_SIGNING_PRIVATE_KEY` from the host environment or GitHub Secrets and failing explicitly if signing keys are missing in non-`-DryRun` mode.

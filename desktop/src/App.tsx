@@ -1,6 +1,7 @@
 import {TaskCenter} from './features/tasks/TaskCenter';
 import { ConfirmationCards } from './features/questions/ConfirmationCard';
 import { ProviderSettings } from './features/providers/ProviderSettings';
+import { UpdateSettings } from './features/settings/UpdateSettings';
 import { useQuery } from '@tanstack/react-query';
 import { getConnection, getHealth } from './gateway';
 import { CanvasWorkspace } from './features/canvas/CanvasWorkspace';
@@ -10,7 +11,7 @@ import { AssetLibrary } from './features/assets/AssetLibrary';
 import {ChatPanel,type AnnotationSource} from './features/chat/ChatPanel';
 
 export function App() {
-  const [page, setPage] = useState<'canvas' | 'providers'>('canvas');
+  const [page, setPage] = useState<'canvas' | 'providers' | 'updates'>('canvas');
   const [selection, setSelection] = useState(() => {
     try { return { id: localStorage.getItem('moviedesign.project') ?? '', warning: '' }; }
     catch { return { id: '', warning: '无法读取项目选择的本地存储，本次选择仅在当前窗口保留。' }; }
@@ -46,7 +47,7 @@ export function App() {
     </header>
     <aside className="sidebar" aria-label="工作区">
       <div className="section-label">工作区</div>
-      <button className="selected-item" onClick={() => setPage('canvas')} aria-current={page === 'canvas' ? 'page' : undefined}>创作画布</button><button className="selected-item" onClick={() => setPage('providers')} aria-current={page === 'providers' ? 'page' : undefined}>供应商设置</button>
+      <button className="selected-item" onClick={() => setPage('canvas')} aria-current={page === 'canvas' ? 'page' : undefined}>创作画布</button><button className="selected-item" onClick={() => setPage('providers')} aria-current={page === 'providers' ? 'page' : undefined}>供应商设置</button><button className="selected-item" onClick={() => setPage('updates')} aria-current={page === 'updates' ? 'page' : undefined}>版本与更新</button>
       <ProjectPicker selected={projectID} ready={ready} onSelect={selectProject} />
       <div className="sidebar-note">从一个想法开始，<br />让作品在这里生长。</div>
       <div className="milestone">素材工作台</div>
@@ -54,6 +55,7 @@ export function App() {
     <main>
       {ready && projectID && <><ConfirmationCards key={projectID} projectID={projectID} /><TaskCenter key={`tasks-${projectID}`} projectID={projectID}/></>}
       <div hidden={page !== 'providers'}><ProviderSettings ready={!!ready} /></div>
+      <div hidden={page !== 'updates'}><UpdateSettings ready={!!ready} projectID={projectID} health={health.data} /></div>
       <div hidden={page !== 'canvas'}>
       <div className="canvas-header"><div><h1>创作画布</h1><p>你的图像、视频与创作依据，将在这里汇合。</p></div><span className="local-badge">LOCAL</span></div>
       {error && <div className="error-banner" role="alert"><strong>无法连接本地服务</strong><p>{error}</p><p>请检查服务日志或端口占用，然后重新启动应用。</p></div>}

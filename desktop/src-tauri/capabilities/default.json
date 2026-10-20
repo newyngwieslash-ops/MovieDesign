@@ -3,5 +3,5 @@
   "identifier": "main",
   "description": "Main local workbench; no frontend shell or filesystem permissions.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "updater:allow-check"]
 }
