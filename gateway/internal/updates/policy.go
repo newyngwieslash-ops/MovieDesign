@@ -666,9 +666,9 @@ func (s *Service) fetchFromCDNOnce(ctx context.Context) (*CDNPolicy, []string, *
 	resp, err := client.Do(req)
 	if err != nil {
 		if errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-			return nil, nil, &cdnFetchError{reason: "timeout", retryable: true, err: err}
+			return nil, nil, &cdnFetchError{reason: "timeout", retryable: false, err: err}
 		}
-		return nil, nil, &cdnFetchError{reason: "network_error", retryable: true, err: err}
+		return nil, nil, &cdnFetchError{reason: "network_error", retryable: false, err: err}
 	}
 	defer resp.Body.Close()
 
@@ -680,7 +680,7 @@ func (s *Service) fetchFromCDNOnce(ctx context.Context) (*CDNPolicy, []string, *
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPolicyBytes+1))
 	if err != nil {
-		return nil, nil, &cdnFetchError{reason: "network_error", retryable: true, err: err}
+		return nil, nil, &cdnFetchError{reason: "network_error", retryable: false, err: err}
 	}
 	if len(body) > maxPolicyBytes {
 		return nil, nil, &cdnFetchError{reason: "invalid_schema", retryable: false}
