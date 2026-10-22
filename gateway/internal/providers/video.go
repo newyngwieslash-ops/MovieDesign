@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"mime"
 	"net/http"
 	"os"
@@ -17,12 +18,14 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 	"unicode"
 
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/events"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 )
 
@@ -48,15 +51,25 @@ type VideoCancelResult struct {
 }
 
 type MP4Metadata struct {
-	Format      string `json:"format"`
-	Codec       string `json:"codec"`
-	AudioCodec  string `json:"audioCodec,omitempty"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	DurationMS  int64  `json:"durationMs"`
-	Timebase    string `json:"timebase"`
-	AudioTracks int    `json:"audioTracks"`
+	Format                 string `json:"format"`
+	Codec                  string `json:"codec"`
+	AudioCodec             string `json:"audioCodec,omitempty"`
+	Width                  int    `json:"width"`
+	Height                 int    `json:"height"`
+	DurationMS             int64  `json:"durationMs"`
+	Timebase               string `json:"timebase"`
+	AudioTracks            int    `json:"audioTracks"`
+	AverageFrameRate       string `json:"averageFrameRate,omitempty"`
+	FrameRate              string `json:"frameRate,omitempty"`
+	DurationTS             int64  `json:"durationTs,omitempty"`
+	FrameDurationTS        int64  `json:"frameDurationTs,omitempty"`
+	TimingTolerance        string `json:"timingToleranceSeconds,omitempty"`
+	ContainerTimingQuantum string `json:"containerTimingQuantumSeconds,omitempty"`
+	ContainerDuration      string `json:"containerDurationSeconds,omitempty"`
+	timing                 *videoTiming
 }
+
+type videoTiming struct{ duration, container, tolerance *big.Rat }
 
 func sanitizeUpstreamText(value, key string, headers Headers) string {
 	value = strings.Map(func(r rune) rune {
@@ -682,20 +695,20 @@ func parseTrakBox(data []byte, meta *MP4Metadata) {
 
 func probeMP4WithFFprobe(ctx context.Context, probePath string, data []byte, baseMeta MP4Metadata) (MP4Metadata, error) {
 	if probePath == "" {
-		return baseMeta, nil
+		return baseMeta, invalid("Pinned ffprobe is unavailable; video timing cannot be verified")
 	}
 	tmp, err := os.CreateTemp("", "moviedesign-probe-*.mp4")
 	if err != nil {
-		return baseMeta, nil
+		return baseMeta, invalid("Video timing probe temporary file is unavailable")
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return baseMeta, nil
+		return baseMeta, invalid("Video timing probe temporary file is unavailable")
 	}
 	if err := tmp.Close(); err != nil {
-		return baseMeta, nil
+		return baseMeta, invalid("Video timing probe temporary file is unavailable")
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -706,66 +719,200 @@ func probeMP4WithFFprobe(ctx context.Context, probePath string, data []byte, bas
 		"-analyzeduration", "10000000",
 		"-protocol_whitelist", "file",
 		"-format_whitelist", "mov,mp4,m4a,3gp,3g2,mj2",
-		"-show_entries", "format=format_name,duration:stream=codec_type,codec_name,width,height,time_base",
+		"-show_packets",
+		"-show_entries", "format=format_name,duration:stream=index,codec_type,codec_name,width,height,time_base,duration_ts,avg_frame_rate,r_frame_rate:packet=stream_index,pts,duration,size",
 		"-of", "json",
 		tmpPath,
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
 	var out bytes.Buffer
-	cmd.Stdout = &out
+	cmd.Stdout = &videoProbeBuffer{buffer: &out, limit: 8 << 20, cancel: cancel}
 	if err := cmd.Run(); err != nil {
-		return baseMeta, invalid("ffprobe rejected video container or stream layout")
+		return baseMeta, invalid("ffprobe rejected video container, stream layout or probe output limit")
 	}
+	return parseVideoProbe(out.Bytes(), baseMeta)
+}
+
+type videoProbeBuffer struct {
+	buffer *bytes.Buffer
+	limit  int
+	cancel context.CancelFunc
+}
+
+func (b *videoProbeBuffer) Write(p []byte) (int, error) {
+	// ponytail: cap packet evidence at 8 MiB; reject longer media rather than allocate unbounded JSON. Stream aggregation can replace this if needed.
+	if len(p) > b.limit-b.buffer.Len() {
+		if b.cancel != nil {
+			b.cancel()
+		}
+		return 0, invalid("Video probe output exceeds limit")
+	}
+	return b.buffer.Write(p)
+}
+
+// A time base/rate must be an exact positive int64 rational, never a floating point approximation.
+func videoRational(value string) (*big.Rat, bool) {
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 {
+		return nil, false
+	}
+	n, ne := strconv.ParseInt(parts[0], 10, 64)
+	d, de := strconv.ParseInt(parts[1], 10, 64)
+	if ne != nil || de != nil || n <= 0 || d <= 0 {
+		return nil, false
+	}
+	return new(big.Rat).SetFrac64(n, d), true
+}
+
+func videoDifference(a, b *big.Rat) *big.Rat {
+	return new(big.Rat).Abs(new(big.Rat).Sub(a, b))
+}
+
+func parseVideoProbe(output []byte, baseMeta MP4Metadata) (MP4Metadata, error) {
 	var parsed struct {
 		Format struct {
 			FormatName string `json:"format_name"`
 			Duration   string `json:"duration"`
 		} `json:"format"`
 		Streams []struct {
-			CodecType string `json:"codec_type"`
-			CodecName string `json:"codec_name"`
-			Width     int    `json:"width"`
-			Height    int    `json:"height"`
-			TimeBase  string `json:"time_base"`
+			Index            int    `json:"index"`
+			CodecType        string `json:"codec_type"`
+			CodecName        string `json:"codec_name"`
+			Width            int    `json:"width"`
+			Height           int    `json:"height"`
+			TimeBase         string `json:"time_base"`
+			DurationTS       int64  `json:"duration_ts"`
+			AverageFrameRate string `json:"avg_frame_rate"`
+			FrameRate        string `json:"r_frame_rate"`
 		} `json:"streams"`
+		Packets []struct {
+			StreamIndex int    `json:"stream_index"`
+			PTS         *int64 `json:"pts"`
+			Duration    int64  `json:"duration"`
+			Size        string `json:"size"`
+		} `json:"packets"`
 	}
-	if json.Unmarshal(out.Bytes(), &parsed) != nil {
+	if json.Unmarshal(output, &parsed) != nil {
 		return baseMeta, invalid("Invalid ffprobe JSON output")
 	}
 	if !strings.Contains(parsed.Format.FormatName, "mp4") && !strings.Contains(parsed.Format.FormatName, "mov") {
 		return baseMeta, invalid("Unsupported video container format: " + parsed.Format.FormatName)
 	}
-	if durSec, err := strconv.ParseFloat(parsed.Format.Duration, 64); err == nil && durSec > 0 {
-		baseMeta.DurationMS = int64(math.Round(durSec * 1000.0))
+	container, ok := number(json.Number(parsed.Format.Duration))
+	if !ok || container.Sign() <= 0 {
+		return baseMeta, invalid("Invalid video container duration")
 	}
-	audioCount := 0
+	baseMeta.ContainerDuration = container.RatString()
+	// The parser's millisecond metadata is rounded; compare it within its 1ms storage quantum.
+	if videoDifference(container, new(big.Rat).SetFrac64(baseMeta.DurationMS, 1000)).Cmp(big.NewRat(1, 1000)) > 0 {
+		return baseMeta, invalid("Video container duration metadata disagrees")
+	}
+	baseMeta.AudioTracks, baseMeta.AudioCodec = 0, ""
 	sawVideo := false
 	for _, st := range parsed.Streams {
 		switch st.CodecType {
 		case "video":
+			if sawVideo {
+				return baseMeta, invalid("Multiple video streams have ambiguous timing")
+			}
 			sawVideo = true
-			if st.Width > 0 && st.Height > 0 {
-				baseMeta.Width = st.Width
-				baseMeta.Height = st.Height
+			tick, ok := videoRational(st.TimeBase)
+			if !ok || st.DurationTS <= 0 {
+				return baseMeta, invalid("Invalid video time base or duration_ts")
 			}
-			if st.CodecName != "" {
-				baseMeta.Codec = st.CodecName
+			baseMeta.Width, baseMeta.Height, baseMeta.Codec, baseMeta.Timebase = st.Width, st.Height, st.CodecName, st.TimeBase
+			baseMeta.AverageFrameRate, baseMeta.FrameRate, baseMeta.DurationTS = st.AverageFrameRate, st.FrameRate, st.DurationTS
+			var packets []int
+			var total, maxFrame, minFrame int64
+			for i, p := range parsed.Packets {
+				if p.StreamIndex != st.Index {
+					continue
+				}
+				size, err := strconv.ParseInt(p.Size, 10, 64)
+				if err != nil || size <= 0 || p.PTS == nil || p.Duration <= 0 || *p.PTS > math.MaxInt64-p.Duration || total > math.MaxInt64-p.Duration {
+					return baseMeta, invalid("Missing or invalid video packet timing evidence")
+				}
+				packets = append(packets, i)
+				total += p.Duration
+				maxFrame = max(maxFrame, p.Duration)
+				if minFrame == 0 || p.Duration < minFrame {
+					minFrame = p.Duration
+				}
 			}
-			if st.TimeBase != "" {
-				baseMeta.Timebase = st.TimeBase
+			if len(packets) == 0 || total != st.DurationTS {
+				return baseMeta, invalid("Video packet duration disagrees with stream duration")
 			}
+			sort.Slice(packets, func(i, j int) bool { return *parsed.Packets[packets[i]].PTS < *parsed.Packets[packets[j]].PTS })
+			for i := 1; i < len(packets); i++ {
+				previous, current := parsed.Packets[packets[i-1]], parsed.Packets[packets[i]]
+				if *previous.PTS+previous.Duration != *current.PTS {
+					return baseMeta, invalid("Video packet timeline contains gaps or overlaps")
+				}
+			}
+			duration := new(big.Rat).Mul(tick, new(big.Rat).SetInt64(st.DurationTS))
+			// Only observed constant packet cadence establishes one-frame slack. VFR/single-packet media get one timestamp tick.
+			tolerance := new(big.Rat).Set(tick)
+			if len(packets) > 1 && maxFrame-minFrame <= 1 {
+				tolerance.Mul(tick, new(big.Rat).SetInt64(maxFrame))
+			}
+			for i, rate := range []string{st.AverageFrameRate, st.FrameRate} {
+				if rate == "" || rate == "0/0" {
+					continue
+				} // Actual packets remain authoritative when rate metadata is absent.
+				fps, ok := videoRational(rate)
+				if !ok {
+					return baseMeta, invalid("Invalid video frame rate")
+				}
+				if i == 0 || (len(packets) > 1 && maxFrame-minFrame <= 1) {
+					period := new(big.Rat).Inv(fps)
+					observed := new(big.Rat).Quo(duration, big.NewRat(int64(len(packets)), 1))
+					if videoDifference(period, observed).Cmp(tick) > 0 {
+						return baseMeta, invalid("Video frame rate disagrees with packet timing")
+					}
+				}
+			}
+			// ffprobe prints format.duration to six decimal places; this quantum does not widen video-frame acceptance.
+			containerTolerance := new(big.Rat).Add(tolerance, big.NewRat(1, 1000000))
+			if videoDifference(container, duration).Cmp(containerTolerance) > 0 {
+				return baseMeta, invalid("Video stream and container duration disagree")
+			}
+			baseMeta.FrameDurationTS, baseMeta.TimingTolerance, baseMeta.ContainerTimingQuantum = maxFrame, tolerance.RatString(), "1/1000000"
+			baseMeta.timing = &videoTiming{duration: duration, container: container, tolerance: tolerance}
 		case "audio":
-			audioCount++
-			if st.CodecName != "" {
-				baseMeta.AudioCodec = st.CodecName
+			// A declared header alone is not evidence of audio media; require at least one populated packet.
+			for _, p := range parsed.Packets {
+				if p.StreamIndex != st.Index {
+					continue
+				}
+				size, err := strconv.ParseInt(p.Size, 10, 64)
+				if err == nil && size > 0 && p.Duration > 0 && st.CodecName != "" {
+					baseMeta.AudioTracks++
+					baseMeta.AudioCodec = st.CodecName
+					break
+				}
 			}
 		}
 	}
 	if !sawVideo {
 		return baseMeta, invalid("Video container contains no decodable video stream")
 	}
-	baseMeta.AudioTracks = audioCount
 	return baseMeta, nil
+}
+
+func validateVideoTiming(meta MP4Metadata, want *big.Rat) error {
+	if meta.timing == nil {
+		return invalid("Video timing evidence is unavailable")
+	}
+	for i, duration := range []*big.Rat{meta.timing.duration, meta.timing.container} {
+		tolerance := new(big.Rat).Set(meta.timing.tolerance)
+		if i == 1 {
+			tolerance.Add(tolerance, big.NewRat(1, 1000000))
+		}
+		if videoDifference(duration, want).Cmp(tolerance) > 0 {
+			return invalid(fmt.Sprintf("Delivered video duration %ss disagrees with requested duration %ss (timing tolerance %ss)", duration.RatString(), want.RatString(), meta.TimingTolerance))
+		}
+	}
+	return nil
 }
 
 func validateVideoBytes(ctx context.Context, data []byte, in GenerationInput, cap Capability) (MP4Metadata, error) {
@@ -785,13 +932,8 @@ func validateVideoBytes(ctx context.Context, data []byte, in GenerationInput, ca
 	}
 	if rawDur, hasDur := in.Params["duration"]; hasDur {
 		if wantSec, ok := intParam(rawDur); ok && wantSec > 0 {
-			wantMS := int64(wantSec) * 1000
-			diff := meta.DurationMS - wantMS
-			if diff < 0 {
-				diff = -diff
-			}
-			if diff > 500 {
-				return MP4Metadata{}, invalid(fmt.Sprintf("Delivered video duration %dms disagrees with requested duration %dms", meta.DurationMS, wantMS))
+			if err := validateVideoTiming(meta, new(big.Rat).SetInt64(wantSec)); err != nil {
+				return MP4Metadata{}, err
 			}
 		}
 	}
@@ -806,6 +948,34 @@ func validateVideoBytes(ctx context.Context, data []byte, in GenerationInput, ca
 		return MP4Metadata{}, invalid("Delivered video is missing required audio stream")
 	}
 	return meta, nil
+}
+
+// Keep the precise probe evidence with its immutable output key; Stage/Fingerprint retain their existing asset schema.
+func (s *Service) recordVideoTiming(ctx context.Context, project, key string, data []byte, meta MP4Metadata) error {
+	payload, err := json.Marshal(map[string]any{"collection_key": key, "sha256": digest(data), "metadata": meta})
+	if err != nil {
+		return err
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var saved string
+	err = tx.QueryRowContext(ctx, "SELECT payload_json FROM events WHERE project_id=? AND type='video_timing_verified' AND json_extract(payload_json,'$.collection_key')=? LIMIT 1", project, key).Scan(&saved)
+	if err == nil {
+		if saved != string(payload) {
+			return invalid("Collected video timing evidence changed")
+		}
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err = events.Append(ctx, tx, project, "", "", "video_timing_verified", payload); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CollectVideos downloads or replays a completed video output into a confined staging path
@@ -858,10 +1028,14 @@ func (s *Service) CollectVideos(ctx context.Context, p string, in GenerationInpu
 			if err != nil {
 				return nil, err
 			}
-			if _, err = validateVideoBytes(ctx, data, in, cap); err != nil {
+			meta, err := validateVideoBytes(ctx, data, in, cap)
+			if err != nil {
 				return nil, err
 			}
 			if _, err = s.Files.Stage(ctx, p, "video-"+keys[i], path.Base(receipt.Path), bytes.NewReader(data)); err != nil {
+				return nil, err
+			}
+			if err = s.recordVideoTiming(ctx, p, keys[i], data, meta); err != nil {
 				return nil, err
 			}
 			paths = append(paths, receipt.Path)
@@ -901,12 +1075,16 @@ func (s *Service) CollectVideos(ctx context.Context, p string, in GenerationInpu
 		if declared != "video/mp4" || http.DetectContentType(data) != "video/mp4" {
 			return nil, invalid("Downloaded video MIME mismatch; expected video/mp4")
 		}
-		if _, err := validateVideoBytes(ctx, data, in, cap); err != nil {
+		meta, err := validateVideoBytes(ctx, data, in, cap)
+		if err != nil {
 			return nil, err
 		}
 		target, e := s.Files.Stage(ctx, p, "video-"+keys[i], path.Base(keys[i])+".mp4", bytes.NewReader(data))
 		if e != nil {
 			return nil, e
+		}
+		if err = s.recordVideoTiming(ctx, p, keys[i], data, meta); err != nil {
+			return nil, err
 		}
 		paths = append(paths, target)
 	}
@@ -951,8 +1129,11 @@ func BuildTestMP4(width, height, durationSeconds int, includeAudio bool) []byte 
 	if durationSeconds <= 0 {
 		durationSeconds = 15
 	}
-	const timescale = 1000
-	durationUnits := uint32(durationSeconds * timescale)
+	return buildTestMP4(width, height, uint32(durationSeconds*30), 30000, 1000, includeAudio)
+}
+
+func buildTestMP4(width, height int, frames, timescale, frameDuration uint32, includeAudio bool) []byte {
+	durationUnits := frames * frameDuration
 
 	// Minimal valid H.264 Baseline IDR access unit (4-byte length-prefixed NAL unit)
 	sps := []byte{0x67, 0x42, 0xc0, 0x1f, 0xda, 0x01, 0x40, 0x16, 0xec, 0x04, 0x40, 0x00, 0x00, 0x03, 0x00, 0x40, 0x00, 0x00, 0x0f, 0x03, 0xc5, 0x8b, 0xb8}
@@ -1034,8 +1215,8 @@ func BuildTestMP4(width, height, durationSeconds int, includeAudio bool) []byte 
 
 		sttsBody := make([]byte, 12)
 		binary.BigEndian.PutUint32(sttsBody[0:4], 1)
-		binary.BigEndian.PutUint32(sttsBody[4:8], 1)
-		binary.BigEndian.PutUint32(sttsBody[8:12], durationUnits)
+		binary.BigEndian.PutUint32(sttsBody[4:8], frames)
+		binary.BigEndian.PutUint32(sttsBody[8:12], frameDuration)
 		stts := mp4FullBox("stts", 0, 0, sttsBody)
 
 		stss := mp4FullBox("stss", 0, 0, []byte{0, 0, 0, 1, 0, 0, 0, 1})
@@ -1043,14 +1224,13 @@ func BuildTestMP4(width, height, durationSeconds int, includeAudio bool) []byte 
 		stscBody := make([]byte, 16)
 		binary.BigEndian.PutUint32(stscBody[0:4], 1)
 		binary.BigEndian.PutUint32(stscBody[4:8], 1)
-		binary.BigEndian.PutUint32(stscBody[8:12], 1)
+		binary.BigEndian.PutUint32(stscBody[8:12], frames)
 		binary.BigEndian.PutUint32(stscBody[12:16], 1)
 		stsc := mp4FullBox("stsc", 0, 0, stscBody)
 
-		stszBody := make([]byte, 12)
+		stszBody := make([]byte, 8)
 		binary.BigEndian.PutUint32(stszBody[0:4], uint32(len(videoSample)))
-		binary.BigEndian.PutUint32(stszBody[4:8], 1)
-		binary.BigEndian.PutUint32(stszBody[8:12], uint32(len(videoSample)))
+		binary.BigEndian.PutUint32(stszBody[4:8], frames)
 		stsz := mp4FullBox("stsz", 0, 0, stszBody)
 
 		stcoBody := make([]byte, 8)
@@ -1069,7 +1249,7 @@ func BuildTestMP4(width, height, durationSeconds int, includeAudio bool) []byte 
 
 		// Audio Track (AAC-LC 44100 Hz stereo)
 		const audioRate = 44100
-		audioDurationUnits := uint32(durationSeconds * audioRate)
+		audioDurationUnits := uint32(uint64(durationUnits) * audioRate / uint64(timescale))
 		aTkhdBody := make([]byte, 80)
 		binary.BigEndian.PutUint32(aTkhdBody[8:12], 2) // track_ID = 2
 		binary.BigEndian.PutUint32(aTkhdBody[16:20], durationUnits)
@@ -1115,7 +1295,9 @@ func BuildTestMP4(width, height, durationSeconds int, includeAudio bool) []byte 
 		binary.BigEndian.PutUint32(aSttsBody[8:12], audioDurationUnits)
 		aStts := mp4FullBox("stts", 0, 0, aSttsBody)
 
-		aStsc := mp4FullBox("stsc", 0, 0, stscBody)
+		aStscBody := append([]byte(nil), stscBody...)
+		binary.BigEndian.PutUint32(aStscBody[8:12], 1)
+		aStsc := mp4FullBox("stsc", 0, 0, aStscBody)
 
 		aStszBody := make([]byte, 12)
 		binary.BigEndian.PutUint32(aStszBody[0:4], uint32(len(audioSample)))
@@ -1139,14 +1321,12 @@ func BuildTestMP4(width, height, durationSeconds int, includeAudio bool) []byte 
 	dummyMoov := buildMoov(0, 0)
 	mdatPayloadOffset := uint32(len(ftyp) + len(dummyMoov) + 8)
 	videoOff := mdatPayloadOffset
-	audioOff := videoOff + uint32(len(videoSample))
+	audioOff := videoOff + uint32(len(videoSample))*frames
 	moov := buildMoov(videoOff, audioOff)
 
-	var mdatPayload []byte
+	mdatPayload := bytes.Repeat(videoSample, int(frames))
 	if includeAudio {
-		mdatPayload = append(append([]byte{}, videoSample...), audioSample...)
-	} else {
-		mdatPayload = append([]byte{}, videoSample...)
+		mdatPayload = append(mdatPayload, audioSample...)
 	}
 	mdat := mp4Box("mdat", mdatPayload)
 
