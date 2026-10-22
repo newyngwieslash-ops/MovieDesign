@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -86,7 +87,8 @@ func (c *Chat) readSnapshotEvents(ctx context.Context, s ToolScope, id, parent s
 			if part.SessionID != s.NativeSessionID || part.MessageID != m.Info.ID {
 				continue
 			}
-			if part.Type == "text" && firstText {
+			adoptRecovery := part.Type == "text" && firstText
+			if adoptRecovery {
 				firstText = false
 				// The bundled runtime publishes live text deltas before updating
 				// its HTTP snapshot. Use our durable, admitted prefix with that
@@ -102,7 +104,7 @@ func (c *Chat) readSnapshotEvents(ctx context.Context, s ToolScope, id, parent s
 					part.Text = prefix
 				}
 			}
-			if e = c.savePart(ctx, s, id, step, part); e != nil {
+			if e = c.savePart(ctx, s, id, step, part, adoptRecovery); e != nil {
 				return false, e
 			}
 		}
@@ -135,7 +137,7 @@ func (c *Chat) readSnapshotEvents(ctx context.Context, s ToolScope, id, parent s
 	}
 	return false, nil
 }
-func (c *Chat) savePart(ctx context.Context, s ToolScope, id string, step int, p nativePart) error {
+func (c *Chat) savePart(ctx context.Context, s ToolScope, id string, step int, p nativePart, firstText ...bool) error {
 	ctx = context.WithoutCancel(ctx)
 	if p.Type != "text" && p.Type != "reasoning" && p.Type != "tool" {
 		return nil
@@ -145,9 +147,24 @@ func (c *Chat) savePart(ctx context.Context, s ToolScope, id string, step int, p
 		return e
 	}
 	defer tx.Rollback()
+	messageID, partID := p.MessageID, p.ID
+	if len(firstText) > 0 && firstText[0] {
+		// Startup may already have published this step under its deterministic
+		// recovery identity. Keep that visible identity and retain the real
+		// native snapshot privately, in this same publication transaction.
+		recoveryID := fmt.Sprintf("relay_%s_%d", s.TurnID, step)
+		e = tx.QueryRowContext(ctx, `SELECT p.message_id,p.part_id FROM chat_parts p
+		 JOIN chat_dispatch d ON d.message_id=? AND d.turn_id=?
+		 JOIN chat_messages m ON m.id=d.message_id AND m.session_id=p.session_id
+		 JOIN chat_sessions s ON s.id=p.session_id AND s.project_id=?
+		 WHERE p.session_id=? AND p.message_id=? AND p.part_id=? AND json_extract(p.public_json,'$.step')=?`, id, s.TurnID, s.ProjectID, s.SessionID, recoveryID, recoveryID, step).Scan(&messageID, &partID)
+		if e != nil && !errors.Is(e, sql.ErrNoRows) {
+			return e
+		}
+	}
 	raw, _ := json.Marshal(p)
-	var previous string
-	e = tx.QueryRowContext(ctx, "SELECT snapshot_json FROM chat_parts WHERE session_id=? AND message_id=? AND part_id=?", s.SessionID, p.MessageID, p.ID).Scan(&previous)
+	var previous, previousPublic string
+	e = tx.QueryRowContext(ctx, "SELECT snapshot_json,public_json FROM chat_parts WHERE session_id=? AND message_id=? AND part_id=?", s.SessionID, messageID, partID).Scan(&previous, &previousPublic)
 	if e != nil && !errors.Is(e, sql.ErrNoRows) {
 		return e
 	}
@@ -156,7 +173,15 @@ func (c *Chat) savePart(ctx context.Context, s ToolScope, id string, step int, p
 	}
 	var old nativePart
 	_ = json.Unmarshal([]byte(previous), &old)
-	frame := ChatMessageEnvelope{SessionID: s.SessionID, MessageID: id, PartID: p.ID, CallID: p.CallID, Step: step, Type: p.Type, Tool: p.Tool, State: p.State.Status}
+	frame := ChatMessageEnvelope{SessionID: s.SessionID, MessageID: id, PartID: partID, CallID: p.CallID, Step: step, Type: p.Type, Tool: p.Tool, State: p.State.Status}
+	if messageID != p.MessageID {
+		var visible ChatMessageEnvelope
+		if e = json.Unmarshal([]byte(previousPublic), &visible); e != nil {
+			return e
+		}
+		old.Text = visible.Content
+		frame.State = visible.State
+	}
 	frame.PartType = p.Type
 	frame.ToolInput = p.State.Input
 	frame.ToolOutput = p.State.Output
@@ -176,10 +201,13 @@ func (c *Chat) savePart(ctx context.Context, s ToolScope, id string, step int, p
 	history.ContentDelta = ""
 	history.Content = p.Text
 	public, _ := json.Marshal(history)
-	if _, e = tx.ExecContext(ctx, "INSERT INTO chat_parts(session_id,message_id,part_id,snapshot_json,public_json)VALUES(?,?,?,?,?) ON CONFLICT(session_id,message_id,part_id)DO UPDATE SET snapshot_json=excluded.snapshot_json,public_json=excluded.public_json", s.SessionID, p.MessageID, p.ID, string(raw), string(public)); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO chat_parts(session_id,message_id,part_id,snapshot_json,public_json)VALUES(?,?,?,?,?) ON CONFLICT(session_id,message_id,part_id)DO UPDATE SET snapshot_json=excluded.snapshot_json,public_json=excluded.public_json", s.SessionID, messageID, partID, string(raw), string(public)); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, `INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at) VALUES(?,?,?,'assistant',json_object('reply_to',?,'parts',json_array(json(?))),?) ON CONFLICT(id) DO UPDATE SET content_json=json_object('reply_to',?,'parts',json((SELECT json_group_array(json(public_json)) FROM chat_parts WHERE session_id=? AND message_id=?)))`, "assistant_"+p.MessageID, s.SessionID, "assistant_"+p.MessageID, id, string(public), time.Now().UnixMilli(), id, s.SessionID, p.MessageID); e != nil {
+	if previousPublic == string(public) {
+		return tx.Commit()
+	}
+	if _, e = tx.ExecContext(ctx, `INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at) VALUES(?,?,?,'assistant',json_object('reply_to',?,'parts',json_array(json(?))),?) ON CONFLICT(id) DO UPDATE SET content_json=json_object('reply_to',?,'parts',json((SELECT json_group_array(json(public_json)) FROM chat_parts WHERE session_id=? AND message_id=?)))`, "assistant_"+messageID, s.SessionID, "assistant_"+messageID, id, string(public), time.Now().UnixMilli(), id, s.SessionID, messageID); e != nil {
 		return e
 	}
 	// Stable native IDs remain in private snapshots; normalized public frame has

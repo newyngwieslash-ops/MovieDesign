@@ -446,6 +446,153 @@ func TestRelayRejectsKnownCredentialAcrossBufferedTextDeltas(t *testing.T) {
 	}
 }
 
+func TestRelayRejectsEscapedCredentialMetadataBeforeJournalAndSuffix(t *testing.T) {
+	for _, special := range []string{"&", "<", ">", `"`, `\`} {
+		for _, buffered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/buffered=%v", special, buffered), func(t *testing.T) {
+				secret := "fixture" + special + "private"
+				encoded, _ := json.Marshal(secret)
+				prefix := "data: {\"choices\":[{\"delta\":{\"content\":\"safe prefix\"}}]}\n\n"
+				metadata := "data: {\"id\":" + string(encoded) + ",\"choices\":[{\"delta\":{},\"finish_reason\":null}]}\n\n"
+				between := ""
+				if buffered {
+					between = "data: {\"vendor_metadata\":true}\n\n"
+				}
+				terminal := "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+				f := newStreamFixture(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, prefix+between+metadata+terminal) })
+				f.relay.key = secret
+				response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[]}`)
+				b, err := io.ReadAll(response.Body)
+				if err == nil || string(b) != prefix {
+					t.Errorf("escaped credential metadata released: bytes=%d read_error=%v", len(b), err)
+				}
+				var state string
+				var count int
+				f.db.QueryRow("SELECT state FROM inference_requests WHERE turn_id=?", f.scope.TurnID).Scan(&state)
+				f.db.QueryRow("SELECT count(*) FROM inference_stream WHERE turn_id=?", f.scope.TurnID).Scan(&count)
+				if state != "unknown" || count != 1 || f.calls.Load() != 1 {
+					t.Errorf("credential accepted or journaled: state=%s journal=%d supplier=%d", state, count, f.calls.Load())
+				}
+			})
+		}
+	}
+	if _, sensitive := inferenceCredential([]byte(`{"fixture\u0026private":"metadata"}`), "", "", "fixture&private"); !sensitive {
+		t.Error("decoded credential in a JSON key was missed")
+	}
+}
+
+func TestChatStartupRecoveryAdoptsRetainedNativeTextWithoutDuplicate(t *testing.T) {
+	prefix := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+	f := newStreamFixture(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, prefix) })
+	if _, err := f.db.Exec("INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at)VALUES('original',?,'original-key','user','{}',1)", f.scope.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Exec("INSERT INTO chat_dispatch(message_id,native_message_id,turn_id,state,created_at)VALUES('original','parent',?,'accepted',1)", f.scope.TurnID); err != nil {
+		t.Fatal(err)
+	}
+	response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[]}`)
+	if _, err := io.ReadAll(response.Body); err == nil {
+		t.Fatal("fixture must end as incomplete")
+	}
+	response.Body.Close()
+	if _, err := f.db.Exec("UPDATE chat_turns SET state='interrupted' WHERE id=?", f.scope.TurnID); err != nil {
+		t.Fatal(err)
+	}
+	var nativeText atomic.Value
+	nativeText.Store("")
+	native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Error("recovery sent native mutation")
+			w.WriteHeader(500)
+			return
+		}
+		var messages []nativeMessage
+		for i, text := range []string{nativeText.Load().(string), "step two"} {
+			var message nativeMessage
+			message.Info.ID = fmt.Sprint("retained-", i)
+			message.Info.SessionID = f.scope.NativeSessionID
+			message.Info.ParentID = "parent"
+			message.Info.Role = "assistant"
+			message.Parts = []nativePart{{ID: fmt.Sprint("retained-part-", i), SessionID: f.scope.NativeSessionID, MessageID: message.Info.ID, Type: "text", Text: text}}
+			messages = append(messages, message)
+		}
+		foreign := messages[0]
+		foreign.Info.ID = "foreign"
+		foreign.Info.ParentID = "wrong-parent"
+		messages = append(messages, foreign)
+		json.NewEncoder(w).Encode(messages)
+	}))
+	defer native.Close()
+	ev := events.NewService(f.db)
+	defer ev.Close()
+	chat := NewChat(f.db, NewTurns(f.db), ev, nil)
+	defer chat.Close()
+	// Start performs production startup restoration synchronously. A nil relay
+	// pauses only the background worker, allowing retained snapshots in a fixed
+	// order through the actual reconcileInterrupted entrypoint below.
+	if err := chat.Start(&Host{base: native.URL, client: native.Client()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"", "par", "partial", "partial plus suffix", "partial plus suffix"} {
+		nativeText.Store(text)
+		chat.reconcileInterrupted()
+		if err := chat.restoreStreamPartials(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	messages, err := chat.Messages(context.Background(), f.scope.ProjectID, f.scope.SessionID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visible strings.Builder
+	var original bool
+	for _, message := range messages {
+		if message.Role == "user" {
+			original = message.ID == "original" && message.RequestID == "original-key" && message.State == "unknown"
+			continue
+		}
+		var content struct {
+			Parts []ChatMessageEnvelope `json:"parts"`
+		}
+		json.Unmarshal(message.Content, &content)
+		for _, part := range content.Parts {
+			visible.WriteString(part.Content)
+		}
+	}
+	if !original || visible.String() != "partial plus suffixstep two" {
+		t.Errorf("startup/native reconciliation duplicated or lost text: original=%v visible=%q", original, visible.String())
+	}
+	frames, err := ev.Read(context.Background(), f.scope.ProjectID, f.scope.SessionID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var eventText strings.Builder
+	for _, event := range frames {
+		if event.Type != "chat_message" {
+			continue
+		}
+		var part ChatMessageEnvelope
+		json.Unmarshal(event.Payload, &part)
+		eventText.WriteString(part.ContentDelta)
+	}
+	if eventText.String() != "partialstep two plus suffix" {
+		t.Errorf("normalized event replay repeated prefix: %q", eventText.String())
+	}
+	var raw string
+	f.db.QueryRow("SELECT snapshot_json FROM chat_parts WHERE session_id=? AND json_extract(snapshot_json,'$.id')='retained-part-0'", f.scope.SessionID).Scan(&raw)
+	if !strings.Contains(raw, "retained-0") || f.calls.Load() != 1 {
+		t.Fatal("native audit missing or inference repeated", raw, f.calls.Load())
+	}
+	var before, after int
+	f.db.QueryRow("SELECT count(*) FROM events").Scan(&before)
+	chat.reconcileInterrupted()
+	chat.restoreStreamPartials()
+	f.db.QueryRow("SELECT count(*) FROM events").Scan(&after)
+	if before != after {
+		t.Errorf("repeated recovery/snapshot created events: %d -> %d", before, after)
+	}
+}
+
 func TestChatJournalPrefixUsesNativeIdentityScopeAndStepWithoutReplay(t *testing.T) {
 	f := newStreamFixture(t, "openai-compatible", func(http.ResponseWriter, *http.Request) { t.Error("snapshot test must not infer") })
 	if _, err := f.db.Exec("INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at)VALUES('original',?,'original-key','user','{}',1)", f.scope.SessionID); err != nil {

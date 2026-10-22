@@ -104,14 +104,27 @@ func (r *Relay) readInference(ctx context.Context, w http.ResponseWriter, body i
 // Inspect only exact frozen secrets, including JSON-escaped values and a secret
 // split across real text deltas. This rejects a response; it never rewrites one.
 func inferenceCredential(payload []byte, text, tail string, secrets ...string) (string, bool) {
-	var decoded any
-	_ = json.Unmarshal(payload, &decoded)
-	normalized, _ := json.Marshal(decoded)
+	// Token returns actual decoded strings, including object keys. Serializing
+	// them again would escape &, <, >, quotes and backslashes and hide a match.
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		if value, ok := token.(string); ok {
+			for _, secret := range secrets {
+				if secret != "" && strings.Contains(value, secret) {
+					return "", true
+				}
+			}
+		}
+	}
 	joined := tail + text
 	keep := 0
 	for _, secret := range secrets {
 		keep = max(keep, len(secret))
-		if secret != "" && (bytes.Contains(normalized, []byte(secret)) || strings.Contains(joined, secret)) {
+		if secret != "" && strings.Contains(joined, secret) {
 			return "", true
 		}
 	}
