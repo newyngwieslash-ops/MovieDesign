@@ -88,6 +88,9 @@ func (c *Chat) Start(h *Host, closeEpoch func(string) error) error {
 	if _, e := c.DB.Exec("UPDATE native_questions SET send_state='unknown' WHERE send_state='sending'"); e != nil {
 		return e
 	}
+	if e := c.restoreStreamPartials(); e != nil {
+		return e
+	}
 	c.Host = h
 	c.CloseEpoch = closeEpoch
 	if h.Relay != nil {

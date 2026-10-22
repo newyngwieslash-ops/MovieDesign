@@ -101,7 +101,14 @@ func TestRelayBlocksUncertainAndDuplicateRequestsButAllowsCompletedToolStep(t *t
 				r.Header.Set("Origin", origin)
 				r.Header.Set("X-Opencode-Session-Id", scope.NativeSessionID)
 				w := httptest.NewRecorder()
-				relay.ServeHTTP(w, r)
+				func() {
+					defer func() {
+						if p := recover(); p != nil && p != http.ErrAbortHandler {
+							panic(p)
+						}
+					}()
+					relay.ServeHTTP(w, r)
+				}()
 				return w
 			}
 			body := `{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`
@@ -114,8 +121,11 @@ func TestRelayBlocksUncertainAndDuplicateRequestsButAllowsCompletedToolStep(t *t
 			if mode == "tool" && first.Code != 200 {
 				t.Fatal(first.Body.String())
 			}
-			if mode != "tool" && (first.Code == 200 || strings.Contains(first.Body.String(), "partial")) {
+			if mode != "tool" && mode != "disconnect" && first.Code == 200 {
 				t.Fatal("uncertain stream exposed as success")
+			}
+			if mode == "disconnect" && (!strings.Contains(first.Body.String(), "partial") || strings.Contains(first.Body.String(), "[DONE]")) {
+				t.Fatal("partial text lost or exposed as completed")
 			}
 			if send(body, relay.token, relay.origin).Code == 200 {
 				t.Fatal("duplicate forwarded")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -28,7 +29,7 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 		t.Skip("set verified project native binary; synthetic owned supplier only")
 	}
 	trace := map[string]any{"version": "1.19.0", "real_inference": "UNEXECUTED"}
-	for _, mode := range []string{"500", "redirect", "disconnect", "question"} {
+	for _, mode := range []string{"500", "redirect", "disconnect", "question", "stream-question", "stream-disconnect", "stream-retry"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -43,10 +44,14 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 				t.Fatal(e)
 			}
 			turns := NewTurns(db)
-			var suppliers, redirects atomic.Int32
+			var suppliers, redirects, relayAttempts atomic.Int32
+			streamGate := make(chan struct{})
+			defer close(streamGate)
 			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirects.Add(1) }))
 			defer target.Close()
 			supplier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.Copy(io.Discard, r.Body)
+				r.Body.Close()
 				n := suppliers.Add(1)
 				if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer supplier-private" {
 					t.Error("native bypassed fixed operation/credential")
@@ -73,7 +78,21 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 				}
 				if n == 1 {
 					args := `{"questions":[{"header":"Native","question":"Continue?","options":[{"label":"Yes","description":"Proceed"}]}]}`
+					if strings.HasPrefix(mode, "stream-") {
+						emit(map[string]any{"role": "assistant", "content": "哈哈 streamed"}, nil)
+					}
 					emit(map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": "native_question", "type": "function", "function": map[string]string{"name": "question", "arguments": args}}}}, nil)
+					if strings.HasPrefix(mode, "stream-") {
+						w.(http.Flusher).Flush()
+						select {
+						case <-streamGate:
+						case <-r.Context().Done():
+							return
+						}
+						if mode != "stream-question" {
+							panic(http.ErrAbortHandler)
+						}
+					}
 					emit(map[string]any{}, "tool_calls")
 				} else {
 					emit(map[string]any{"role": "assistant", "content": "哈哈"}, nil)
@@ -88,7 +107,7 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 				t.Fatal(e)
 			}
 			relay.Turns = turns
-			gateway := httptest.NewServer(relay)
+			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { relayAttempts.Add(1); relay.ServeHTTP(w, req) }))
 			defer gateway.Close()
 			config, e := BuildConfig(c, MCPConnection{})
 			if e != nil {
@@ -100,12 +119,13 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 			provider["options"].(map[string]any)["baseURL"] = gateway.URL + inferencePath
 			provider["models"].(map[string]any)["fixture"].(map[string]any)["headers"] = map[string]string{"Origin": relay.origin}
 			config, _ = json.Marshal(cfg)
-			listener, e := net.Listen("tcp4", "127.0.0.1:4096")
+			listener, e := net.Listen("tcp4", "127.0.0.1:0")
 			if e != nil {
 				t.Fatal("native fixture port occupied; untouched")
 			}
+			port := fmt.Sprint(listener.Addr().(*net.TCPAddr).Port)
 			listener.Close()
-			command := exec.Command(binary, "serve", "--hostname", "127.0.0.1", "--port", "4096")
+			command := exec.Command(binary, "serve", "--hostname", "127.0.0.1", "--port", port)
 			command.Dir = dir
 			command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
 			command.Env = []string{"SystemRoot=" + os.Getenv("SystemRoot"), "PATH=" + filepath.Join(os.Getenv("SystemRoot"), "System32"), "npm_config_offline=true"}
@@ -132,7 +152,7 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 					t.Log(logs.String())
 				}
 			}()
-			h := &Host{base: "http://127.0.0.1:4096", password: "fixture-private", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}, Relay: relay}
+			h := &Host{base: "http://127.0.0.1:" + port, password: "fixture-private", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}, Relay: relay}
 			for !h.Ready(ctx) {
 				select {
 				case <-ctx.Done():
@@ -162,14 +182,73 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 				t.Fatal(e)
 			}
 			turns.Abort = h.Abort
+			if mode == "stream-retry" {
+				// Hold only the fixture abort acknowledgment to force the bundled
+				// outer retry through production admission; it must not reach vendor.
+				turns.Abort = func(context.Context, string) error { return nil }
+			}
 			ev := events.NewService(db)
 			qs := questions.NewService(db, nil, ev)
 			chat := NewChat(db, turns, ev, qs)
 			chat.Host = h
 			defer chat.Close()
-			_, e = h.request(ctx, "POST", "/session/"+session.ID+"/prompt_async", map[string]any{"messageID": "msg_fixture1234567890", "agent": "build", "parts": []any{map[string]string{"type": "text", "text": "Run the owned fixture."}}})
-			if e != nil {
-				t.Fatal(e)
+			if strings.HasPrefix(mode, "stream-") {
+				if _, e = db.Exec("INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at)VALUES('fixture-local',?,'fixture-key','user','{}',1)", scope.SessionID); e != nil {
+					t.Fatal(e)
+				}
+				if _, e = db.Exec("INSERT INTO chat_dispatch(message_id,native_message_id,turn_id,state,created_at)VALUES('fixture-local','msg_fixture1234567890',?,'accepted',1)", scope.TurnID); e != nil {
+					t.Fatal(e)
+				}
+			}
+			acceptance := make(chan error, 1)
+			go func() {
+				_, err := h.request(ctx, "POST", "/session/"+session.ID+"/prompt_async", map[string]any{"messageID": "msg_fixture1234567890", "agent": "build", "parts": []any{map[string]string{"type": "text", "text": "Run the owned fixture."}}})
+				acceptance <- err
+			}()
+			if strings.HasPrefix(mode, "stream-") {
+				observed := false
+				var latest []nativeMessage
+				for !observed {
+					if _, e = chat.readSnapshotEvents(ctx, scope, "fixture-local", "msg_fixture1234567890", false); e != nil {
+						t.Fatal(e)
+					}
+					snapshot, err := h.snapshot(ctx, session.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					latest = snapshot
+					for _, message := range snapshot {
+						for _, part := range message.Parts {
+							if part.Type == "tool" {
+								t.Fatal("native tool executed before supplier validation")
+							}
+						}
+					}
+					messages, err := chat.Messages(ctx, p.ID, scope.SessionID, 0, 100)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, message := range messages {
+						if message.Role == "assistant" && strings.Contains(string(message.Content), "哈哈 streamed") {
+							observed = true
+						}
+					}
+					if !observed {
+						select {
+						case <-ctx.Done():
+							var count int
+							db.QueryRow("SELECT count(*) FROM inference_stream").Scan(&count)
+							t.Fatalf("native safe text not visible before terminal %v supplier=%d relay=%d journal=%d snapshot=%+v", ctx.Err(), suppliers.Load(), relayAttempts.Load(), count, latest)
+						case <-time.After(25 * time.Millisecond):
+						}
+					}
+				}
+				var durable string
+				if e = db.QueryRow("SELECT group_concat(text_delta,'') FROM inference_stream WHERE turn_id=?", scope.TurnID).Scan(&durable); e != nil || durable != "哈哈 streamed" {
+					t.Fatal("native text not durable", durable, e)
+				}
+				t.Log("actual native part identity + durable normalized text/history visible before supplier terminal; tool parts zero")
+				streamGate <- struct{}{}
 			}
 			answered := false
 			terminal := false
@@ -183,7 +262,7 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 					t.Fatal(e)
 				}
 				if len(cards) > 0 && !answered {
-					if mode != "question" {
+					if mode != "question" && mode != "stream-question" {
 						t.Fatal("unexpected question")
 					}
 					card := cards[0]
@@ -213,8 +292,11 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 			if e = h.WaitIdle(ctx, session.ID); e != nil {
 				t.Fatal(e)
 			}
+			if e = <-acceptance; e != nil {
+				t.Fatal("native prompt acceptance", e)
+			}
 			want := int32(1)
-			if mode == "question" {
+			if mode == "question" || mode == "stream-question" {
 				want = 2
 				if !answered {
 					t.Fatal("human reply was skipped")
@@ -223,8 +305,24 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 			if suppliers.Load() != want || redirects.Load() != 0 {
 				t.Fatalf("supplier requests %d expected %d; redirects %d", suppliers.Load(), want, redirects.Load())
 			}
-			trace[mode] = map[string]any{"supplier_requests": suppliers.Load(), "redirect_requests": redirects.Load(), "human_receipt": answered, "messages": snapshot}
-			t.Logf("actual pinned native %s: supplier=%d redirect=%d human=%v", mode, suppliers.Load(), redirects.Load(), answered)
+			if mode == "stream-disconnect" || mode == "stream-retry" {
+				for _, message := range snapshot {
+					for _, part := range message.Parts {
+						if part.Type == "tool" {
+							t.Fatal("interrupted native executed tool")
+						}
+					}
+				}
+				var state string
+				if e = db.QueryRow("SELECT state FROM inference_requests WHERE turn_id=?", scope.TurnID).Scan(&state); e != nil || state != "unknown" {
+					t.Fatal("interrupted admission", state, e)
+				}
+				if mode == "stream-retry" && relayAttempts.Load() < 2 {
+					t.Fatal("fixture did not exercise native outer retry", relayAttempts.Load())
+				}
+			}
+			trace[mode] = map[string]any{"supplier_requests": suppliers.Load(), "relay_attempts": relayAttempts.Load(), "redirect_requests": redirects.Load(), "human_receipt": answered, "messages": snapshot}
+			t.Logf("actual pinned native %s: supplier=%d relay=%d redirect=%d human=%v", mode, suppliers.Load(), relayAttempts.Load(), redirects.Load(), answered)
 		})
 	}
 	if output := os.Getenv("MOVIEDESIGN_NATIVE_TRACE_OUTPUT"); output != "" {

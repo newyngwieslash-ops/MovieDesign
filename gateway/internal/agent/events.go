@@ -81,9 +81,26 @@ func (c *Chat) readSnapshotEvents(ctx context.Context, s ToolScope, id, parent s
 			continue
 		}
 		step++
+		firstText := true
 		for _, part := range m.Parts {
 			if part.SessionID != s.NativeSessionID || part.MessageID != m.Info.ID {
 				continue
+			}
+			if part.Type == "text" && firstText {
+				firstText = false
+				// The bundled runtime publishes live text deltas before updating
+				// its HTTP snapshot. Use our durable, admitted prefix with that
+				// native part identity, never a replay-unsafe raw delta offset.
+				var prefix string
+				e = c.DB.QueryRowContext(ctx, `SELECT coalesce(group_concat(text_delta,''),'') FROM (
+				 SELECT j.text_delta FROM inference_stream j JOIN chat_dispatch d ON d.turn_id=j.turn_id
+				 WHERE j.scope='chat' AND j.turn_id=? AND j.project_id=? AND j.session_id=? AND j.step=? AND d.message_id=? AND d.native_message_id=? ORDER BY j.seq)`, s.TurnID, s.ProjectID, s.SessionID, step, id, parent).Scan(&prefix)
+				if e != nil {
+					return false, e
+				}
+				if strings.HasPrefix(prefix, part.Text) {
+					part.Text = prefix
+				}
 			}
 			if e = c.savePart(ctx, s, id, step, part); e != nil {
 				return false, e
@@ -190,6 +207,11 @@ func (c *Chat) finish(s ToolScope, id, kind, message, state string) error {
 	n, _ := result.RowsAffected()
 	if n == 0 {
 		return nil
+	}
+	if kind == "unknown" {
+		if e = restoreInferencePartial(ctx, tx, id); e != nil {
+			return e
+		}
 	}
 	payload, _ := json.Marshal(ChatDonePayload{SessionID: s.SessionID, MessageID: id, Done: true, Error: message, Status: kind})
 	if e = events.Append(ctx, tx, s.ProjectID, s.SessionID, "", "chat_done", payload); e != nil {

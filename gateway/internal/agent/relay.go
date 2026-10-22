@@ -87,6 +87,10 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.textMu.Unlock()
 	if textID != "" {
 		scope = ToolScope{TurnID: textID, NativeSessionID: req.Header.Get("X-Opencode-Session-Id"), Epoch: "text"}
+		if e := r.DB.QueryRowContext(req.Context(), "SELECT t.project_id,t.session_id FROM text_requests r JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.native_session_id=?", textID, scope.NativeSessionID).Scan(&scope.ProjectID, &scope.SessionID); e != nil {
+			fail()
+			return
+		}
 	}
 	if scope.TurnID == "" || req.Header.Get("X-Opencode-Session-Id") != scope.NativeSessionID {
 		fail()
@@ -183,7 +187,9 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		fail()
 		return
 	}
-	upstream, e := http.NewRequestWithContext(req.Context(), "POST", endpoint, bytes.NewReader(raw))
+	upstreamCtx, upstreamCancel := context.WithTimeout(req.Context(), 10*time.Minute)
+	defer upstreamCancel()
+	upstream, e := http.NewRequestWithContext(upstreamCtx, "POST", endpoint, bytes.NewReader(raw))
 	if e != nil {
 		fail()
 		return
@@ -199,14 +205,13 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	response, e := r.client.Do(upstream)
 	var data []byte
 	var ids []string
+	prefix, started := 0, false
 	if e == nil {
 		defer response.Body.Close()
 		if response.StatusCode == 200 {
-			data, e = io.ReadAll(io.LimitReader(response.Body, inferenceLimit+1))
-			if e == nil && len(data) <= inferenceLimit {
-				ids, e = completedInference(operation, data)
-			} else {
-				e = errors.New("inference stream limit or disconnect")
+			data, prefix, started, e = r.readInference(upstreamCtx, w, response.Body, scope, step, operation)
+			if e == nil {
+				ids, e = completedInference(operation, data, r.key, r.token)
 			}
 		} else {
 			e = errors.New("inference response rejected")
@@ -223,18 +228,36 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	encoded, _ := json.Marshal(ids)
-	if _, saveErr := r.DB.ExecContext(ctx, "UPDATE "+inferenceTable(scope)+" SET state=?,tool_ids_json=? WHERE turn_id=? AND step=?", state, string(encoded), scope.TurnID, step); saveErr != nil || e != nil {
+	saveCtx, saveCancel := context.WithTimeout(ctx, 5*time.Second)
+	_, saveErr := r.DB.ExecContext(saveCtx, "UPDATE "+inferenceTable(scope)+" SET state=?,tool_ids_json=? WHERE turn_id=? AND step=?", state, string(encoded), scope.TurnID, step)
+	saveCancel()
+	if saveErr == nil && e == nil {
+		if !started {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(200)
+			started = true
+		}
+		e = writeInference(w, data[prefix:])
+		if e != nil {
+			saveCtx, saveCancel = context.WithTimeout(ctx, 5*time.Second)
+			_, _ = r.DB.ExecContext(saveCtx, "UPDATE "+inferenceTable(scope)+" SET state='unknown' WHERE turn_id=? AND step=?", scope.TurnID, step)
+			saveCancel()
+		}
+	}
+	if saveErr != nil || e != nil {
 		if r.Turns.Abort != nil {
 			abortCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = r.Turns.Abort(abortCtx, scope.NativeSessionID)
 			cancel()
 		}
+		if started {
+			// Reset an incomplete SSE response instead of returning a clean EOF
+			// that the native provider might interpret as successful completion.
+			panic(http.ErrAbortHandler)
+		}
 		fail()
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
 }
 
 func (r *Relay) admit(ctx context.Context, s ToolScope, fingerprint string, results []string) (int, error) {
@@ -330,16 +353,21 @@ func resultIDs(operation string, body map[string]json.RawMessage) []string {
 	return ids
 }
 
-// ponytail: buffer one complete response (32 MiB / 10 minutes), adding first-token
-// latency. Upgrade to a persisted streaming protocol before exposing partial tool
-// output; a broken stream must never execute a tool and cause a second paid POST.
-func completedInference(operation string, raw []byte) ([]string, error) {
+// All tool/function and terminal records remain withheld until this whole-stream
+// check succeeds. Early text is durable and carries no tool execution authority.
+func completedInference(operation string, raw []byte, secrets ...string) ([]string, error) {
+	for _, secret := range secrets {
+		if secret != "" && bytes.Contains(raw, []byte(secret)) {
+			return nil, errors.New("inference reflected private credential")
+		}
+	}
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 4096), inferenceLimit)
 	complete := false
 	finished := false
 	ids := []string{}
 	seen := map[string]bool{}
+	sensitiveTail := ""
 	add := func(id string) {
 		if id != "" && !seen[id] {
 			ids = append(ids, id)
@@ -361,15 +389,17 @@ func completedInference(operation string, raw []byte) ([]string, error) {
 		var event struct {
 			Type    string          `json:"type"`
 			Error   json.RawMessage `json:"error"`
+			Delta   json.RawMessage `json:"delta"`
 			Choices []struct {
 				FinishReason *string `json:"finish_reason"`
 				Delta        struct {
+					Content   string `json:"content"`
 					ToolCalls []struct {
 						ID string `json:"id"`
 					} `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
-			ContentBlock struct{ Type, ID string } `json:"content_block"`
+			ContentBlock struct{ Type, ID, Text string } `json:"content_block"`
 			Item         struct {
 				Type   string `json:"type"`
 				CallID string `json:"call_id"`
@@ -377,6 +407,30 @@ func completedInference(operation string, raw []byte) ([]string, error) {
 		}
 		if json.Unmarshal([]byte(data), &event) != nil || len(event.Error) > 0 || event.Type == "error" || event.Type == "response.failed" || event.Type == "response.incomplete" {
 			return nil, errors.New("invalid inference stream")
+		}
+		var text strings.Builder
+		for _, choice := range event.Choices {
+			text.WriteString(choice.Delta.Content)
+		}
+		if event.Type == "response.output_text.delta" {
+			var delta string
+			_ = json.Unmarshal(event.Delta, &delta)
+			text.WriteString(delta)
+		}
+		if event.ContentBlock.Type == "text" {
+			text.WriteString(event.ContentBlock.Text)
+		}
+		if event.Type == "content_block_delta" {
+			var delta struct{ Type, Text string }
+			_ = json.Unmarshal(event.Delta, &delta)
+			if delta.Type == "text_delta" {
+				text.WriteString(delta.Text)
+			}
+		}
+		var sensitive bool
+		sensitiveTail, sensitive = inferenceCredential([]byte(data), text.String(), sensitiveTail, secrets...)
+		if sensitive {
+			return nil, errors.New("inference reflected private credential")
 		}
 		for _, choice := range event.Choices {
 			if choice.FinishReason != nil && *choice.FinishReason != "" {

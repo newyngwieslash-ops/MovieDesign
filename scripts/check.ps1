@@ -2,6 +2,8 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 & powershell -NoProfile -File (Join-Path $PSScriptRoot 'check-restart.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Launcher ownership/recovery checks failed.' }
+& powershell -NoProfile -File (Join-Path $PSScriptRoot 'check-release.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Release version/signature guard checks failed.' }
 & (Join-Path $PSScriptRoot 'build-media-tools.ps1')
 $env:MOVIEDESIGN_FFPROBE_TEST_BINARY = Join-Path $projectRoot 'desktop/src-tauri/binaries/media/ffprobe.exe'
 Push-Location (Join-Path $projectRoot 'gateway')

@@ -3,6 +3,8 @@ package store
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/migrations"
 )
 
 func TestMigrationsAndPersistence(t *testing.T) {
@@ -37,7 +39,34 @@ func TestMigrationsAndPersistence(t *testing.T) {
 	}
 	var version int
 	var dirty bool
-	if err = db.QueryRow("SELECT version,dirty FROM schema_migrations").Scan(&version, &dirty); err != nil || version != 14 || dirty {
+	if err = db.QueryRow("SELECT version,dirty FROM schema_migrations").Scan(&version, &dirty); err != nil || version != 15 || dirty {
 		t.Fatalf("migration state %d/%v: %v", version, dirty, err)
+	}
+	// Exercise the actual support DDL down/up and migration of an existing v14
+	// database, preserving its business rows.
+	down, err := migrations.Files.ReadFile("000015_inference_stream.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(string(down)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec("UPDATE schema_migrations SET version=14"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var records int
+	if err = db.QueryRow("SELECT count(*) FROM inference_stream").Scan(&records); err != nil || records != 0 {
+		t.Fatal("v14 journal upgrade", records, err)
+	}
+	if err = db.QueryRow("SELECT name FROM compositions WHERE id='c'").Scan(&name); err != nil || name != "宣传片" {
+		t.Fatal("v14 upgrade lost business row", name, err)
 	}
 }
