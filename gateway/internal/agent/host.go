@@ -27,6 +27,27 @@ type Host struct {
 	credentialVersion string
 	tools             []string
 }
+
+// Client copies used by native requests, controls and event streams retain this
+// private launch boundary. Failure is recorded before the pending handoff is removed.
+type nativeLaunchTransport struct {
+	directory string
+	next      http.RoundTripper
+}
+
+func (t *nativeLaunchTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for _, name := range []string{"launch.dpapi", "error.txt"} {
+		if _, err := os.Stat(filepath.Join(t.directory, name)); !os.IsNotExist(err) {
+			return nil, errors.New("native launch not ready")
+		}
+	}
+	started, err := os.ReadFile(filepath.Join(t.directory, "started.txt"))
+	if err != nil || string(started) != "started" {
+		return nil, errors.New("native launch not ready")
+	}
+	return t.next.RoundTrip(req)
+}
+
 type Bootstrap struct {
 	Password string `json:"password"`
 	Config   string `json:"config"`
@@ -111,7 +132,7 @@ func NewHost(s *Settings, dir string, connections ...MCPConnection) (*Host, erro
 	if err = encrypted.Put("launch", string(raw)); err != nil {
 		return nil, err
 	}
-	return &Host{Relay: relay, credentialVersion: version, password: password, base: "http://127.0.0.1:4096", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}, tools: m.Tools, active: v, fingerprint: fingerprint(v, version)}, nil
+	return &Host{Relay: relay, credentialVersion: version, password: password, base: "http://127.0.0.1:4096", client: &http.Client{Timeout: 3 * time.Second, Transport: &nativeLaunchTransport{directory: dir, next: &http.Transport{Proxy: nil}}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect denied") }}, tools: m.Tools, active: v, fingerprint: fingerprint(v, version)}, nil
 }
 func (h *Host) read(ctx context.Context, path string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", h.base+path, nil)

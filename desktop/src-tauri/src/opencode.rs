@@ -124,6 +124,13 @@ impl Opencode {
     }
     pub fn start(&mut self) -> Result<(), String> {
         let result = self.launch();
+        self.record_start(result)
+    }
+    fn record_start(&self, result: Result<(), String>) -> Result<(), String> {
+        let result = result.and_then(|()| {
+            fs::write(self.directory.join("started.txt"), "started")
+                .map_err(|_| "start_failed".into())
+        });
         if let Err(ref error) = result {
             let _ = fs::write(
                 self.directory.join("error.txt"),
@@ -133,7 +140,8 @@ impl Opencode {
                 },
             );
         }
-        // This per-launch encrypted exchange is consumed, never retained after startup.
+        // Remove the handoff last: Go rejects pending, failed or unproven launches.
+        // This per-launch encrypted exchange is consumed on both success and failure.
         let _ = fs::remove_file(self.directory.join("launch.dpapi"));
         result
     }
@@ -401,6 +409,45 @@ pub(crate) mod tests {
                 serde_json::from_str::<serde_json::Value>(&expanded).unwrap()["value"],
                 value
             );
+        }
+    }
+    #[test]
+    fn native_start_publishes_success_only_after_launch_and_consumes_handoff() {
+        for fail_publication in [false, true] {
+            let dir = std::env::temp_dir().join(format!(
+                "moviedesign-start-record-{}",
+                crate::gateway::private_update_token().unwrap()
+            ));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("launch.dpapi"), b"synthetic encrypted handoff").unwrap();
+            if fail_publication {
+                fs::create_dir(dir.join("started.txt")).unwrap();
+            }
+            let host = Opencode {
+                child: None,
+                directory: dir.clone(),
+            };
+            let result = host.record_start(Ok(()));
+            assert!(!dir.join("launch.dpapi").exists());
+            if fail_publication {
+                assert_eq!(result, Err("start_failed".into()));
+                assert!(fs::read_to_string(dir.join("started.txt")).is_err());
+                assert_eq!(
+                    fs::read_to_string(dir.join("error.txt")).unwrap(),
+                    "start_failed"
+                );
+            } else {
+                result.unwrap();
+                assert!(
+                    dir.join("started.txt").is_file(),
+                    "successful launch must publish native success evidence"
+                );
+                assert_eq!(
+                    fs::read_to_string(dir.join("started.txt")).unwrap(),
+                    "started"
+                );
+            }
+            fs::remove_dir_all(dir).unwrap();
         }
     }
     #[test]
