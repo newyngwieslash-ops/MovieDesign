@@ -1,5 +1,6 @@
-import {canDecide} from '../tasks/tasks';
+import {canDecide, type Task} from '../tasks/tasks';
 import { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { APIError, api, newRequestID } from '../../gateway';
 import { subscribeEvents } from '../../events';
 import { readIntent, clearIntent, type Intent } from './pending';
@@ -27,7 +28,11 @@ export function ConfirmationCard({question: q, refresh}: {question: Question; re
  const expired = !!q.quote && q.quote.expires_at <= now;
 
  const resolved = ['approved','answered','rejected','superseded','stale'].includes(q.state);
- useEffect(() => { if (resolved && q.state !== 'approved' && intent) { try {clearIntent(localStorage,storageKey,intent);setIntent(null);}catch(e){setStorageError((e as Error).message)} } },[resolved,q.state,storageKey,intent]);
+ const taskQuery = useQuery({queryKey:['project',q.project_id,'tasks',q.task_id],queryFn:({signal})=>api<Task>(q.project_id,`/api/tasks/${q.task_id}`,{signal}),enabled:q.state==='approved'&&!!q.task_id&&(q.kind==='billing'||q.kind==='delivery')&&(!!intent||!!storageError),retry:false});
+ const task = !taskQuery.isError&&!taskQuery.isFetching&&taskQuery.data?.id===q.task_id ? taskQuery.data : undefined;
+ const terminal = !!task&&['completed','failed','cancelled'].includes(task.status)&&(q.kind==='billing'||!['adoption_pending','collecting'].includes(task.attempt_state??''));
+ const canResume = q.kind==='billing'&&intent?.path===`/api/question/${q.id}/reply?session_id=${encodeURIComponent(q.session_id)}`&&JSON.parse(intent.body).expected_revision===q.revision-1&&task?.status==='accepted'&&task.attempt_state==='approved'&&task.billing?.charge_status==='not_submitted'&&!task.upstream_id&&q.task_revision!==undefined&&task.revision===q.task_revision+1;
+ useEffect(() => { if (intent&&resolved&&(q.state!=='approved'||terminal)) { try {if(localStorage.getItem(storageKey)===JSON.stringify(intent)){clearIntent(localStorage,storageKey,intent);setIntent(null);}}catch(e){setStorageError((e as Error).message)} } },[resolved,q.state,storageKey,intent,terminal]);
  async function send(original: Intent) {
   if (locked.current || storageError) return; locked.current = true; setBusy(true); setMessage('');
   const encoded=JSON.stringify(original);
@@ -71,26 +76,28 @@ export function ConfirmationCard({question: q, refresh}: {question: Question; re
  </>;
  return <DecisionFrame title={q.questions[0]?.header ?? '确认事项'} className={resolved ? 'confirmation-card is-resolved' : 'confirmation-card'} aria-label={`${q.kind === 'billing' ? '费用' : q.kind === 'storyboard' ? '分镜' : '选项'}确认`} data-question-id={q.id} data-state={q.state} data-compact={resolved ? 'true' : 'false'}>
   {resolved ? <details className="resolved-card-details"><summary>展开已处理确认详情（{q.state}）</summary>{detailsBody}</details> : detailsBody}
-  {intent && (!resolved || q.state === 'approved') && <div><p>{q.state === 'approved' ? '批准回执已保存。恢复操作只会启动尚未发送的原任务。' : '存在待确认的原请求。'}</p><button disabled={busy || !!storageError} onClick={refresh}>查询确认状态</button><button disabled={busy || !!storageError} onClick={() => void send(intent)}>{q.state === 'approved' ? '恢复已批准的原任务' : '重发原确认请求'}</button></div>}
+  {(intent||storageError) && (!resolved || q.state === 'approved') && !terminal && <div><p>{storageError?'本地确认记录无法读取；请查询确认状态并保留本地数据。':q.state === 'approved' ? canResume?'批准回执已保存；查询确认原任务尚未发送，可手动恢复。':'批准回执已保存；请查询原任务状态。查询不会重新估价或生成。' : '存在待确认的原请求。'}</p><button disabled={busy} onClick={()=>{if(q.state==='approved'&&q.task_id)void taskQuery.refetch({cancelRefetch:false});refresh()}}>查询确认状态</button>{intent&&(q.state!=='approved'||canResume)&&<button disabled={busy || !!storageError} onClick={() => void send(intent)}>{q.state === 'approved' ? '恢复已批准的原任务' : '重发原确认请求'}</button>}</div>}
+  {(intent||storageError)&&q.state==='approved'&&taskQuery.error&&<p role="alert">无法查询原任务状态：{taskQuery.error.message}</p>}
   {(expired || q.state === 'expired') && !resolved && <><p role="status">报价已过期，旧确认不可使用。</p><button disabled={busy || !!intent || !!storageError} onClick={renew}>继续并重新报价</button></>}
-  {resolved && <p role="status">{q.state === 'approved' ? q.creative?'此版本已批准；尚未提交生成':'已批准，已记录一次生成意图' : q.state === 'rejected' ? '已拒绝' : q.state === 'answered' ? '已提交选择' : '旧卡片不可使用'}{q.reason ? `：${q.reason}` : ''}</p>}
+  {resolved && <p role="status">{q.state === 'approved' ? q.creative?'此版本已批准；尚未提交生成':q.kind==='delivery'?'已批准，已记录原结果采用意图':'已批准，已记录一次生成意图' : q.state === 'rejected' ? '已拒绝' : q.state === 'answered' ? '已提交选择' : '旧卡片不可使用'}{q.reason ? `：${q.reason}` : ''}</p>}
   {q.native_send_state && <p role="status">原生回答投递：{{pending:'等待人工回执',sending:'正在投递已保存的人工回执',sent:'已送达',unknown:'结果未知；已保存的人工回执不会自动重发'}[q.native_send_state]}</p>}
   {message && <p role="alert">{message}</p>}{storageError && <p role="alert">无法安全保存确认：{storageError}</p>}
  </DecisionFrame>;
 }
 export function ConfirmationCards({projectID,sessionID}: {projectID: string; sessionID?: string}) {
+ const client=useQueryClient();
  const [cards,setCards] = useState<Question[]>([]), [error,setError] = useState('');
  const load = useRef<() => void>(() => {});
  const waitingNative = cards.filter(q=>['answered','rejected'].includes(q.state)&&['pending','sending'].includes(q.native_send_state??'')).map(q=>q.id).join(',');
  useEffect(()=>{if(!waitingNative)return;let remaining=15;const timer=setInterval(()=>{load.current();if(--remaining===0)clearInterval(timer);},1000);return()=>clearInterval(timer);},[waitingNative,projectID,sessionID]);
  useEffect(() => {
   let alive = true, serial = 0;
-  const refresh = () => { const request = ++serial; void api<{items:Question[]}>(projectID,`/api/question${sessionID === undefined ? '' : `?session_id=${encodeURIComponent(sessionID)}`}`).then(result => {if(alive && request===serial){setCards(result.items.filter(q=>q.project_id===projectID&&(sessionID===undefined||q.session_id===sessionID)));setError('');}}).catch(e=>{if(alive)setError(e.message)}); };
+  const refresh = () => { void client.invalidateQueries({queryKey:['project',projectID,'tasks']},{cancelRefetch:false}); const request = ++serial; void api<{items:Question[]}>(projectID,`/api/question${sessionID === undefined ? '' : `?session_id=${encodeURIComponent(sessionID)}`}`).then(result => {if(alive && request===serial){setCards(result.items.filter(q=>q.project_id===projectID&&(sessionID===undefined||q.session_id===sessionID)));setError('');}}).catch(e=>{if(alive)setError(e.message)}); };
   load.current = refresh;
   let unsubscribe = () => {};
   try { unsubscribe = subscribeEvents(projectID, event => {if(event.type.startsWith('question_')||event.type==='task_changed'||event.type==='chat_message'||event.type==='chat_done')refresh();},refresh,sessionID); } catch { setError('无法保存重连游标，请刷新确认状态。'); }
   refresh();
   return () => { alive=false; unsubscribe(); };
- },[projectID,sessionID]);
+ },[projectID,sessionID,client]);
  return <aside className="confirmation-cards" aria-label="待确认事项">{error && <p role="alert">{error}</p>}{cards.map(q=><ConfirmationCard key={q.id} question={q} refresh={()=>load.current()} />)}{(error||cards.some(q=>q.native_send_state&&q.native_send_state!=='sent')) && <button onClick={()=>load.current()}>刷新确认状态</button>}</aside>;
 }

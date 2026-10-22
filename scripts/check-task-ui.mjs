@@ -59,3 +59,8 @@ test('M7.3 TaskRow renders billing breakdown, remote cancel stage boundary, upst
  const [second]=h.canvasHelpers.nextGenerationPositions(doc,1);
  assert(second.x!==first.x||second.y!==first.y,'second generation must not overlap at identical {x:40,y:50}');
 });
+
+test('H15a completed TaskRow keeps recovery receipt as history without presenting a current failure action',()=>{
+ const h=harness(undefined,{status:'completed',actions:['query'],progress:{phase:'done',percent:100},problem:undefined,recovery:{stage:'upstream',recommendedAction:'retry',selectedAction:'retry',receiptId:'old-recovery-receipt',fromTaskId:'t'}});
+ const tree=h.render();assert.equal(find(tree,n=>n.props?.className==='task-recovery'),undefined);assert(JSON.stringify(tree).includes('old-recovery-receipt'));assert(JSON.stringify(tree).includes('历史'));assert(h.button('继续查询'));assert.equal(h.button('原样重试'),undefined);assert.equal(h.requests.length,0);
+});

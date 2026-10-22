@@ -106,7 +106,7 @@ func (s *Service) LateResult(ctx context.Context, tx *sql.Tx, p string, v tasks.
 	if valid != 1 {
 		return nil
 	}
-	_, e := s.insert(ctx, tx, p, Question{SessionID: session, TaskID: v.ID, TaskRevision: v.Revision, Kind: "delivery", InputHash: binding, Questions: []Info{{Header: "采用取消后返回的图像", Question: "本地任务保持取消。是否收集已返回的原结果并投递到原定作品？不会重新发起生成。", Options: []Option{{Label: "采用已返回结果", Description: "使用同一任务、同一输出版本；不新增供应商请求"}}}}, Impacts: []string{"供应商可能已计费；此操作仅采用已返回结果"}})
+	_, e := s.insert(ctx, tx, p, Question{SessionID: session, TaskID: v.ID, TaskRevision: v.Revision, Kind: "delivery", InputHash: binding, Questions: []Info{{Header: "采用取消后返回的结果", Question: "本地任务保持取消。是否收集已返回的原结果并投递到原定作品？不会重新发起生成。", Options: []Option{{Label: "采用已返回结果", Description: "使用同一任务、同一输出版本；不新增供应商请求"}}}}, Impacts: []string{"供应商可能已计费；此操作仅采用已返回结果"}})
 	return e
 }
 func fail(status int, message string) error {

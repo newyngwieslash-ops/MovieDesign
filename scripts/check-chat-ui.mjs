@@ -6,6 +6,7 @@ import {createRequire} from 'node:module';
 import vm from 'node:vm';
 import {setImmediate as tick} from 'node:timers/promises';
 const require=createRequire(import.meta.url),ts=require('../desktop/node_modules/typescript'),React=require('../desktop/node_modules/react'),{renderToStaticMarkup}=require('../desktop/node_modules/react-dom/server');
+const {QueryClient,QueryObserver}=require('../desktop/node_modules/@tanstack/react-query');
 function load(file,dependencies={},globals={}) {const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../desktop/src/'+file,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{module,exports:module.exports,console,crypto,TextEncoder,JSON,Error,setTimeout,clearTimeout,AbortController,structuredClone,...globals,require:n=>dependencies[n]??(n==='react'?React:n==='react/jsx-runtime'?require('../desktop/node_modules/react/jsx-runtime'): {})});return module.exports;}
 test('actual assistant and tool output render hostile strings literally',()=>{
  const {AssistantMessage}=load('features/chat/AssistantMessage.tsx');
@@ -68,7 +69,7 @@ test('existing confirmation cards reread native delivery state after chat comple
  const hooks=[],effects=[];let cursor=0,listener,reads=0;
  const react={useState(v){const i=cursor++;hooks[i]??=typeof v==='function'?v():v;return [hooks[i],v=>hooks[i]=v];},useRef(v){return hooks[cursor++]??={current:v};},useEffect(fn){const i=cursor++;if(!(i in hooks)){hooks[i]=true;effects.push(fn);}}};
  const jsx=(type,props)=>({type,props});
- const {ConfirmationCards,ConfirmationCard}=load('features/questions/ConfirmationCard.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'../../gateway':{api:async()=>{reads++;return {items:[{id:'q',project_id:'p',session_id:'s',kind:'choice',state:'answered',revision:1,questions:[],native_send_state:reads===1?'pending':'sent'}]};}},'../../events':{subscribeEvents:(_p,cb)=>{listener=cb;return()=>{};}}},{setInterval:()=>1,clearInterval(){}});
+ const {ConfirmationCards,ConfirmationCard}=load('features/questions/ConfirmationCard.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':{useQueryClient:()=>({invalidateQueries(){}})},'../../gateway':{api:async()=>{reads++;return {items:[{id:'q',project_id:'p',session_id:'s',kind:'choice',state:'answered',revision:1,questions:[],native_send_state:reads===1?'pending':'sent'}]};}},'../../events':{subscribeEvents:(_p,cb)=>{listener=cb;return()=>{};}}},{setInterval:()=>1,clearInterval(){}});
  const render=()=>{cursor=0;return ConfirmationCards({projectID:'p'});};render();for(const f of effects)f();await tick();assert.equal(find(render(),n=>n.type===ConfirmationCard).props.question.native_send_state,'pending');listener({type:'chat_done',project_id:'p',session_id:'s',id:2,payload:{}});await tick();assert.equal(find(render(),n=>n.type===ConfirmationCard).props.question.native_send_state,'sent');
 });
 const queued={id:'m',session_id:'s',requestId:'queued-key',role:'user',content:{requestId:'queued-key',document:{type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'queued'}]}]},text:'queued',references:[],annotations:[]},state:'queued',created_at:1};
@@ -94,4 +95,72 @@ test('unknown, idempotency and unrelated 409s retain exact withdrawal identity a
 test('known withdrawal rejection cannot clear another pending journal and does not classify send conflicts',async()=>{
  const h=harness();h.history([queued]);await h.settle();h.type('');h.button('撤回消息').props.onClick();h.map.set('moviedesign.chat.cancel.v1.p','newer');h.writes[0].reject(new h.APIError(409,'invalid_input','Only queued messages can be withdrawn'));await h.settle();assert.equal(h.map.get('moviedesign.chat.cancel.v1.p'),'newer');
  const send=harness();await send.settle();send.type('original');send.button('发送消息').props.onClick();send.writes[0].reject(new send.APIError(409,'invalid_input','Only queued messages can be withdrawn'));await send.settle();assert.equal(send.map.size,1);
+});
+
+const approvedBilling={id:'q',project_id:'p',session_id:'s',task_id:'t',task_revision:1,kind:'billing',state:'approved',revision:2,provider:'saved provider',model:'saved model',questions:[{header:'生成费用确认',question:'确认此报价并提交一次生成？',options:[{label:'确认生成',description:'一次生成'}]}],quote:{quote_id:'original-quote',currency:'CNY',estimated_amount:123,minor_unit_scale:2,estimated_credits:1,expires_at:1,version:'saved-v1',source:'saved quote'}};
+const billingIntent=JSON.stringify({path:'/api/question/q/reply?session_id=s',body:'{"requestId":"original-human-reply","answers":[["确认生成"]],"expected_revision":1}'});
+function confirmationHarness({question=approvedBilling,map=new Map(),client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}}),saved=billingIntent,denied=false}={}){
+ const key=`moviedesign.question.pending.v1.${question.project_id}.${question.id}`;
+ if(saved!==undefined&&!map.has(key))map.set(key,saved);
+ const hooks=[],effects=[],requests=[],observers=[];let cursor=0,refreshes=0;
+ const storage={getItem:k=>{if(denied)throw Error('storage denied');return map.get(k)??null},setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)};
+ const react={useState(init){const i=cursor++;if(!(i in hooks))hooks[i]=typeof init==='function'?init():init;return[hooks[i],v=>hooks[i]=typeof v==='function'?v(hooks[i]):v]},useRef(init){return hooks[cursor++]??={current:init}},useEffect(fn,deps){const i=cursor++,old=hooks[i];if(!old||deps.some((v,j)=>v!==old.deps[j])){hooks[i]={deps};effects.push(()=>{old?.cleanup?.();hooks[i].cleanup=fn()})}}};
+ const query={useQueryClient:()=>client,useQuery(options){const i=cursor++;if(!hooks[i]){const observer=new QueryObserver(client,options);hooks[i]=observer;observers.push(observer.subscribe(()=>{}))}else hooks[i].setOptions(options);return hooks[i].getCurrentResult()}};
+ const gateway=load('gateway.ts',{}, {URL,Headers,fetch:(url,init)=>new Promise((resolve,reject)=>requests.push({url,method:init.method??'GET',body:init.body,resolve:data=>resolve({ok:true,json:async()=>data}),reject}))});
+ const pending=load('features/questions/pending.ts'),tasks=load('features/tasks/tasks.ts');
+ const jsx=(type,props)=>({type,props});
+ const {ConfirmationCard}=load('features/questions/ConfirmationCard.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':query,'../../gateway':gateway,'./pending':pending,'../tasks/tasks':tasks},{localStorage:storage,Date,setInterval:()=>0,clearInterval(){}});
+ const render=()=>{cursor=0;const tree=ConfirmationCard({question,refresh:()=>refreshes++});while(effects.length)effects.shift()();return tree};
+ const settle=async()=>{for(let i=0;i<4;i++){render();await tick()}return render()};
+ const button=label=>find(render(),n=>n.type==='button'&&n.props.children===label);
+ render();
+ return{key,map,client,question,requests,render,settle,button,get refreshes(){return refreshes},unmount(){for(const unsubscribe of observers)unsubscribe();for(const h of hooks)h?.cleanup?.()}};
+}
+
+test('H15a approved confirmation recovery follows authoritative task state without changing human history',async t=>{
+ await t.test('terminal tasks clear only the local pending marker and never POST the old approval',async()=>{
+  for(const status of ['completed','failed','cancelled']){
+   const question=structuredClone(approvedBilling),before=JSON.stringify(question),h=confirmationHarness({question});
+   assert.equal(h.button('恢复已批准的原任务'),undefined,'no replay while task status is unconfirmed');
+   assert.equal(h.requests.length,1);assert.equal(h.requests[0].method,'GET');assert.equal(h.requests[0].url.pathname,'/api/tasks/t');assert.equal(h.requests[0].url.searchParams.get('project_id'),'p');
+   h.requests[0].resolve({id:'t',status,revision:4,attempt_state:status,billing:{charge_status:'completed'}});await h.settle();
+   assert.equal(h.button('恢复已批准的原任务'),undefined);assert.equal(h.map.has(h.key),false);assert.equal(h.requests.filter(r=>r.method==='POST').length,0);
+   assert.equal(JSON.stringify(question),before);assert(JSON.stringify(h.render()).includes('saved quote'));assert(JSON.stringify(h.render()).includes('saved provider'));h.unmount();
+  }
+ });
+ await t.test('query failure and active or unknown submissions retain the exact original request with query only',async()=>{
+  for(const state of ['error','running','unknown','accepted-submitted','later-attempt']){
+   const h=confirmationHarness();assert.equal(h.requests.length,1,'approved card must query the current task');
+   if(state==='error')h.requests[0].reject(Error('query transport lost'));
+   else h.requests[0].resolve({id:'t',status:state==='accepted-submitted'||state==='later-attempt'?'accepted':state,revision:state==='later-attempt'?8:2,attempt_state:state==='later-attempt'?'approved':'submitted',upstream_id:state==='later-attempt'?'':'upstream-1',billing:{charge_status:state==='later-attempt'?'not_submitted':'submitted'}});
+   await h.settle();assert.equal(h.map.get(h.key),billingIntent);assert.equal(h.button('恢复已批准的原任务'),undefined);assert(h.button('查询确认状态'));assert(!JSON.stringify(h.render()).includes('只会启动尚未发送'));
+   h.button('查询确认状态').props.onClick();await h.settle();assert.equal(h.requests.filter(r=>r.method==='POST').length,0);assert(h.requests.filter(r=>r.method==='GET').length>=2);h.unmount();
+  }
+ });
+ await t.test('only the same approved unsent task permits a manual replay of the frozen request',async()=>{
+  const h=confirmationHarness();assert.equal(h.requests.length,1,'approved card must query the current task');h.requests[0].resolve({id:'t',status:'accepted',revision:2,attempt_state:'approved',billing:{charge_status:'not_submitted'}});await h.settle();
+  h.button('恢复已批准的原任务').props.onClick();h.button('恢复已批准的原任务').props.onClick();assert.equal(h.requests.filter(r=>r.method==='POST').length,1);assert.equal(h.requests.at(-1).body,JSON.parse(billingIntent).body);h.requests.at(-1).reject(Error('reply outcome unknown'));await h.settle();assert.equal(h.map.get(h.key),billingIntent);h.unmount();
+  for(const saved of [JSON.stringify({path:'/api/question/q/reject?session_id=s',body:'{"requestId":"rejected-reply","answers":[],"expected_revision":1}'}),JSON.stringify({path:'/api/question/q/reply?session_id=s',body:'{"requestId":"old-reply","answers":[["确认生成"]],"expected_revision":4}'})]){
+   const other=confirmationHarness({saved});other.requests[0].resolve({id:'t',status:'accepted',revision:2,attempt_state:'approved',billing:{charge_status:'not_submitted'}});await other.settle();assert.equal(other.button('恢复已批准的原任务'),undefined);assert.equal(other.map.get(other.key),saved);assert.equal(other.requests.filter(r=>r.method==='POST').length,0);other.unmount();
+  }
+ });
+ await t.test('terminal observation and late replies cannot clear a newer or another project intent',async()=>{
+  const h=confirmationHarness();assert.equal(h.requests.length,1,'approved card must query the current task');h.requests[0].resolve({id:'t',status:'accepted',revision:2,attempt_state:'approved',billing:{charge_status:'not_submitted'}});await h.settle();h.button('恢复已批准的原任务').props.onClick();const oldReply=h.requests.at(-1);h.unmount();
+  h.map.set(h.key,'newer request');const other=confirmationHarness({map:h.map,client:h.client,question:{...approvedBilling,project_id:'other'}});
+  oldReply.resolve({state:'approved'});await other.settle();assert.equal(h.map.get(h.key),'newer request');assert.equal(other.map.get(other.key),billingIntent);assert.equal(other.requests[0].url.searchParams.get('project_id'),'other');
+  other.map.set(other.key,'other newer request');other.requests[0].resolve({id:'t',status:'completed',revision:4});await other.settle();assert.equal(other.map.get(other.key),'other newer request');assert.equal(h.map.get(h.key),'newer request');other.unmount();
+ });
+ await t.test('late task GET after unmount and denied storage preserve the pending evidence',async()=>{
+  const h=confirmationHarness();assert.equal(h.requests.length,1,'approved card must query the current task');h.unmount();h.map.set(h.key,'newer request');h.requests[0].resolve({id:'t',status:'completed',revision:4});await tick();assert.equal(h.map.get(h.key),'newer request');
+  const denied=confirmationHarness({denied:true});assert(denied.requests[0]);denied.requests[0].reject(Error('query lost'));await denied.settle();assert.equal(denied.map.get(denied.key),billingIntent);assert.equal(denied.requests.filter(r=>r.method==='POST').length,0);assert(find(denied.render(),n=>n.props?.role==='alert'));assert.equal(denied.button('查询确认状态').props.disabled,false);denied.button('查询确认状态').props.onClick();assert.equal(denied.requests.length,2);denied.unmount();
+ });
+ await t.test('task_changed rereads current task only in its project and retires the completed recovery prompt',async()=>{
+  const h=confirmationHarness(),other=confirmationHarness({client:h.client,question:{...approvedBilling,project_id:'other'}});
+  h.requests[0].resolve({id:'t',status:'accepted',revision:2,attempt_state:'approved',billing:{charge_status:'not_submitted'}});other.requests[0].resolve({id:'t',status:'running',revision:3});await h.settle();await other.settle();assert(h.button('恢复已批准的原任务'));
+  let cursor=0,listener;const hooks=[],effects=[],react={useState(init){const i=cursor++;hooks[i]??=init;return[hooks[i],v=>hooks[i]=v]},useRef(init){return hooks[cursor++]??={current:init}},useEffect(fn){const i=cursor++;if(!(i in hooks)){hooks[i]=true;effects.push(fn)}}},jsx=(type,props)=>({type,props});
+  const {ConfirmationCards}=load('features/questions/ConfirmationCard.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':{useQueryClient:()=>h.client},'../../gateway':{api:async()=>({items:[approvedBilling]})},'../../events':{subscribeEvents:(_p,cb)=>{listener=cb;return()=>{}}}},{setInterval:()=>0,clearInterval(){}});
+  ConfirmationCards({projectID:'p'});const cleanups=effects.map(fn=>fn());await h.settle();assert.equal(h.requests.length,2);h.requests[1].resolve({id:'t',status:'running',revision:3});await h.settle();
+  listener({type:'task_changed',project_id:'p',task_id:'t'});await h.settle();assert.equal(h.requests.length,3);h.requests[2].resolve({id:'t',status:'completed',revision:4});await h.settle();await other.settle();
+  assert.equal(h.button('恢复已批准的原任务'),undefined);assert.equal(h.map.has(h.key),false);assert.equal(other.requests.length,1);assert.equal(other.map.get(other.key),billingIntent);assert.equal(h.requests.filter(r=>r.method==='POST').length,0);cleanups.forEach(fn=>fn?.());h.unmount();other.unmount();
+ });
 });

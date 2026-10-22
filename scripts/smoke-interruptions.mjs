@@ -193,7 +193,7 @@ try{
   await wait(`document.querySelector('[data-task-id="${task4Id}"]')?.dataset.chargeStatus==='local_cancelled_remote_may_charge'`);
   assert.equal(videoDeletes,1,'running ark-video cancellation must not call DELETE');
   videoStates['cgt-int-running']='succeeded';
-  await wait(`document.body.innerText.includes('采用取消后返回的图像')||document.body.innerText.includes('本地已取消但供应商返回了生成结果')`,10000);
+  await wait(`document.body.innerText.includes('采用取消后返回的结果')||document.body.innerText.includes('本地已取消但供应商返回了生成结果')`,10000);
 
   // 5. Submit Task 5 (ark-video running across physical desktop restart) -> approve so upstream_id='cgt-int-restart' is persisted before desktop closes.
   const genRestart=await post('/api/generate/video'+q,{
