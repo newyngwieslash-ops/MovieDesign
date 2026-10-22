@@ -227,6 +227,10 @@ func (h *Host) Status(ctx context.Context, s *Settings, bootstrapDir string) Sta
 		switch string(data) {
 		case "port_conflict":
 			st.Message = "agent 启动失败：127.0.0.1:4096 已占用；未连接或关闭现有服务。"
+		case "port_permission_denied":
+			st.Message = "agent 启动失败：127.0.0.1:4096 绑定被拒绝；可能受系统端口保留或权限限制，请检查后重新启动。"
+		case "port_bind_failed":
+			st.Message = "agent 启动失败：127.0.0.1:4096 绑定失败，请检查系统网络状态后重新启动。"
 		case "start_failed":
 			st.Message = "agent 启动失败，请检查应用专用 binary 后重新启动。"
 		case "exited":

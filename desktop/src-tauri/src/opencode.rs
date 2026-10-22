@@ -8,7 +8,16 @@ use std::{
 };
 
 fn claim_port(port: u16) -> Result<TcpListener, String> {
-    TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).map_err(|_| "port_conflict".into())
+    TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+        .map_err(|error| port_bind_error(error.kind()))
+}
+fn port_bind_error(kind: std::io::ErrorKind) -> String {
+    match kind {
+        std::io::ErrorKind::AddrInUse => "port_conflict",
+        std::io::ErrorKind::PermissionDenied => "port_permission_denied",
+        _ => "port_bind_failed",
+    }
+    .into()
 }
 
 #[derive(Deserialize)]
@@ -118,10 +127,9 @@ impl Opencode {
         if let Err(ref error) = result {
             let _ = fs::write(
                 self.directory.join("error.txt"),
-                if error == "port_conflict" {
-                    "port_conflict"
-                } else {
-                    "start_failed"
+                match error.as_str() {
+                    "port_conflict" | "port_permission_denied" | "port_bind_failed" => error,
+                    _ => "start_failed",
                 },
             );
         }
@@ -393,6 +401,19 @@ pub(crate) mod tests {
                 serde_json::from_str::<serde_json::Value>(&expanded).unwrap()["value"],
                 value
             );
+        }
+    }
+    #[test]
+    fn port_bind_errors_preserve_failure_categories() {
+        for (kind, expected) in [
+            (std::io::ErrorKind::AddrInUse, "port_conflict"),
+            (
+                std::io::ErrorKind::PermissionDenied,
+                "port_permission_denied",
+            ),
+            (std::io::ErrorKind::Other, "port_bind_failed"),
+        ] {
+            assert_eq!(port_bind_error(kind), expected, "bind error kind {kind:?}");
         }
     }
     #[test]
