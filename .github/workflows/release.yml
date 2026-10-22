@@ -40,7 +40,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          package_json_file: desktop/package.json
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -58,15 +58,18 @@ jobs:
       - name: Run release script (Dry-Run)
         if: ${{ inputs.dry_run == true }}
         shell: pwsh
-        run: ./scripts/release.ps1 -DryRun -Version "${{ inputs.version }}" -OutputDir ".runtime/release-artifacts"
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: ./scripts/release.ps1 -DryRun -Version $env:RELEASE_VERSION -OutputDir ".runtime/release-artifacts"
 
       - name: Build signed release artifacts
         if: ${{ inputs.dry_run != true }}
         shell: pwsh
         env:
+          RELEASE_VERSION: ${{ inputs.version }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: ./scripts/release.ps1 -Version "${{ inputs.version }}" -OutputDir ".runtime/release-artifacts"
+        run: ./scripts/release.ps1 -Version $env:RELEASE_VERSION -OutputDir ".runtime/release-artifacts"
 
       - name: Upload release artifacts to GitHub Release
         if: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}

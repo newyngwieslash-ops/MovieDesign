@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$prompt = [IO.File]::ReadAllText((Join-Path $projectRoot 'agent/media-agent.md'))
+$prompt = [IO.File]::ReadAllText((Join-Path $projectRoot 'agent/media-agent.md')).Replace("`r`n", "`n").Replace("`r", "`n")
 $literal = ConvertTo-Json -InputObject $prompt -Compress
 [IO.File]::WriteAllText((Join-Path $projectRoot 'gateway/internal/agent/media_prompt.go'), "// Code generated from agent/media-agent.md by build-gateway.ps1; DO NOT EDIT.`npackage agent`nconst mediaPrompt = $literal`n", [Text.UTF8Encoding]::new($false))
 $targetTriple = (& rustc --print host-tuple).Trim()
@@ -9,7 +9,7 @@ $skillLines = @('// Code generated from agent/skills by build-gateway.ps1; DO NO
 foreach ($file in Get-ChildItem -LiteralPath $skillRoot -Recurse -File | Sort-Object FullName) {
     $relative = $file.FullName.Substring($skillRoot.Length + 1).Replace('\', '/')
     $key = ConvertTo-Json -InputObject $relative -Compress
-    $value = ConvertTo-Json -InputObject ([IO.File]::ReadAllText($file.FullName)) -Compress
+    $value = ConvertTo-Json -InputObject ([IO.File]::ReadAllText($file.FullName)).Replace("`r`n", "`n").Replace("`r", "`n") -Compress
     $skillLines += "${key}: $value,"
 }
 $skillLines += '}'

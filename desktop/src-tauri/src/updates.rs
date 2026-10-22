@@ -223,7 +223,7 @@ fn decode_base64_utf8(input: &str) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|e| format!("签名 UTF-8 格式无效: {e}"))
 }
 
-fn verify_minisign_and_version(
+pub fn verify_minisign_and_version(
     package_bytes: &[u8],
     release_signature_base64: &str,
     pubkey_base64: &str,
