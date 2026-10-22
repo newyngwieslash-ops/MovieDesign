@@ -204,3 +204,61 @@ func TestUpdateAdmissionReservesBeforePolicyAndFailsClosed(t *testing.T) {
 		t.Fatal("blocked update wrote install intent", installs, err)
 	}
 }
+
+func TestUpdateRecoveryUsesDurableBindingsAndProvesAbsence(t *testing.T) {
+	t.Setenv("MOVIEDESIGN_UPDATE_TOKEN", "native")
+	db, e := store.Open(filepath.Join(t.TempDir(), "recovery.db"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close()
+	s := newTestServer(t, "http://tauri.localhost", db, t.TempDir())
+	call := func(body string) (int, map[string]any) {
+		r := httptest.NewRequest("POST", "/internal/updates/receipt", strings.NewReader(body))
+		r.Header.Set("Origin", "http://tauri.localhost")
+		r.Header.Set("X-MovieDesign-Update", "native")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		var got map[string]any
+		json.Unmarshal(w.Body.Bytes(), &got)
+		return w.Code, got
+	}
+	seed := func(op, id, input, response, state string) {
+		t.Helper()
+		if _, e := db.Exec(`INSERT INTO write_requests(project_id,operation,request_id,input_json,response_json,state) VALUES('_app',?,?,?,?,?)`, op, id, input, response, state); e != nil {
+			t.Fatal(e)
+		}
+	}
+	seed("updates.decision", "D", `{"candidateId":"C","decision":"approve"}`, `{"candidateId":"C","requestId":"D","status":"approve"}`, "completed")
+	seed("updates.install", "I", `{"candidateId":"C","receiptId":"D"}`, `{"candidateId":"C","requestId":"I","receiptId":"D","status":"install_started"}`, "completed")
+	for _, body := range []string{`{"requestId":"q","candidateId":"C","receiptId":"wrong-I","decisionReceiptId":"D"}`, `{"requestId":"q","candidateId":"C"}`, `{"requestId":"q","receiptId":"wrong-I","decisionReceiptId":"D"}`} {
+		code, got := call(body)
+		if code != 200 || got["status"] != "install_started" || got["requestId"] != "I" || got["canDiscard"] != false {
+			t.Fatalf("unknown install misclassified: HTTP %d %v", code, got)
+		}
+	}
+	code, got := call(`{"requestId":"q","candidateId":"never-C","receiptId":"never-I","decisionReceiptId":"never-D"}`)
+	if code != 200 || got["status"] != "absent" || got["canDiscard"] != true {
+		t.Fatalf("absence not authoritative: HTTP %d %v", code, got)
+	}
+	seed("updates.decision", "pending-D", `{"candidateId":"pending-C"}`, "{}", "pending")
+	code, got = call(`{"requestId":"q","candidateId":"pending-C","receiptId":"missing-I","decisionReceiptId":"pending-D"}`)
+	if code != 409 {
+		t.Fatalf("pending decision treated as absent: HTTP %d %v", code, got)
+	}
+	seed("updates.decision", "pre-D", `{"candidateId":"pre-C","decision":"approve"}`, `{"candidateId":"pre-C","requestId":"pre-D","status":"approve"}`, "completed")
+	code, got = call(`{"requestId":"q","candidateId":"pre-C","receiptId":"pre-I","decisionReceiptId":"pre-D"}`)
+	if code != 200 || got["status"] != "approve" || got["canDiscard"] != true {
+		t.Fatalf("pre-install decision not recoverable: HTTP %d %v", code, got)
+	}
+	var installs int
+	db.QueryRow(`SELECT count(*) FROM write_requests WHERE operation='updates.install'`).Scan(&installs)
+	if installs != 1 {
+		t.Fatal("recovery created installation", installs)
+	}
+	db.Close()
+	code, got = call(`{"requestId":"q","candidateId":"never-C","receiptId":"never-I","decisionReceiptId":"never-D"}`)
+	if code < 500 || got["status"] == "absent" {
+		t.Fatalf("storage uncertainty misclassified: HTTP %d %v", code, got)
+	}
+}

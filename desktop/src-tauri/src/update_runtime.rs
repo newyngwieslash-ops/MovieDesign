@@ -106,9 +106,6 @@ pub async fn updater_check_and_gate(
             .map_err(|e| e.to_string())?])
         .map_err(|e| e.to_string())?
         .on_before_exit(move || {
-            if let Ok(mut gateway) = owner.state::<Mutex<Gateway>>().lock() {
-                gateway.shutdown();
-            }
             owner.cleanup_before_exit();
         })
         .build()
@@ -245,7 +242,10 @@ pub async fn updater_install(
         if !gate.auto_install_allowed { return Err(gate.reason.unwrap_or_else(|| "最终策略禁止安装".into())); }
         control(&conn, "/internal/updates/admit", json!({"requestId":request_id,"candidateId":candidate.id,"receiptId":receipt_id,"version":candidate.update.version,"currentVersion":candidate.update.current_version})).await?;
         Ok(())
-    }, |update, bytes| update.install(bytes).map_err(|e| e.to_string())).await;
+    }, |update, bytes| {
+        app.state::<Mutex<Gateway>>().lock().map_err(|_| "本地服务状态锁不可用")?.shutdown()?;
+        update.install(bytes).map_err(|e| e.to_string())
+    }).await;
     if let Err(error) = result {
         // A timeout may have committed the intent. Query/release its reservation,
         // but never repeat installation or replace the original identity.
@@ -281,9 +281,10 @@ pub async fn updater_receipt(
     app: AppHandle,
     receipt_id: String,
     decision_id: Option<String>,
+    candidate_id: Option<String>,
     request_id: String,
 ) -> Result<Value, String> {
-    control(&connection(&app)?, "/internal/updates/receipt", json!({"requestId":request_id,"receiptId":receipt_id,"decisionReceiptId":decision_id.unwrap_or_default()})).await
+    control(&connection(&app)?, "/internal/updates/receipt", json!({"requestId":request_id,"receiptId":receipt_id,"decisionReceiptId":decision_id.unwrap_or_default(),"candidateId":candidate_id.unwrap_or_default()})).await
 }
 
 #[tauri::command]
@@ -299,12 +300,10 @@ pub async fn updater_discard(
     let receipt = control(
         &connection(&app)?,
         "/internal/updates/receipt",
-        json!({"requestId":request_id,"receiptId":receipt_id,"decisionReceiptId":decision_id}),
+        json!({"requestId":request_id,"receiptId":receipt_id,"decisionReceiptId":decision_id,"candidateId":candidate_id}),
     )
     .await?;
-    if receipt["candidateId"].as_str() != Some(&candidate_id)
-        || !matches!(receipt["status"].as_str(), Some("approve" | "reject"))
-    {
+    if !discardable(&receipt, &candidate_id) {
         return Err("已存在安装意图或未知结果，保留原请求并核对安装状态".into());
     }
     let mut runtime = state.lock().map_err(|_| "更新状态锁不可用")?;
@@ -316,4 +315,13 @@ pub async fn updater_discard(
         runtime.candidate = None;
     }
     Ok(())
+}
+
+fn discardable(receipt: &Value, candidate: &str) -> bool {
+    receipt["candidateId"].as_str() == Some(candidate)
+        && receipt["canDiscard"].as_bool() == Some(true)
+        && matches!(
+            receipt["status"].as_str(),
+            Some("approve" | "reject" | "absent")
+        )
 }

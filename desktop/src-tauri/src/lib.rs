@@ -48,7 +48,9 @@ pub fn run() {
     app.run(|handle, event| {
         if matches!(event, tauri::RunEvent::Exit) {
             if let Ok(mut gateway) = handle.state::<Mutex<gateway::Gateway>>().lock() {
-                gateway.shutdown();
+                if let Err(error) = gateway.shutdown() {
+                    eprintln!("owned_shutdown_failed: {error}");
+                }
             }
         }
     });

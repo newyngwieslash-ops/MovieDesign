@@ -42,6 +42,9 @@ func (h *Host) RejectQuestion(ctx context.Context, id string) error {
 func (h *Host) DisconnectTools(ctx context.Context) error {
 	return h.control(ctx, "/mcp/design/disconnect")
 }
+
+// OpenCode 1.19.0 disposes instance/MCP resources, but keeps its HTTP server alive.
+func (h *Host) Dispose(ctx context.Context) error      { return h.control(ctx, "/global/dispose") }
 func (h *Host) ConnectTools(ctx context.Context) error { return h.control(ctx, "/mcp/design/connect") }
 func (h *Host) WaitIdle(ctx context.Context, session string) error {
 	ticker := time.NewTicker(50 * time.Millisecond)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -26,10 +27,15 @@ func checkPinnedRuntime(t *testing.T, configured bool) {
 	if binary == "" {
 		t.Skip("set MOVIEDESIGN_OPENCODE_TEST_BINARY to verified project executable")
 	}
-	listener, err := net.Listen("tcp4", "127.0.0.1:4096")
+	address := "127.0.0.1:4096"
+	if !configured {
+		address = "127.0.0.1:0"
+	} // Isolated no-model disposal fixture; production remains on 4096.
+	listener, err := net.Listen("tcp4", address)
 	if err != nil {
 		t.Fatal("agent port occupied; no service touched")
 	}
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
 	listener.Close()
 	root := t.TempDir()
 	attacker := filepath.Join(root, "hostile")
@@ -63,7 +69,7 @@ func checkPinnedRuntime(t *testing.T, configured bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(binary, "serve", "--hostname", "127.0.0.1", "--port", "4096")
+	command := exec.Command(binary, "serve", "--hostname", "127.0.0.1", "--port", port)
 	command.Dir = attacker
 	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
 	command.Env = []string{"SystemRoot=" + os.Getenv("SystemRoot"), "PATH=" + filepath.Join(os.Getenv("SystemRoot"), "System32")}
@@ -84,7 +90,7 @@ func checkPinnedRuntime(t *testing.T, configured bool) {
 		t.Fatal(err)
 	}
 	defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
-	host := &Host{password: "synthetic-native-runtime-password", base: "http://127.0.0.1:4096", client: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}}
+	host := &Host{password: "synthetic-native-runtime-password", base: "http://127.0.0.1:" + port, client: &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}}
 	deadline := time.Now().Add(30 * time.Second)
 	for !host.Ready(context.Background()) && time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
@@ -94,6 +100,37 @@ func checkPinnedRuntime(t *testing.T, configured bool) {
 		t.Fatalf("pinned runtime policy not ready: %s", raw)
 	}
 	if !configured {
+		raw, e := host.read(context.Background(), "/doc")
+		if e != nil {
+			t.Fatal(e)
+		}
+		var doc struct {
+			Paths map[string]json.RawMessage `json:"paths"`
+		}
+		if json.Unmarshal(raw, &doc) != nil || doc.Paths["/global/dispose"] == nil {
+			t.Fatal("pinned dispose schema unavailable")
+		}
+		for path := range doc.Paths {
+			if strings.Contains(path, "shutdown") || strings.HasSuffix(path, "/exit") {
+				t.Fatal("pinned process-exit schema changed", path)
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if e = host.Dispose(ctx); e != nil {
+			t.Fatal(e)
+		}
+		health, e := host.read(context.Background(), "/global/health")
+		if e != nil {
+			t.Fatal("dispose unexpectedly removed HTTP server", e)
+		}
+		if out := os.Getenv("MOVIEDESIGN_OPENCODE_SCHEMA_OUTPUT"); out != "" {
+			evidence, _ := json.MarshalIndent(map[string]any{"version": "1.19.0", "disposeAccepted": true, "httpStillAlive": true, "healthAfterDispose": json.RawMessage(health), "disposeSchema": doc.Paths["/global/dispose"], "processExitEndpoint": false}, "", "  ")
+			if e = os.WriteFile(out, evidence, 0600); e != nil {
+				t.Fatal(e)
+			}
+		}
+		t.Log("pinned 1.19.0: authenticated global.dispose accepted; HTTP health remains alive; no process-exit endpoint in live /doc; no inference")
 		return
 	}
 	for _, path := range []string{"/global/health", "/config", "/session", "/agent", "/doc"} {

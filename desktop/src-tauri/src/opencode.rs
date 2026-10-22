@@ -4,7 +4,7 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 fn claim_port(port: u16) -> Result<TcpListener, String> {
@@ -33,7 +33,45 @@ fn config_value(value: &str) -> String {
     let json = serde_json::to_string(value).expect("string serializes");
     json[1..json.len() - 1].to_string()
 }
+
+// Only Child handles returned by our own spawn reach this bounded reaper. A
+// successful dispose is resource cleanup, not proof that the process has exited.
+pub(crate) fn finish_owned(child: &mut Child, grace: Duration) -> Result<bool, String> {
+    let deadline = Instant::now() + grace;
+    loop {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Ok(false);
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if let Err(e) = child.kill() {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Ok(false);
+        }
+        return Err(format!("owned termination failed: {e}"));
+    }
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Err("owned termination could not be confirmed within 500ms".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 impl Opencode {
+    #[cfg(test)]
+    pub(crate) fn controlled_child(child: Child, directory: PathBuf) -> Self {
+        Self {
+            child: Some(child),
+            directory,
+        }
+    }
     pub fn prepare(data_dir: &Path) -> Result<Self, String> {
         let directory = data_dir.join("agent-host").join(format!(
             "launch-{}-{}",
@@ -201,17 +239,32 @@ impl Opencode {
             }
         }
     }
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            match finish_owned(&mut child, Duration::from_secs(1)) {
+                Ok(forced) => eprintln!(
+                    "owned_opencode_stop={}",
+                    if forced {
+                        "terminated_after_cleanup_grace"
+                    } else {
+                        "natural_exit"
+                    }
+                ),
+                Err(error) => {
+                    self.child = Some(child);
+                    return Err(error);
+                }
+            }
         }
         let _ = fs::remove_file(self.directory.join("launch.dpapi"));
+        Ok(())
     }
 }
 impl Drop for Opencode {
     fn drop(&mut self) {
-        self.shutdown()
+        if let Err(error) = self.shutdown() {
+            eprintln!("owned_opencode_stop_failed: {error}");
+        }
     }
 }
 
@@ -272,8 +325,66 @@ fn unprotect(_: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    #[test]
+    #[ignore]
+    fn owned_exit_fixture() {
+        let dir = PathBuf::from(
+            std::env::var_os("MOVIEDESIGN_LIFECYCLE_FIXTURE").expect("explicit fixture directory"),
+        );
+        if std::env::var_os("MOVIEDESIGN_FIXTURE_GATEWAY").is_some() {
+            use std::io::BufRead;
+            let mut line = String::new();
+            std::io::stdin().lock().read_line(&mut line).unwrap();
+            assert!(line.contains("gateway.shutdown"));
+            fs::write(dir.join("gateway-drained"), b"drained").unwrap();
+            return;
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !dir.join("gateway-drained").exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if dir.join("gateway-drained").exists() {
+            fs::write(dir.join("opencode-exited"), b"natural exit after gateway").unwrap();
+        }
+    }
+    pub(crate) fn spawn_exit_fixture(dir: &Path, gateway: bool) -> Child {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        hidden(&mut command);
+        command
+            .args([
+                "--ignored",
+                "--exact",
+                "opencode::tests::owned_exit_fixture",
+            ])
+            .env("MOVIEDESIGN_LIFECYCLE_FIXTURE", dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if gateway {
+            command.env("MOVIEDESIGN_FIXTURE_GATEWAY", "1");
+        } else {
+            command.env_remove("MOVIEDESIGN_FIXTURE_GATEWAY");
+        }
+        command.spawn().unwrap()
+    }
+    #[test]
+    fn owned_fallback_waits_for_deadline_and_confirms_only_its_child() {
+        let dir = std::env::temp_dir().join(format!(
+            "moviedesign-owned-fallback-{}",
+            crate::gateway::private_update_token().unwrap()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let mut child = spawn_exit_fixture(&dir, false);
+        let started = Instant::now();
+        assert!(finish_owned(&mut child, Duration::from_millis(60)).unwrap());
+        assert!(started.elapsed() >= Duration::from_millis(60));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(child.try_wait().unwrap().is_some());
+        assert!(!dir.join("opencode-exited").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn raw_config_interpolation_preserves_windows_paths_and_quotes() {
         for value in [r#"C:\app\tool-output\*"#, r#"synthetic-"key\value"#] {
@@ -295,10 +406,8 @@ mod tests {
     }
     #[test]
     fn shutdown_cleans_bootstrap_without_name_kill() {
-        let dir = std::env::temp_dir().join(format!(
-            "moviedesign_opencode_test_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("moviedesign_opencode_test_{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let dpapi = dir.join("launch.dpapi");
         let _ = fs::write(&dpapi, b"ephemeral");
@@ -306,9 +415,9 @@ mod tests {
             child: None,
             directory: dir.clone(),
         };
-        host.shutdown();
+        host.shutdown().unwrap();
         assert!(!dpapi.exists());
-        host.shutdown();
+        host.shutdown().unwrap();
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -36,12 +36,17 @@ try {
    const install={requestId:intent.installRequestId,candidateId:intent.candidateId,receiptId:intent.requestId,version:intent.version,currentVersion:native.report.currentVersion};
    insert.run('updates.install',intent.installRequestId,JSON.stringify(install),JSON.stringify({...install,status:'install_started'}));
   }finally{db.close();}
-  await evaluate(`localStorage.setItem(${JSON.stringify(key)},${JSON.stringify(JSON.stringify(intent))})`);
+  // Corrupted/lost local I must recover through the durable D -> I binding.
+  await evaluate(`localStorage.setItem(${JSON.stringify(key)},${JSON.stringify(JSON.stringify({...intent,installRequestId:'wrong-local-install'}))})`);
  } else {
   await wait(`document.body.innerText.includes('已保存原更新请求')`);
   assert.equal(await evaluate(`document.querySelector('[data-testid="update-check-btn"]').disabled`),true);
   await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='查询原更新请求').click()`);
   await wait(`document.body.innerText.includes('原安装请求：install_started')`);
+  await wait(`document.body.innerText.includes('原请求 controlled-recovery-install')`);
+  assert.equal(await evaluate(`[...document.querySelectorAll('button')].some(b=>b.textContent==='结束尚未开始安装的更新')`),false);
+  const discarded=await evaluate(`window.__TAURI_INTERNALS__.invoke('updater_discard',{candidateId:${JSON.stringify(intent.candidateId)},receiptId:'wrong-local-install',decisionId:${JSON.stringify(intent.requestId)},requestId:crypto.randomUUID()}).then(()=>true,()=>false)`);
+  assert.equal(discarded,false,'wrong local I cannot discard an existing durable installation');
   // Lost localStorage cannot hide the durable native ledger or cause auto-install.
   await evaluate(`localStorage.removeItem(${JSON.stringify(key)});location.reload()`);
   await wait(`document.body?.innerText.includes('本地服务已连接')`);
@@ -50,6 +55,16 @@ try {
   await evaluate(`[...document.querySelectorAll('summary')].find(s=>s.textContent==='应用更新原请求账本').click()`);
   await wait(`document.body.innerText.includes('controlled-recovery-install')`);
   assert.equal(await evaluate(`!!document.querySelector('[data-testid="update-approve-btn"]')`),false);
+  const neverPersisted={candidateId:'controlled-never-persisted',version:'2.0.0',decision:'approve',requestId:'never-D',installRequestId:'never-I'};
+  await evaluate(`localStorage.setItem(${JSON.stringify(key)},${JSON.stringify(JSON.stringify(neverPersisted))});location.reload()`);
+  await wait(`document.body?.innerText.includes('本地服务已连接')`);
+  await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='版本与更新').click()`);
+  await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='查询原更新请求').click()`);
+  await wait(`document.body.innerText.includes('原安装请求：absent')`);
+  await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='结束尚未开始安装的更新').click()`);
+  await wait(`!document.querySelector('[data-testid="update-check-btn"]').disabled`);
+  assert.equal(await evaluate(`localStorage.getItem(${JSON.stringify(key)})`),null);
+  assert(await evaluate(`document.body.innerText.includes('原确认 never-D')`),'deliberately finished absent request keeps original identity visible');
  }
  assert.deepEqual(exceptions,[]);
  const db=new DatabaseSync(join(dir,'moviedesign.db'),{readOnly:true});

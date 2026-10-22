@@ -52,3 +52,18 @@ test('gateway app ledger remains visible with lost local storage and never resum
  const h=harness(false,new Map(),{status:'ready',currentVersion:'0.1.0',platform:'win32',policyCacheAgeMs:0,resolved:{minSupportedVersion:'0.1.0',manualOnly:false},autoUpdateAllowed:true,updateHistory:[{status:'install_started',requestId:'durable-install',candidateId:'original-candidate',version:'2.0.0'}]});
  const rendered=JSON.stringify(h.render());assert(rendered.includes('durable-install'));assert(rendered.includes('结果待核对'));assert.equal(h.calls.length,0);assert.equal(h.map.size,0);
 });
+
+test('before-decision persistence failure can explicitly finish only authoritative absence after restart',async()=>{
+ const h=harness();await h.check();h.button('update-approve-btn').props.onClick();await h.settle();h.calls.find(c=>c.name==='updater_decide').reject(Error('database unavailable before persistence'));await h.settle();assert(h.map.size);
+ const restarted=harness(false,h.map);assert.equal(restarted.calls.length,0);const click=label=>find(restarted.render(),n=>n.type==='button'&&n.props.children===label).props.onClick();
+ click('查询原更新请求');await restarted.settle();restarted.calls.at(-1).resolve({status:'absent',candidateId:'candidate-1',canDiscard:true});await restarted.settle();
+ const end=find(restarted.render(),n=>n.type==='button'&&n.props.children==='结束尚未开始安装的更新');assert(end,'authoritative never-persisted intent needs an explicit finish path');end.props.onClick();await restarted.settle();assert.equal(restarted.calls.at(-1).name,'updater_discard');restarted.calls.at(-1).resolve();await restarted.settle();assert.equal(restarted.map.size,0);assert(!restarted.button('update-check-btn').props.disabled);assert.equal(restarted.calls.filter(c=>c.name==='updater_install').length,0);
+});
+test('wrong install identity recovers original durable intent and transport uncertainty never enables clear',async()=>{
+ const original={candidateId:'C',version:'2.0.0',requestId:'D',installRequestId:'wrong-I',decision:'approve'};const h=harness(false,new Map([['moviedesign.update.pending.v1',JSON.stringify(original)]]));
+ const query=()=>find(h.render(),n=>n.type==='button'&&n.props.children==='查询原更新请求').props.onClick();query();await h.settle();h.calls.at(-1).resolve({status:'install_started',candidateId:'C',requestId:'original-I',receiptId:'D',canDiscard:false});await h.settle();assert(JSON.stringify(h.render()).includes('original-I'));assert(!find(h.render(),n=>n.type==='button'&&n.props.children==='结束尚未开始安装的更新'));assert(h.map.size);
+ query();await h.settle();h.calls.at(-1).reject(Error('transport acceptance unknown'));await h.settle();assert(h.map.size);assert(!find(h.render(),n=>n.type==='button'&&n.props.children==='结束尚未开始安装的更新'));assert.equal(h.calls.filter(c=>c.name==='updater_install'||c.name==='updater_discard').length,0);
+});
+test('missing local IDs still allow read-only recovery by durable candidate binding',async()=>{
+ const record={candidateId:'C',version:'2.0.0',decision:'approve'};const h=harness(false,new Map([['moviedesign.update.pending.v1',JSON.stringify(record)]]));const query=find(h.render(),n=>n.type==='button'&&n.props.children==='查询原更新请求');assert(query,'candidate binding should remain recoverable when local IDs are missing');query.props.onClick();await h.settle();assert.equal(h.calls[0].args.candidateId,'C');h.calls[0].resolve({status:'install_started',candidateId:'C',requestId:'original-I',receiptId:'original-D',canDiscard:false});await h.settle();assert(JSON.stringify(h.render()).includes('original-I'));assert(h.map.size);assert.equal(h.calls.length,1);
+});

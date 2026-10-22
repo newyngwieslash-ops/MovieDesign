@@ -13,6 +13,29 @@ mod update_runtime {
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        fn discard_requires_authoritative_preinstall_state() {
+            assert!(!discardable(
+                &json!({"candidateId":"C","status":"install_started","requestId":"original-I","canDiscard":false}),
+                "C"
+            ));
+            assert!(!discardable(
+                &json!({"candidateId":"C","status":"approve","canDiscard":false}),
+                "C"
+            ));
+            assert!(discardable(
+                &json!({"candidateId":"C","status":"absent","canDiscard":true}),
+                "C"
+            ));
+            assert!(!discardable(
+                &json!({"candidateId":"other","status":"absent","canDiscard":true}),
+                "C"
+            ));
+            assert!(!discardable(
+                &json!({"candidateId":"C","status":"absent"}),
+                "C"
+            ));
+        }
         use crate::updates::tests::{PUBLIC_KEY_RAW, SIGNATURE_RAW};
         use base64::Engine as _;
         use std::{

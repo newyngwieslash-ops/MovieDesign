@@ -154,14 +154,14 @@ export function UpdateSettings({
   const [errorMessage, setErrorMessage] = useState<string>('');
 
   const key = 'moviedesign.update.pending.v1';
-  type Intent = {candidateId: string; version: string; decision: 'approve'|'reject'; requestId: string; installRequestId: string};
+  type Intent = {candidateId: string; version: string; decision: 'approve'|'reject'; requestId?: string; installRequestId?: string};
   const [saved] = useState(() => {
     try {
       const raw = localStorage.getItem(key);
       if (raw === null) return {intent: null, error: ''};
       const value: unknown = JSON.parse(raw);
       const v = value as Intent;
-      if (!v || !['candidateId','version','requestId','installRequestId'].every(k => typeof (v as Record<string,unknown>)[k] === 'string' && (v as Record<string,string>)[k].length > 0) || !['approve','reject'].includes(v.decision)) throw Error('原更新请求损坏，请保留记录并核对状态。');
+      if (!v || !['candidateId','version'].every(k => typeof (v as Record<string,unknown>)[k] === 'string' && (v as Record<string,string>)[k].length > 0) || !['requestId','installRequestId'].every(k => (v as Record<string,unknown>)[k] === undefined || typeof (v as Record<string,unknown>)[k] === 'string') || !['approve','reject'].includes(v.decision)) throw Error('原更新请求损坏，请保留记录并核对状态。');
       return {intent: v, error: ''};
     } catch(e) { return {intent: null, error: (e as Error).message}; }
   });
@@ -218,10 +218,11 @@ export function UpdateSettings({
   }
   async function recover() {
     if(!intent||owner.current.locked||storageError)return;
-    owner.current.locked=true;setDeciding(true);
+    owner.current.locked=true;setDeciding(true);setCanDiscard(false);
+    const encoded=JSON.stringify(intent);
     try {
-      const receipt=await invoke<{status:string}>('updater_receipt',{receiptId:intent.installRequestId,decisionId:intent.requestId,requestId:newRequestID()});
-      if(owner.current.alive){setProgress(`原安装请求：${receipt.status}（仅查询，不重复安装）`);setCanDiscard(['approve','reject'].includes(receipt.status));}
+      const receipt=await invoke<{status:string;requestId?:string;candidateId?:string;canDiscard?:boolean}>('updater_receipt',{receiptId:intent.installRequestId ?? '',decisionId:intent.requestId ?? '',candidateId:intent.candidateId,requestId:newRequestID()});
+      if(owner.current.alive&&localStorage.getItem(key)===encoded){setProgress(`原安装请求：${receipt.status}${receipt.requestId ? ` · 原请求 ${receipt.requestId}` : ''}（仅查询，不重复安装）`);setCanDiscard(receipt.canDiscard===true&&receipt.candidateId===intent.candidateId&&['approve','reject','absent'].includes(receipt.status));}
     }catch(e){if(owner.current.alive)setErrorMessage((e as Error).message ?? String(e));}
     finally{owner.current.locked=false;if(owner.current.alive)setDeciding(false);}
   }
@@ -231,9 +232,9 @@ export function UpdateSettings({
     const encoded=JSON.stringify(intent);
     try {
       if(localStorage.getItem(key)!==encoded)throw Error('原更新请求已改变，请刷新核对。');
-      await invoke('updater_discard',{candidateId:intent.candidateId,receiptId:intent.installRequestId,decisionId:intent.requestId,requestId:newRequestID()});
+      await invoke('updater_discard',{candidateId:intent.candidateId,receiptId:intent.installRequestId ?? '',decisionId:intent.requestId ?? '',requestId:newRequestID()});
       if(!owner.current.alive||localStorage.getItem(key)!==encoded)return;
-      localStorage.removeItem(key);setIntent(null);setNativeReport(null);owner.current.candidateId='';setCanDiscard(false);setProgress('已结束尚未开始安装的更新。可重新检查并确认新候选。');
+      localStorage.removeItem(key);setIntent(null);setNativeReport(null);owner.current.candidateId='';setCanDiscard(false);setProgress(`已结束尚未开始安装的更新（原确认 ${intent.requestId || '未保留'}，原安装 ${intent.installRequestId || '未保留'}，候选 ${intent.candidateId}）。可重新检查并确认新候选。`);
     }catch(e){if(owner.current.alive)setErrorMessage((e as Error).message ?? String(e));}
     finally{owner.current.locked=false;if(owner.current.alive)setDeciding(false);}
   }
@@ -318,7 +319,7 @@ export function UpdateSettings({
           <button data-testid="update-approve-btn" disabled={deciding || !!intent || !!storageError} onClick={()=>void decide(nativeReport,'approve')}>批准下载并安装此版本</button>
           <button data-testid="update-reject-btn" disabled={deciding || !!intent || !!storageError} onClick={()=>void decide(nativeReport,'reject')}>拒绝</button>
         </DecisionFrame>}
-        {intent && <p>已保存原更新请求 {intent.installRequestId}。<button disabled={deciding || !!storageError} onClick={()=>void recover()}>查询原更新请求</button>{canDiscard && <button disabled={deciding || !!storageError} onClick={()=>void discard()}>结束尚未安装的更新</button>}</p>}
+        {intent && <p>已保存原更新请求 {intent.installRequestId || intent.requestId || intent.candidateId}。<button disabled={deciding || !!storageError} onClick={()=>void recover()}>查询原更新请求</button>{canDiscard && <button disabled={deciding || !!storageError} onClick={()=>void discard()}>结束尚未开始安装的更新</button>}</p>}
         {progress && <p role="status">{progress}</p>}
         {storageError && <p role="alert">无法安全保存更新确认：{storageError}</p>}
         {!!snap?.updateHistory?.length && <details><summary>应用更新原请求账本</summary>{snap.updateHistory.map(r=><p key={`${r.status}-${r.requestId}`}>{r.version} · {r.status} · 原请求 {r.requestId}{r.status==='install_started'?'（安装意图已保存，结果待核对；不会自动重装）':''}</p>)}</details>}

@@ -13,12 +13,14 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/tasks"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/updates"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/workspace"
@@ -88,6 +90,19 @@ func (s *Server) Close() error {
 		s.chat.Close()
 	}
 	s.tasks.Close()
+	// A failed native spawn (notably a port conflict) must not send management
+	// traffic to an unrelated listener. Native records that failure before exit.
+	_, launchState := os.Stat(filepath.Join(s.agentBootstrap, "error.txt"))
+	if s.agentHost != nil && s.agentBootstrap != "" && os.IsNotExist(launchState) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		slog.Info("opencode_dispose_started")
+		if e := s.agentHost.Dispose(ctx); e != nil {
+			slog.Warn("opencode_dispose_failed", "reason", e)
+		} else {
+			slog.Info("opencode_dispose_accepted")
+		}
+		cancel()
+	}
 	if s.workspace != nil {
 		if s.chat != nil && s.chat.Skills != nil {
 			_ = s.chat.Skills.Close()

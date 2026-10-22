@@ -7,7 +7,7 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 pub fn private_update_token() -> Result<String, String> {
@@ -152,7 +152,9 @@ impl Gateway {
             Ok(())
         })();
         if let Err(error) = result {
-            gateway.shutdown();
+            if let Err(error) = gateway.shutdown() {
+                eprintln!("owned_startup_cleanup_failed: {error}");
+            }
             gateway.connection.error = Some(format!(
                 "{error}。日志：{}",
                 data_dir.join("logs").display()
@@ -215,11 +217,9 @@ impl Gateway {
         ))
     }
 
-    pub fn shutdown(&mut self) {
-        // Stop the owned model runtime before draining the gateway. No PID/port-wide termination.
-        if let Some(mut agent) = self.agent.take() {
-            agent.shutdown();
-        }
+    pub fn shutdown(&mut self) -> Result<(), String> {
+        // Keep OpenCode alive while Go drains/aborts/disconnects and attempts its
+        // authenticated global.dispose; only then reap the owned model process.
         if let Some(mut child) = self.child.take() {
             if let Some(mut stdin) = self.stdin.take() {
                 let _ = writeln!(
@@ -230,26 +230,37 @@ impl Gateway {
                 let _ = stdin.flush();
                 // Dropping stdin also makes the gateway exit if the shutdown frame was lost.
             }
-            let deadline = Instant::now() + Duration::from_secs(4);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    _ if Instant::now() >= deadline => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
+            match crate::opencode::finish_owned(&mut child, Duration::from_secs(6)) {
+                Ok(forced) => eprintln!(
+                    "owned_gateway_stop={}",
+                    if forced {
+                        "terminated_after_shutdown_grace"
+                    } else {
+                        "natural_exit"
                     }
-                    _ => thread::sleep(Duration::from_millis(30)),
+                ),
+                Err(error) => {
+                    self.child = Some(child);
+                    return Err(error);
                 }
             }
         }
+        if let Some(mut agent) = self.agent.take() {
+            if let Err(error) = agent.shutdown() {
+                self.agent = Some(agent);
+                return Err(error);
+            }
+        }
         self.connection.port = None;
+        Ok(())
     }
 }
 
 impl Drop for Gateway {
     fn drop(&mut self) {
-        self.shutdown();
+        if let Err(error) = self.shutdown() {
+            eprintln!("owned_gateway_stop_failed: {error}");
+        }
     }
 }
 
@@ -272,6 +283,39 @@ fn parse_response(line: &str, id: u64) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shutdown_drains_gateway_while_opencode_is_alive_then_waits_for_owned_exit() {
+        let dir = std::env::temp_dir().join(format!(
+            "moviedesign-lifecycle-{}",
+            private_update_token().unwrap()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let mut child = crate::opencode::tests::spawn_exit_fixture(&dir, true);
+        let stdin = child.stdin.take();
+        let agent = crate::opencode::Opencode::controlled_child(
+            crate::opencode::tests::spawn_exit_fixture(&dir, false),
+            dir.clone(),
+        );
+        let (_tx, responses) = mpsc::channel();
+        let mut gateway = Gateway {
+            update_token: String::new(),
+            child: Some(child),
+            stdin,
+            responses,
+            connection: Connection {
+                port: Some(8001),
+                error: None,
+            },
+            agent: Some(agent),
+        };
+        gateway.shutdown().unwrap();
+        assert!(
+            dir.join("gateway-drained").exists(),
+            "gateway must receive its existing normal shutdown frame"
+        );
+        assert!(dir.join("opencode-exited").exists(),"owned OpenCode must stay alive during gateway drain and get a natural exit opportunity");
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn validates_control_responses() {
         assert_eq!(
@@ -302,9 +346,9 @@ mod tests {
             },
             agent: None,
         };
-        gw.shutdown();
+        gw.shutdown().unwrap();
         assert_eq!(gw.connection.port, None);
-        gw.shutdown();
+        gw.shutdown().unwrap();
         assert_eq!(gw.connection.port, None);
     }
 }

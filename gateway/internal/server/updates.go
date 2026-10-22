@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -26,6 +27,58 @@ type updateControlRequest struct {
 	CurrentVersion    string `json:"currentVersion,omitempty"`
 	Decision          string `json:"decision,omitempty"`
 	DecisionReceiptID string `json:"decisionReceiptId,omitempty"`
+}
+
+// Resolve durable bindings before interpreting a missing local install ID. The
+// read transaction makes an explicit absence result a single storage snapshot.
+func (s *Server) recoverUpdate(ctx context.Context, req updateControlRequest) (map[string]any, error) {
+	decisionID := req.DecisionReceiptID
+	if decisionID == "" {
+		decisionID = req.ReceiptID
+	}
+	tx, e := s.db.BeginTx(ctx, nil)
+	if e != nil {
+		return nil, e
+	}
+	defer tx.Rollback()
+	var operation, id, input, state string
+	var response sql.NullString
+	e = tx.QueryRowContext(ctx, `SELECT operation,request_id,input_json,state,response_json FROM write_requests WHERE project_id='_app' AND operation IN ('updates.install','updates.decision') AND ((?<>'' AND request_id=?) OR (?<>'' AND request_id=?) OR (?<>'' AND json_extract(input_json,'$.candidateId')=?) OR (operation='updates.install' AND ?<>'' AND json_extract(input_json,'$.receiptId')=?)) ORDER BY CASE operation WHEN 'updates.install' THEN 0 ELSE 1 END,rowid DESC LIMIT 1`, req.ReceiptID, req.ReceiptID, decisionID, decisionID, req.CandidateID, req.CandidateID, decisionID, decisionID).Scan(&operation, &id, &input, &state, &response)
+	if errors.Is(e, sql.ErrNoRows) {
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+		return map[string]any{"status": "absent", "candidateId": req.CandidateID, "decisionRequestId": req.DecisionReceiptID, "installRequestId": req.ReceiptID, "canDiscard": req.CandidateID != ""}, nil
+	}
+	if e != nil {
+		return nil, e
+	}
+	if state != "completed" || !response.Valid {
+		return nil, store.ErrRequestPending
+	}
+	var got map[string]any
+	var original updateControlRequest
+	if json.Unmarshal([]byte(response.String), &got) != nil || json.Unmarshal([]byte(input), &original) != nil || original.CandidateID == "" {
+		return nil, errors.New("invalid stored update receipt")
+	}
+	if operation == "updates.install" {
+		if got["status"] != "install_started" || original.ReceiptID == "" {
+			return nil, errors.New("invalid stored installation intent")
+		}
+		got["receiptId"] = original.ReceiptID
+		got["canDiscard"] = false
+	} else {
+		if got["status"] != "approve" && got["status"] != "reject" {
+			return nil, errors.New("invalid stored decision")
+		}
+		got["canDiscard"] = true
+	}
+	got["candidateId"] = original.CandidateID
+	got["requestId"] = id
+	if e = tx.Commit(); e != nil {
+		return nil, e
+	}
+	return got, nil
 }
 
 func (s *Server) serveUpdateControl(w http.ResponseWriter, r *http.Request) {
@@ -58,20 +111,12 @@ func (s *Server) serveUpdateControl(w http.ResponseWriter, r *http.Request) {
 		return []byte(b), e
 	}
 	if action == "receipt" {
-		b, e := readReceipt(req.ReceiptID, "updates.install")
-		if errors.Is(e, sql.ErrNoRows) {
-			id := req.ReceiptID
-			if req.DecisionReceiptID != "" {
-				id = req.DecisionReceiptID
-			}
-			b, e = readReceipt(id, "updates.decision")
-		}
+		got, e := s.recoverUpdate(r.Context(), req)
 		if e != nil {
 			objectError(w, e)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(b)
+		respond(w, http.StatusOK, got)
 		return
 	}
 	if action == "history" {
