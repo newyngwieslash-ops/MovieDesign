@@ -218,6 +218,7 @@ func TestSupplierUncertaintySurvivesNativeError(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	waitChat(t, func() bool { return f.chat.Turns.Current().TurnID != "" })
 	s := f.chat.Turns.Current()
 	_, e = f.chat.DB.Exec("INSERT INTO inference_requests(turn_id,step,fingerprint,state,created_at)VALUES(?,1,'fixture','unknown',1)", s.TurnID)
 	if e != nil {

@@ -107,6 +107,7 @@ func inferenceCredential(payload []byte, text, tail string, secrets ...string) (
 	// Token returns actual decoded strings, including object keys. Serializing
 	// them again would escape &, <, >, quotes and backslashes and hide a match.
 	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
 	for {
 		token, err := decoder.Token()
 		if err != nil {

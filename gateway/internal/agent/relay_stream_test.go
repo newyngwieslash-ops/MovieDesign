@@ -481,6 +481,53 @@ func TestRelayRejectsEscapedCredentialMetadataBeforeJournalAndSuffix(t *testing.
 	}
 }
 
+func TestRelayCredentialScanHandlesLargeJSONNumbers(t *testing.T) {
+	for _, buffered := range []bool{false, true} {
+		for _, reflection := range []bool{false, true} {
+			t.Run(fmt.Sprintf("buffered=%v/reflection=%v", buffered, reflection), func(t *testing.T) {
+				secret := "fixture&private"
+				id := "harmless metadata"
+				if reflection {
+					id = secret
+				}
+				encoded, _ := json.Marshal(id)
+				prefix := "data: {\"choices\":[{\"delta\":{\"content\":\"safe prefix\"}}]}\n\n"
+				metadata := "data: {\"created\":1e1000,\"id\":" + string(encoded) + ",\"choices\":[{\"delta\":{},\"finish_reason\":null}]}\n\n"
+				between := ""
+				if buffered {
+					between = "data: {\"vendor_metadata\":true}\n\n"
+				}
+				terminal := "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+				body := prefix + between + metadata + terminal
+				f := newStreamFixture(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) })
+				f.relay.key = secret
+				response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[]}`)
+				b, err := io.ReadAll(response.Body)
+				var state string
+				var count int
+				f.db.QueryRow("SELECT state FROM inference_requests WHERE turn_id=?", f.scope.TurnID).Scan(&state)
+				f.db.QueryRow("SELECT count(*) FROM inference_stream WHERE turn_id=?", f.scope.TurnID).Scan(&count)
+				if reflection {
+					if err == nil || string(b) != prefix || state != "unknown" || count != 1 {
+						t.Errorf("large number hid later credential: bytes=%d read_error=%v state=%s journal=%d", len(b), err, state, count)
+					}
+				} else {
+					wantCount := 2
+					if buffered {
+						wantCount = 1
+					}
+					if err != nil || string(b) != body || state != "completed" || count != wantCount {
+						t.Errorf("valid large-number metadata changed: bytes=%d read_error=%v state=%s journal=%d", len(b), err, state, count)
+					}
+				}
+				if f.calls.Load() != 1 {
+					t.Fatal("supplier POST repeated", f.calls.Load())
+				}
+			})
+		}
+	}
+}
+
 func TestChatStartupRecoveryAdoptsRetainedNativeTextWithoutDuplicate(t *testing.T) {
 	prefix := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
 	f := newStreamFixture(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, prefix) })
