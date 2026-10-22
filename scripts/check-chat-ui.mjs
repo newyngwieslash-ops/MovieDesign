@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import {setImmediate as tick} from 'node:timers/promises';
 const require=createRequire(import.meta.url),ts=require('../desktop/node_modules/typescript'),React=require('../desktop/node_modules/react'),{renderToStaticMarkup}=require('../desktop/node_modules/react-dom/server');
 const {QueryClient,QueryObserver}=require('../desktop/node_modules/@tanstack/react-query');
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function load(file,dependencies={},globals={}) {const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../desktop/src/'+file,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{module,exports:module.exports,console,crypto,TextEncoder,JSON,Error,setTimeout,clearTimeout,AbortController,structuredClone,...globals,require:n=>dependencies[n]??(n==='react'?React:n==='react/jsx-runtime'?require('../desktop/node_modules/react/jsx-runtime'): {})});return module.exports;}
 test('actual assistant and tool output render hostile strings literally',()=>{
  const {AssistantMessage}=load('features/chat/AssistantMessage.tsx');
@@ -182,4 +183,20 @@ test('H15a I1 task_changed during first GET discards the old snapshot and requir
   assert.equal(h.button('恢复已批准的原任务'),undefined);assert.equal(h.map.get(h.key),status==='completed'?undefined:billingIntent);assert.equal(h.requests.filter(r=>r.method==='POST').length,0);assert.equal(other.requests.length,1);assert.equal(other.map.get(other.key),billingIntent);assert(JSON.stringify(h.render()).includes('saved quote'));
   cleanups.forEach(fn=>fn?.());h.unmount();other.unmount();
  }
+});
+
+test('typed text bursts leave task GETs and questions alone while business and unknown chat events still refresh',async t=>{
+ const client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}}),hooks=[],effects=[];let cursor=0,listener,reconnect,questionReads=0,reads=0,aborted=0,completed=0,otherReads=0;
+ const react={useState(init){const i=cursor++;hooks[i]??=init;return[hooks[i],v=>hooks[i]=v]},useRef(init){return hooks[cursor++]??={current:init}},useEffect(fn){const i=cursor++;if(!(i in hooks)){hooks[i]=true;effects.push(fn)}}},jsx=(type,props)=>({type,props});
+ const {ConfirmationCards}=load('features/questions/ConfirmationCard.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':{useQueryClient:()=>client},'../../gateway':{api:async()=>{questionReads++;return {items:[]}}},'../../events':{subscribeEvents:(_p,cb,refresh)=>{listener=cb;reconnect=refresh;return()=>{}}}},{setInterval:()=>0,clearInterval(){}});
+ ConfirmationCards({projectID:'p'});const cleanups=effects.map(fn=>fn());await tick();
+ const observer=new QueryObserver(client,{queryKey:['project','p','tasks'],queryFn:({signal})=>{reads++;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{completed++;resolve({items:[]})},100);signal.addEventListener('abort',()=>{aborted++;clearTimeout(timer);reject(Error('aborted'))},{once:true})})}}),unsubscribe=observer.subscribe(()=>{});
+ const other=new QueryObserver(client,{queryKey:['project','other','tasks'],queryFn:async()=>{otherReads++;return {items:[]}}}),unother=other.subscribe(()=>{});
+ try {
+  for(let id=1;id<=12;id++){listener({id,type:'chat_message',project_id:'p',session_id:'s',payload:{session_id:'s',message_id:'m',part_id:'part',step:1,part_type:'text',type:'content_delta',content_delta:'prefix '}});await delay(20)}
+  assert(completed>0,'an active task GET must complete during text streaming');assert.equal(reads,1,'text deltas must not restart task reads');assert.equal(aborted,0);assert.equal(questionReads,1,'text deltas must not restart question reads');
+  t.diagnostic(`typed text burst: ${JSON.stringify({events:12,reads,aborted,completed,questionReads,otherReads})}`);
+  for(const event of [{type:'task_changed'},{type:'question_changed'},{type:'chat_done'},{type:'chat_message',payload:{part_type:'tool',type:'tool_result',tool:'question'}},{type:'chat_message',payload:{part_type:'future'}},{type:'chat_message',payload:{part_type:'text',type:'content_delta',content_delta:'mixed',tool_input:{question:'read'}}}]){const previous=reads,questions=questionReads;listener({project_id:'p',session_id:'s',payload:{},...event});await tick();assert.equal(reads,previous+1);assert.equal(questionReads,questions+1)}
+  const before=reads;reconnect();await tick();assert.equal(reads,before+1);assert.equal(otherReads,1,'project invalidation remains isolated');
+ } finally {cleanups.forEach(fn=>fn?.());unsubscribe();unother();client.clear()}
 });

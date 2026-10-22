@@ -279,12 +279,21 @@ pub async fn updater_policy(app: AppHandle) -> Result<Value, String> {
 #[tauri::command]
 pub async fn updater_receipt(
     app: AppHandle,
+    state: State<'_, Mutex<UpdateRuntime>>,
     receipt_id: String,
     decision_id: Option<String>,
     candidate_id: Option<String>,
     request_id: String,
 ) -> Result<Value, String> {
-    control(&connection(&app)?, "/internal/updates/receipt", json!({"requestId":request_id,"receiptId":receipt_id,"decisionReceiptId":decision_id.unwrap_or_default(),"candidateId":candidate_id.unwrap_or_default()})).await
+    let candidate = candidate_id.unwrap_or_default();
+    let mut receipt = control(&connection(&app)?, "/internal/updates/receipt", json!({"requestId":request_id,"receiptId":receipt_id,"decisionReceiptId":decision_id.unwrap_or_default(),"candidateId":candidate})).await?;
+    let version = &app.package_info().version;
+    receipt["canFinish"] = json!(
+        !state.lock().map_err(|_| "更新状态锁不可用")?.busy
+            && finishable(&receipt, &candidate, version)
+    );
+    receipt["nativeCurrentVersion"] = json!(version.to_string());
+    Ok(receipt)
 }
 
 #[tauri::command]
@@ -295,15 +304,17 @@ pub async fn updater_discard(
     receipt_id: String,
     decision_id: String,
     request_id: String,
-) -> Result<(), String> {
+) -> Result<Value, String> {
     let _operation = begin(&state)?;
-    let receipt = control(
+    let mut receipt = control(
         &connection(&app)?,
         "/internal/updates/receipt",
         json!({"requestId":request_id,"receiptId":receipt_id,"decisionReceiptId":decision_id,"candidateId":candidate_id}),
     )
     .await?;
-    if !discardable(&receipt, &candidate_id) {
+    let version = &app.package_info().version;
+    let reached = finishable(&receipt, &candidate_id, version);
+    if !discardable(&receipt, &candidate_id) && !reached {
         return Err("已存在安装意图或未知结果，保留原请求并核对安装状态".into());
     }
     let mut runtime = state.lock().map_err(|_| "更新状态锁不可用")?;
@@ -314,7 +325,9 @@ pub async fn updater_discard(
     {
         runtime.candidate = None;
     }
-    Ok(())
+    receipt["canFinish"] = json!(reached);
+    receipt["nativeCurrentVersion"] = json!(version.to_string());
+    Ok(receipt)
 }
 
 fn discardable(receipt: &Value, candidate: &str) -> bool {
@@ -324,4 +337,21 @@ fn discardable(receipt: &Value, candidate: &str) -> bool {
             receipt["status"].as_str(),
             Some("approve" | "reject" | "absent")
         )
+}
+
+fn finishable(receipt: &Value, candidate: &str, version: &semver::Version) -> bool {
+    let Some(target) = receipt["version"]
+        .as_str()
+        .and_then(|v| semver::Version::parse(v).ok())
+    else {
+        return false;
+    };
+    !candidate.is_empty()
+        && receipt["candidateId"].as_str() == Some(candidate)
+        && receipt["status"].as_str() == Some("install_started")
+        && receipt["canDiscard"].as_bool() == Some(false)
+        && ["requestId", "receiptId"]
+            .iter()
+            .all(|key| receipt[key].as_str().is_some_and(|id| !id.is_empty()))
+        && version.cmp_precedence(&target).is_ge()
 }

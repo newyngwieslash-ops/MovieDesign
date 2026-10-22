@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { APIError, api, newRequestID } from '../../gateway';
 import { subscribeEvents } from '../../events';
 import { readIntent, clearIntent, type Intent } from './pending';
+import type { Part } from '../chat/messages';
 import type { ComponentProps } from 'react';
 
 export function DecisionFrame({title, children, className='confirmation-card', ...props}: ComponentProps<'section'> & {title: string}) {
@@ -100,7 +101,11 @@ export function ConfirmationCards({projectID,sessionID}: {projectID: string; ses
   };
   load.current = refresh;
   let unsubscribe = () => {};
-  try { unsubscribe = subscribeEvents(projectID, event => {if(event.type.startsWith('question_')||event.type==='task_changed'||event.type==='chat_message'||event.type==='chat_done')refresh();},refresh,sessionID); } catch { setError('无法保存重连游标，请刷新确认状态。'); }
+  try { unsubscribe = subscribeEvents(projectID, event => {
+   const part = event.payload as Part | null;
+   if(event.type==='chat_message'&&part?.part_type==='text'&&part.type==='content_delta'&&typeof part.content_delta==='string'&&!part.call_id&&!part.tool&&!part.state&&part.tool_input===undefined&&part.tool_output===undefined)return;
+   if(event.type.startsWith('question_')||event.type==='task_changed'||event.type==='chat_message'||event.type==='chat_done')refresh();
+  },refresh,sessionID); } catch { setError('无法保存重连游标，请刷新确认状态。'); }
   refresh();
   return () => { alive=false; unsubscribe(); };
  },[projectID,sessionID,client]);

@@ -36,6 +36,42 @@ mod update_runtime {
                 "C"
             ));
         }
+        #[test]
+        fn reached_target_requires_native_semver_and_canonical_install_authority() {
+            let receipt = json!({"candidateId":"C","status":"install_started","requestId":"canonical-I","receiptId":"canonical-D","version":"2.0.0+target","canDiscard":false,"nativeCurrentVersion":"99.0.0","canFinish":true});
+            for running in ["2.0.0", "2.0.0+aaa", "2.0.1", "3.0.0-beta.1"] {
+                assert!(
+                    finishable(&receipt, "C", &semver::Version::parse(running).unwrap()),
+                    "native {running} has reached the durable target"
+                );
+            }
+            for running in ["1.9.9", "2.0.0-beta.1"] {
+                assert!(!finishable(
+                    &receipt,
+                    "C",
+                    &semver::Version::parse(running).unwrap()
+                ));
+            }
+            let running = semver::Version::parse("9.0.0").unwrap();
+            assert!(!finishable(&receipt, "other", &running));
+            for (field, value) in [
+                ("status", json!("pending")),
+                ("status", json!("approve")),
+                ("candidateId", json!("")),
+                ("requestId", Value::Null),
+                ("receiptId", json!("")),
+                ("version", Value::Null),
+                ("version", json!("broken")),
+                ("canDiscard", json!(true)),
+            ] {
+                let mut invalid = receipt.clone();
+                invalid[field] = value;
+                assert!(
+                    !finishable(&invalid, "C", &running),
+                    "invalid canonical {field} must remain blocked"
+                );
+            }
+        }
         use crate::updates::tests::{PUBLIC_KEY_RAW, SIGNATURE_RAW};
         use base64::Engine as _;
         use std::{

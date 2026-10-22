@@ -67,3 +67,28 @@ test('wrong install identity recovers original durable intent and transport unce
 test('missing local IDs still allow read-only recovery by durable candidate binding',async()=>{
  const record={candidateId:'C',version:'2.0.0',decision:'approve'};const h=harness(false,new Map([['moviedesign.update.pending.v1',JSON.stringify(record)]]));const query=find(h.render(),n=>n.type==='button'&&n.props.children==='查询原更新请求');assert(query,'candidate binding should remain recoverable when local IDs are missing');query.props.onClick();await h.settle();assert.equal(h.calls[0].args.candidateId,'C');h.calls[0].resolve({status:'install_started',candidateId:'C',requestId:'original-I',receiptId:'original-D',canDiscard:false});await h.settle();assert(JSON.stringify(h.render()).includes('original-I'));assert(h.map.size);assert.equal(h.calls.length,1);
 });
+
+test('native reached-version proof enables only explicit local finish and retains canonical audit IDs',async()=>{
+ for(const ids of [{requestId:'D',installRequestId:'I'},{requestId:'wrong-D',installRequestId:'wrong-I'},{}]){
+  const key='moviedesign.update.pending.v1',original={candidateId:'C',version:'forged-local-version',decision:'approve',...ids},encoded=JSON.stringify(original);
+  const h=harness(false,new Map([[key,encoded]]),{currentVersion:'9.0.0',resolved:{minSupportedVersion:'0.1.0',manualOnly:false}});
+  const click=label=>find(h.render(),n=>n.type==='button'&&n.props.children===label)?.props.onClick();
+  click('查询原更新请求');await h.settle();const canonical={status:'install_started',candidateId:'C',requestId:'canonical-I',receiptId:'canonical-D',version:'2.0.0',nativeCurrentVersion:'2.0.0+running',canDiscard:false,canFinish:true};h.calls.at(-1).resolve(canonical);await h.settle();
+  const finish=find(h.render(),n=>n.type==='button'&&n.props.children==='结束已达到目标版本的本地恢复提示');assert(finish,'native actual version satisfying canonical target needs explicit local finish');assert(h.button('update-check-btn').props.disabled);assert.equal(h.map.get(key),encoded);
+  finish.props.onClick();finish.props.onClick();await h.settle();const request=h.calls.at(-1);assert.equal(request.name,'updater_discard');assert.equal(h.calls.filter(c=>c.name==='updater_discard').length,1);assert.equal(request.args.version,undefined,'renderer version is never a finish authority');request.resolve(canonical);await h.settle();
+  assert.equal(h.map.size,0);assert(!h.button('update-check-btn').props.disabled);const text=JSON.stringify(h.render());assert(text.includes('canonical-I')&&text.includes('canonical-D')&&text.includes('2.0.0+running')&&text.includes('install_started'));assert(!text.includes('已结束尚未开始安装'));
+  await h.check('fresh-candidate');assert(h.button('update-approve-btn'));assert.equal(h.calls.filter(c=>c.name==='updater_install'||c.name==='updater_decide').length,0);h.unmount();
+ }
+});
+
+test('unproved or changed update recovery never retires a local installation reminder',async()=>{
+ for(const mode of ['old-native','wrong-candidate','pending','query-error','finish-error','finish-unproved','finish-wrong-candidate','finish-pending','storage-before','storage-changed','unmounted']){
+  const key='moviedesign.update.pending.v1',encoded=JSON.stringify({candidateId:'C',version:'0.0.1',decision:'approve',requestId:'D',installRequestId:'I'}),h=harness(false,new Map([[key,encoded]]),{currentVersion:'99.0.0',resolved:{minSupportedVersion:'0.1.0',manualOnly:false}});
+  find(h.render(),n=>n.type==='button'&&n.props.children==='查询原更新请求').props.onClick();await h.settle();const proof={status:mode==='pending'?'pending':'install_started',candidateId:mode==='wrong-candidate'?'other':'C',requestId:'canonical-I',receiptId:'canonical-D',version:'2.0.0',nativeCurrentVersion:'1.0.0',canDiscard:false,canFinish:!['old-native','pending'].includes(mode)};
+  if(mode==='query-error')h.calls.at(-1).reject(Error('query unavailable'));else h.calls.at(-1).resolve(proof);await h.settle();
+  const finish=find(h.render(),n=>n.type==='button'&&n.props.children==='结束已达到目标版本的本地恢复提示');
+  if(['old-native','wrong-candidate','pending','query-error'].includes(mode))assert(!finish,mode);
+  else {assert(finish);if(mode==='storage-before')h.map.set(key,'new-owner');finish.props.onClick();await h.settle();if(mode==='storage-before')assert.equal(h.calls.filter(c=>c.name==='updater_discard').length,0);else {if(mode==='storage-changed')h.map.set(key,'new-owner');if(mode==='unmounted')h.unmount();if(mode==='finish-error')h.calls.at(-1).reject(Error('native recheck refused'));else h.calls.at(-1).resolve({...proof,...(mode==='finish-unproved'?{canFinish:false}:mode==='finish-wrong-candidate'?{candidateId:'other'}:mode==='finish-pending'?{status:'pending'}:{})});await h.settle();}}
+  assert.equal(h.map.get(key),mode.startsWith('storage-')?'new-owner':encoded,mode);assert.equal(h.calls.filter(c=>c.name==='updater_install').length,0);h.unmount();
+ }
+});

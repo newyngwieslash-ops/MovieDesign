@@ -79,6 +79,8 @@ export type NativeUpdaterGateReport = {
   reason: string | null;
 };
 
+type UpdateReceipt = {status: string; requestId?: string; receiptId?: string; candidateId?: string; version?: string; canDiscard?: boolean; canFinish?: boolean; nativeCurrentVersion?: string};
+
 export function describeUpdateGateState(snap: PolicySnapshot | undefined, health?: Health): {
   canAutoInstall: boolean;
   badge: string;
@@ -169,7 +171,9 @@ export function UpdateSettings({
   const [storageError, setStorageError] = useState(saved.error);
   const [progress, setProgress] = useState('');
   const [deciding, setDeciding] = useState(false);
-  const [canDiscard, setCanDiscard] = useState(false);
+  const [recovery, setRecovery] = useState<UpdateReceipt|null>(null);
+  const canDiscard = recovery?.candidateId===intent?.candidateId&&recovery?.canDiscard===true&&['approve','reject','absent'].includes(recovery.status);
+  const canFinish = recovery?.candidateId===intent?.candidateId&&recovery?.canFinish===true&&recovery.status==='install_started';
   const owner = useRef({alive:true, candidateId:'', locked:false});
   useEffect(() => { owner.current.alive=true; return () => {owner.current.alive=false;owner.current.candidateId='';}; }, []);
   const policyQuery = useQuery({
@@ -218,23 +222,24 @@ export function UpdateSettings({
   }
   async function recover() {
     if(!intent||owner.current.locked||storageError)return;
-    owner.current.locked=true;setDeciding(true);setCanDiscard(false);
+    owner.current.locked=true;setDeciding(true);setRecovery(null);
     const encoded=JSON.stringify(intent);
     try {
-      const receipt=await invoke<{status:string;requestId?:string;candidateId?:string;canDiscard?:boolean}>('updater_receipt',{receiptId:intent.installRequestId ?? '',decisionId:intent.requestId ?? '',candidateId:intent.candidateId,requestId:newRequestID()});
-      if(owner.current.alive&&localStorage.getItem(key)===encoded){setProgress(`原安装请求：${receipt.status}${receipt.requestId ? ` · 原请求 ${receipt.requestId}` : ''}（仅查询，不重复安装）`);setCanDiscard(receipt.canDiscard===true&&receipt.candidateId===intent.candidateId&&['approve','reject','absent'].includes(receipt.status));}
+      const receipt=await invoke<UpdateReceipt>('updater_receipt',{receiptId:intent.installRequestId ?? '',decisionId:intent.requestId ?? '',candidateId:intent.candidateId,requestId:newRequestID()});
+      if(owner.current.alive&&localStorage.getItem(key)===encoded){setProgress(`原安装请求：${receipt.status}${receipt.requestId ? ` · 原请求 ${receipt.requestId}` : ''}（仅查询，不重复安装）${receipt.canFinish===true&&receipt.candidateId===intent.candidateId ? `；当前运行版本 ${receipt.nativeCurrentVersion} 已达到原目标 ${receipt.version}，可明确结束本地恢复提示；原安装结果仍待核对。` : ''}`);setRecovery(receipt);}
     }catch(e){if(owner.current.alive)setErrorMessage((e as Error).message ?? String(e));}
     finally{owner.current.locked=false;if(owner.current.alive)setDeciding(false);}
   }
   async function discard() {
-    if(!intent||owner.current.locked||!canDiscard||storageError)return;
+    if(!intent||owner.current.locked||(!canDiscard&&!canFinish)||storageError)return;
     owner.current.locked=true;setDeciding(true);
     const encoded=JSON.stringify(intent);
     try {
       if(localStorage.getItem(key)!==encoded)throw Error('原更新请求已改变，请刷新核对。');
-      await invoke('updater_discard',{candidateId:intent.candidateId,receiptId:intent.installRequestId ?? '',decisionId:intent.requestId ?? '',requestId:newRequestID()});
+      const finished=await invoke<UpdateReceipt>('updater_discard',{candidateId:intent.candidateId,receiptId:intent.installRequestId ?? '',decisionId:intent.requestId ?? '',requestId:newRequestID()});
       if(!owner.current.alive||localStorage.getItem(key)!==encoded)return;
-      localStorage.removeItem(key);setIntent(null);setNativeReport(null);owner.current.candidateId='';setCanDiscard(false);setProgress(`已结束尚未开始安装的更新（原确认 ${intent.requestId || '未保留'}，原安装 ${intent.installRequestId || '未保留'}，候选 ${intent.candidateId}）。可重新检查并确认新候选。`);
+      if(canFinish&&(!finished?.canFinish||finished.status!=='install_started'||finished.candidateId!==intent.candidateId))throw Error('原生目标版本核验未通过，保留原恢复提示。');
+      localStorage.removeItem(key);setIntent(null);setNativeReport(null);owner.current.candidateId='';setRecovery(null);setProgress(finished?.canFinish ? `当前运行版本 ${finished.nativeCurrentVersion} 已达到原目标 ${finished.version}；已结束本地恢复提示（原确认 ${finished.receiptId}，原安装 ${finished.requestId}，候选 ${finished.candidateId}）。原 install_started 记录保留，安装结果仍待核对。可重新检查并确认新候选。` : `已结束尚未开始安装的更新（原确认 ${intent.requestId || '未保留'}，原安装 ${intent.installRequestId || '未保留'}，候选 ${intent.candidateId}）。可重新检查并确认新候选。`);
     }catch(e){if(owner.current.alive)setErrorMessage((e as Error).message ?? String(e));}
     finally{owner.current.locked=false;if(owner.current.alive)setDeciding(false);}
   }
@@ -319,7 +324,7 @@ export function UpdateSettings({
           <button data-testid="update-approve-btn" disabled={deciding || !!intent || !!storageError} onClick={()=>void decide(nativeReport,'approve')}>批准下载并安装此版本</button>
           <button data-testid="update-reject-btn" disabled={deciding || !!intent || !!storageError} onClick={()=>void decide(nativeReport,'reject')}>拒绝</button>
         </DecisionFrame>}
-        {intent && <p>已保存原更新请求 {intent.installRequestId || intent.requestId || intent.candidateId}。<button disabled={deciding || !!storageError} onClick={()=>void recover()}>查询原更新请求</button>{canDiscard && <button disabled={deciding || !!storageError} onClick={()=>void discard()}>结束尚未开始安装的更新</button>}</p>}
+        {intent && <p>已保存原更新请求 {intent.installRequestId || intent.requestId || intent.candidateId}。<button disabled={deciding || !!storageError} onClick={()=>void recover()}>查询原更新请求</button>{canDiscard && <button disabled={deciding || !!storageError} onClick={()=>void discard()}>结束尚未开始安装的更新</button>}{canFinish && <button disabled={deciding || !!storageError} onClick={()=>void discard()}>结束已达到目标版本的本地恢复提示</button>}</p>}
         {progress && <p role="status">{progress}</p>}
         {storageError && <p role="alert">无法安全保存更新确认：{storageError}</p>}
         {!!snap?.updateHistory?.length && <details><summary>应用更新原请求账本</summary>{snap.updateHistory.map(r=><p key={`${r.status}-${r.requestId}`}>{r.version} · {r.status} · 原请求 {r.requestId}{r.status==='install_started'?'（安装意图已保存，结果待核对；不会自动重装）':''}</p>)}</details>}
