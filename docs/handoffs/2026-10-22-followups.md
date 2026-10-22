@@ -12,9 +12,10 @@
 | H02 | 共享 SemVer 语法、数字 prerelease 和半开区间，75 个公开接口表子例 RED→GREEN，包测试/vet 通过 | Spec compliant / Approved，无遗留发现 | `e111430` |
 | H03 | 版本/Tag/PE 一致性、测试公钥拒绝、签名产物校验、pnpm 对齐与生成文件换行确定性；31 组检查及实际公开向量验签通过 | Spec compliant / Approved；正式材料另验 | `8273eb7` |
 | H04 | 实际帧/时间基、空音轨、矛盾元数据和有界探测；技术证据幂等写 events；真实 ffprobe 回归与包测试/vet 通过 | Spec compliant / Approved，无遗留发现 | `c1ac3ae` |
-| H07 | 校正历史“全部完成”表述、五核心表术语、重试合同、MCP 公共名称与 opencode 内部前缀区别 | 随最终差异审查 | `9505c6a`，补充待提交 |
+| H07 | 校正历史“全部完成”表述、五核心表术语、重试合同、MCP 公共名称与 opencode 内部前缀区别；补四阶门槛与当前证据 | 随整分支及最终限定差异审查；后续仅更新实际验证记录 | `9505c6a`、`e83e591`，本文件另随最终文档提交 |
 | H15a | 权威任务状态控制原批准恢复；保留历史审计、未知请求与项目隔离；中性文案；修复首个在途 GET 吞掉更新事件的竞态，连续事件/晚到旧快照回归通过 | 首审 1 项 Important 已在限定复审关闭；Spec compliant / Approved；生产原生验证另记 | `18a8710`、`9bc10b9` |
 | H15b | 安全前缀持久化后转发；原生空快照用可信日志补全；恢复文本身份统一；解码凭据检测覆盖特殊字符及大数值；新增支撑迁移 000015，旧迁移未改 | 首审两项 Important 已在两轮限定复审全部关闭；Spec compliant / Approved；合成上游不等于真实模型 | `a5fdaa1`、`da2599d`、`3cc5e0f` |
+| H16 最终修复 | 原生实际版本达到权威目标后，允许明确结束本地恢复提示，保留 install_started 审计；确定的纯文本帧不触发任务/确认查询取消 | 整分支首审 I1 Important、M1 Minor 均 ADDRESSED；唯一限定复审 Spec PASS / Quality Approved，无新增发现 | `1d0923b` |
 
 H05 的 RED 在实际公开服务上复现网络/读取失败三次请求、超时/取消额外退避；修复为共享错误分类的三个布尔值。保留请求超时 3 秒、最多三次、250/500ms 退避、24h 缓存与 LKG。原产品会重试网络错误，本实现按已确认计划有意收窄，不声称该限制来自原产品。
 
@@ -25,7 +26,7 @@ H06 首审额外 fixture 复现：身份校验后、CloseMainWindow 前主进程
 - H06 的 17 组检查使用过程/进程 fixture；真实 CIM 查询在受限环境遭拒。没有实际停止或启动用户进程，没有把测试中的 `Release launched` 当作 gateway/窗口就绪证明。
 - H01 的本地签名测试向量只用于验证插件行为，不能证明生产签名材料可用。正式签名、GitHub Release 安装包发布与干净 Windows 账户安装升级：**UNEXECUTED**。
 - 真实 LLM、文生图、标注修复、15 秒口播配乐视频、真实账单与生成取消/重试：**UNEXECUTED**。需要应用内可用连接及人类费用卡批准，未静默替换成 fixture 或自行付费。
-- H01–H06、H15a/H15b 工程修复已通过各自独立审查；正式签名与实际模型等外部验收并未因此通过。H08–H14 与真实首 token 验收继续按计划推进。最终源码 `3cc5e0f` 的整仓检查已通过，H16 整分支总审查和当前生产构建/运行另行记录；历史绿灯不代替当前验证。
+- H01–H07、H15a/H15b 工程修复及 H16 最终修复通过独立审查；正式签名与实际模型等外部验收并未因此通过。H08–H14 与真实首 token 验收仍待执行。最终源码 `1d0923b` 的整仓检查和生产构建通过，当前完整生产恢复仍 BLOCKED，详见下方 21:26 记录。
 - 19:00 后本机 Windows 的保留端口范围 4042–4141 包含 4096，实际 bind 返回 WinError10013，非已有监听者。未修改系统网络配置或终止无关进程。H01 修复后的当前生产构建通过，更新初始安全 UI 检查执行后，标准冒烟在“Owned opencode process not found”失败；对应物理重启验证未执行。隔离固定 opencode 1.19.0 测试使用系统临时端口，认证 dispose 后仍存活，证明资源清理不等于进程正常退出；生产端口保持 4096。
 
 ## 回归命令与本轮证据
@@ -54,3 +55,33 @@ powershell -NoProfile -File scripts/check-restart.ps1
 - `scripts/check.ps1` 在最终工程源码 `3cc5e0f` 退出 0，日志 `.runtime/h16-final-check.log`：Go 全包测试与 vet、启动器/发布保护、实际 TSX 与编辑器/状态检查、TypeScript/Vite、Rust、M1 独立进程、合成项目 SQL 血缘导出、发布 dry-run。M1 证据 `.runtime/smoke-93bf7eed1f424931a96e2a8cc14cca37`；SQL 仍是合成项目，未冒充 H12 真实项目。
 - 早期全量通过记录 `.runtime/h16-check.log`（`a5fdaa1`）、`.runtime/h16-fix1-check.log`（`da2599d`）仅对应各自源码。旧测试夹具在轮次尚未创建时插外键的失败保留，现用既有 `waitChat` 等待实际状态，不改生产超时。
 - 最终源码的固定 opencode 合成三场景、生产构建与当前 WebView 正在执行；整分支独立总审查尚未完成。本段不预先宣称这些通过。
+
+## 最终工程回归与独立审查（21:26 更新）
+
+整分支审查范围 `f9432ae..e83e591`。发现一项 Important：实际运行版本已达到目标后，旧安装意图使后续检查永久禁用；一项选定 Minor：每个流式文本事件取消任务查询。`1d0923b` 同波修复后，原审查者唯一限定复审 `e83e591..1d0923b` 判定两项均 **ADDRESSED**，**Spec PASS / Quality Approved**，无新 Critical/Important/Minor。报告 `.superpowers/sdd/h16-whole-review.md`、`h16-final-fix-report.md`、`h16-final-fix-review.md`。
+
+更新结束动作只消除当前本地提示：权威原安装回执、原生实际版本和排他操作门禁均需通过；原 `install_started` 状态和 I/D/candidate ID 保留，不推断历史安装成功、不重复安装。后续更新必须重新检查候选和人工批准。纯文本分流保留 task_changed、工具/原生 question、未知帧、重连的强制刷新，以及首个在途 GET 的新鲜度回归。另调查的 MP4 movie-clock 舍入疑点用真实 361 帧/24fps 文件未复现；不放宽 H04 技术容差。
+
+| 当前证据 | 实际结果与范围 |
+| --- | --- |
+| `.runtime/h16-final-fix-{i1,m1,native}-red.log` | 保留两组件原业务失败及原生目标判断断言失败；不是用编译错误充当 RED |
+| `.runtime/h16-final-fix-ui-final.log`、`h16-final-fix-native-final.log`、`h16-final-fix-types-final.log` | 34 UI 通过；Rust 15 通过/1 既有忽略；TypeScript 退出 0。12 次纯文本事件期间 task GET 1 次、取消 0 次、流中完成 1 次；其他业务事件仍刷新 |
+| `.runtime/h16-delivery-check.log` | 最终工程源码 `1d0923b` 的 `scripts/check.ps1` 退出 0：Go 全包（未变包可用缓存）/vet、102 项组件恢复检查、69 项编辑器/状态检查、TS/Vite、Rust、M1、合成 SQL 血缘、发布 dry-run。M1 目录 `.runtime/smoke-a330cdc03e8a49ef9fa773f5da13e02f` |
+| `.runtime/h16-current-native.log`、`h16-current-native-trace.json` | `3cc5e0f` 的当前 Go/agent 源码运行固定 1.19.0 合成原生 stream-question/disconnect/retry 三场景通过；此次最终修复未改这些源文件，未重复套件。question 合法后续步骤 supplier 2 次；断流 1 次；原生 retry relay 2 次/supplier 1 次。非真实供应商 |
+| `.runtime/h16-delivery-production-build.log` | 当前 `pnpm --dir desktop desktop:build` 退出 0，release 1m11s；保留 945.78KB Vite 包警告，无未测量的拆包重构 |
+| `.runtime/h16-delivery-updates-smoke.log` | 受限首轮退出 1：WebView 未启动、CIM 拒绝访问。已按精确 PID/父 PID/创建时间/可执行文件核对，只对该测试自有进程有界清理，记录使用强制兜底，不称正常退出 |
+| `.runtime/h16-delivery-updates-elevated.log`、`.runtime/desktop-release-cda01c0b077540abbab7af52e834ad20/updates-initial.json` | 提升权限后初始 WebView 安全检查通过：原生 0.1.0/win32、拒绝伪造版本、manual_only 拦截、私有接口 403、仅一个明确种入的测试意图、实际安装 0 次、JS 异常 0。标准冒烟随后 `Owned opencode process not found` 退出 1；系统保留范围 4042–4141 包含生产 4096，完整重启恢复 **UNEXECUTED/BLOCKED**。initial 的种入回执不代表后续恢复已执行 |
+| `.runtime/h16-delivery-owned-cleanup.json` | 两个本次隔离 profile 进程为空，8001/4096 监听为空，首轮自有 PID 已消失；未杀无关进程、未改变系统保留端口、未放宽生产 4096 契约 |
+| `.runtime/h16-delivery-source-artifacts.json` | 最终工程源码、实际生成文件和生产 exe/JS/CSS SHA256 对应清单；保留此前 `.runtime/h16-final-source-artifacts.json` 作为旧提交检查点，不混用旧制品 |
+
+### 仍需执行的完整接续项
+
+- **H01/H16 生产恢复**：在生产 4096 可用的交互 Windows 环境重跑标准更新 WebView/restart，验证完整自有进程生命周期和原请求恢复。当前只初始安全检查通过，不宣称整体离线运行 PASS。
+- **H08**：应用内安全配置真实可用 LLM，验证两个技能、真实 asset mention、队列/取消/SSE、结构化门禁及三协议的适用原生推理；真实首 token 延迟仍需测量。本地 HTTP/实际 opencode 合成测试不替代模型效果。
+- **H09/H10**：经应用费用卡批准，真实文生图与标注编辑、单次整条 15 秒口播配乐视频、人工主观质量验收和同 Resource 新 Version；无隐式第三家 TTS/音乐模型或片段拼接。
+- **H11**：经人工批准的真实取消、失败重试、分镜变更使旧批准失效；核对供应商调用与账单，不把本地取消当停止计费。
+- **H12**：基于真实选定项目导出脱敏 SQL 全血缘，空闲/关闭后备份恢复及 DPAPI 账户边界；已有合成库导出不替代。
+- **H13**：正式匹配密钥、干净 Windows runner 构建验签、签名 Release、干净账户安装/升级及数据/回执保留；当前全部 **UNEXECUTED**，公开测试向量不得发布冒充正式包。
+- **H14/H15 真实体验**：物理跨屏 DPI、真实 IME 候选/Delete/焦点/可访问性、真实模型流式延迟；Vite 包大小在测得启动成本后再决定优化。
+
+上述真实生成、实际签名/安装、真实项目恢复及硬件验证均 **UNEXECUTED**，不是本次修复的通过项。所有真实调用仍需应用内确认卡；密钥不得发到聊天或 Git。原 Oct20 交接继续保留，后续从本接续状态推进，不重做已完成的工程修复。
