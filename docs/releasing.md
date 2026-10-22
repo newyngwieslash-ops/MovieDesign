@@ -1,5 +1,7 @@
 # MovieDesign 签名发布与更新策略指南 (`releasing.md`)
 
+> **H03 发布准备校正（2026-10-22）：** 生产入口在任何构建前核对请求版本、Tag、Tauri/npm/Cargo/Cargo.lock；拒绝当前公开测试向量公钥、缺失或格式错误的私钥输入。构建后还核对实际应用 PE 版本、当前唯一且新鲜的安装包/签名、官方签名编码及受信版本，再用共享 Rust verifier 验签，之后才复制和生成 manifest。`_PATH` 与 inline/string-or-path 按锁定 CLI 官方支持处理，不打印私钥或密码。CI 的 pnpm 从 `desktop/package.json` 读取 12.8.1。31 组离线 fixture 和公开签名向量执行不等于正式签名；正式密钥解密/配对、干净 runner、发布和安装升级保持 **UNEXECUTED**。当前测试公钥须在正式发布前替换为安全渠道配置的真实匹配公钥。
+
 ## 1. 首发受支持平台与托管落点
 
 - **首发完整验收平台**：Windows x64（Rust target `x86_64-pc-windows-msvc`，更新策略平台名显式映射为 `win32`）。其他平台未通过完整验收矩阵前不声明支持。

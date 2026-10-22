@@ -42,9 +42,9 @@
 - Progress用现有Tauri Channel/事件，错误可显示；网络请求不持有同步Mutex或SQLite事务；安装退出前先让自有 gateway 完成聊天/任务清理，再请求自有 agent 清理资源并给进程退出宽限，超时仅回收本应用持有的子进程句柄。此处恢复已确认 M1 的“优雅关闭优先、有界自有进程兜底”准则；不能把进程消失或强制终止宣称为正常退出。
 
 **步骤与验证：**
-- [ ] 追踪现有UI→Rust命令→策略→插件路径及现有确认/原请求模式；读取本机锁定crate源码和官方文档。保存根因证据，不先做随机改动。
-- [ ] 写实际组件行为RED：渲染UpdateSettings，点击“检查”只触发检查；候选出现后必须通过明确确认卡；未确认、旧候选、storage失败零安装；批准后同候选只提交一次，进度/错误更新。复用scripts/check-storyboard-ui.mjs的实际TSX加载方法，不检查源码字符串当成功。
-- [ ] 写Rust/Go行为RED：真实本地HTTP updater fixture走插件check/download；有效测试签名下载通过，坏签名/版本错配/非本仓库候选拒绝，安装sink为明确测试注入且计数；busy/manual_only/策略失败/准入竞态零install调用；领取后其他业务POST/MCP被拒绝、释放后恢复。
+- [x] 追踪现有UI→Rust命令→策略→插件路径及现有确认/原请求模式；读取本机锁定crate源码和官方文档。保存根因证据，不先做随机改动。
+- [x] 写实际组件行为RED：渲染UpdateSettings，点击“检查”只触发检查；候选出现后必须通过明确确认卡；未确认、旧候选、storage失败零安装；批准后同候选只提交一次，进度/错误更新。复用scripts/check-storyboard-ui.mjs的实际TSX加载方法，不检查源码字符串当成功。
+- [x] 写Rust/Go行为RED：真实本地HTTP updater fixture走插件check/download；有效测试签名下载通过，坏签名/版本错配/非本仓库候选拒绝，安装sink为明确测试注入且计数；busy/manual_only/策略失败/准入竞态零install调用；领取后其他业务POST/MCP被拒绝、释放后恢复。
 
 ```rust
 // 行为边界示例：安装调用必须在最终准入之后，测试验证计数而非只验证报告字段。
@@ -53,10 +53,10 @@
 assert_eq!(install_calls.load(std::sync::atomic::Ordering::SeqCst), 0); // busy/拒绝分支
 ```
 
-- [ ] 跑新增用例并记录真实业务失败；编译错误不作为复现通过。按共享根因实现上面接口，再跑同一用例GREEN。
-- [ ] 一次当前范围全量：cargo test --manifest-path desktop/src-tauri/Cargo.toml；go -C gateway test ./internal/server ./internal/updates；node --test scripts/check-update-ui.mjs；pnpm --dir desktop build。其他相关测试由实际变更决定，不重复所有历史native套件。
+- [x] 跑新增用例并记录真实业务失败；编译错误不作为复现通过。按共享根因实现上面接口，再跑同一用例GREEN。
+- [x] 当前范围与整仓检查：最终源码 `3cc5e0f` 的 `scripts/check.ps1` 退出 0，覆盖本项命令及后续修复。源代码有变更才重跑；各次结果按实际提交保留。
 - [ ] 当前生产构建和受控WebView验证检查/卡片/进度/拒绝/原请求恢复。安装测试只针对受控测试包/测试安装sink，不触碰真实用户已安装应用；正式NSIS安装另列H13。
-- [ ] 记录结果、源/制品对应和UNEXECUTED边界；scoped提交 fix(H01): wire gated signed update runtime。独立审查完整基线范围，修复重要问题后再推送。
+- [x] 记录结果、源/制品对应和UNEXECUTED边界；`d3d2f6e`、`e2e8282` 已提交并推送。独立首审四项 Important 经限定复审全部关闭，工程范围 Approved；本地插件安装 sink 不等于真实安装。当前生产初始安全 UI 通过，但完整恢复冒烟因 Windows 保留 4096 失败，未执行部分保留 UNEXECUTED。
 
 官方参考：https://v2.tauri.app/plugin/updater/；本机Cargo.lock锁2.14.0。官方支持check、download和install分离，不能因builder可创建就宣称运行时链路完成。
 
@@ -67,10 +67,11 @@ assert_eq!(install_calls.load(std::sync::atomic::Ordering::SeqCst), 0); // busy/
 - [x] H05：按已确认5xx-only计划修正重试漂移。e60b89b；公开 Evaluate 的十例 RED/GREEN、包测试和 vet 通过；独立审查 Spec compliant / Approved。原产品更广网络重试作为有意适配记录。
 - [x] H06：移除 Git 撤回，精确自有路径/进程身份，优先正常退出、错误非零；17 组回归通过。63c16f8、bc92da8；首审退出竞态已修，限定复审 Approved。真实原生生命周期另记 UNEXECUTED。
 - [x] H04：c1ac3ae 以实际帧/时间基替代固定500ms；CFR/VFR、空音轨、证据幂等、探测输出上限检查通过，独立审查 Approved。精确技术证据写现有 events；真实模型成片仍 UNEXECUTED。
-- [ ] H07：用实际修复结果更新四阶验收/文档和计划勾选，保留历史记录。
+- [x] H07：用实际修复结果更新四阶验收/文档和计划勾选，保留历史记录；当前运行/发布未完成项目仍不虚勾。
 - [ ] H08–H12：用户在安全渠道配置真实可用连接后，经费用卡验证真实模型/技能/图像/整条视频/打断/血缘；否则只对应项UNEXECUTED，继续其余工程。
 - [ ] H13：匹配正式签名材料后验证干净账户首次安装/升级与真实更新策略，才发布Release。
-- [ ] H14/H15：物理DPI/IME/焦点及已有提示文案；有证据再处理大包和完整响应缓冲体验，不先做框架重构。
+- [ ] H14：物理 DPI/IME/焦点验收仍 UNEXECUTED。
+- [x] H15 离线工程：`18a8710`、`9bc10b9` 修复权威恢复提示；`a5fdaa1`、`da2599d`、`3cc5e0f` 实现安全流式及恢复/凭据边界，任务审查问题全部关闭。真实模型首 token 体验仍 UNEXECUTED；现有 Vite 包警告待测量启动成本后再决定，不先做框架重构。
 - [ ] H16：新差异独立审查、定向与最终全量、适用生产窗口、提交推送、验收收口。任何未实际完成项目不虚勾。
 
 ### H15 离线接续边界（2026-10-22）

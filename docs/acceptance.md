@@ -2,7 +2,7 @@
 
 本文档记录 `MovieDesign`（M1–M7）对照 [原始规格](spec.md)、[已确认契约](contracts.md)、[总实施计划](superpowers/plans/2026-10-15-moviedesign-complete.md) 与 [M7 分计划](superpowers/plans/2026-10-15-m7-video-release.md) 的逐项规格映射、验证命令、实际结果、证据路径与确认偏差。
 
-> **2026-10-22 接续审计校正：** 下表 PASS 是 M7.5 当时的历史结果，不能作为当前完整交付结论。交接查明 H01 原生更新仅有策略/验签辅助逻辑，真实检查、下载和安装未接线；H02–H07 工程缺口正在修复，当前代码及离线总体门槛均为待复验。H05 已通过定向测试与独立审查；H06 已通过启动器 fixture 检查与独立复审。真实模型调用、正式签名、干净账户安装升级均为 **UNEXECUTED**；本地签名测试向量和模拟进程不等于这些验收。接续证据见 [H01–H16 计划](superpowers/plans/2026-10-22-handoff-followups.md)。
+> **2026-10-22 接续审计校正：** 下方 M7.5 的 PASS 是历史结果，不能作为当前完整交付结论。H01–H06 工程修复和 H15a 已通过定向回归及独立复审；H15b 首审问题经限定复审全部关闭。最终工程源码 `3cc5e0f` 的整仓检查已通过，生产构建和整分支总审查继续执行。真实模型调用、正式签名、干净账户安装升级均为 **UNEXECUTED**；本地签名测试向量和模拟进程不等于这些验收。当前证据见 [接续记录](handoffs/2026-10-22-followups.md)。
 
 ---
 
@@ -12,14 +12,14 @@
 
 | 交付门槛维度 | 当前状态 | 核验结论与阻塞边界说明 |
 | --- | --- | --- |
-| **1. 功能已编码** | **通过（PASS）** | M1–M7 全部 30 个任务（Tauri 双 sidecar、SQLite 五核心表 + 000001–000014 支撑迁移、对象 CRUD、三态幂等投递、八图形编辑器与标注、持久画布、本地/云端自定义供应商、图像生成/编辑、受管 opencode 与 18 项 `design_*` MCP 工具、TipTap 聊天与人类确认卡、双方法论技能、分镜流水线与 7 门禁 Preflight、`ark-video` 视频执行与 MP4 校验、打断恢复与计费对账、`manual_only` 更新策略 + 24h 缓存 + minisign 验签）均已完整实现并通过独立任务审查。 |
-| **2. 离线测试通过** | **通过（PASS）** | `./scripts/check.ps1`（Go 全包测试 + `go vet`、7 项组件恢复测试、69 项编辑器/画布/恢复/事件/消息 Node 测试、TypeScript + Vite 生产构建、8 项 Rust 单元测试、M1 进程冒烟、`scripts/verify-lineage.ps1` SQL `.dump` 全血缘核验、`scripts/release.ps1 -DryRun`）及生产 WebView2 冒烟（`m1`、`m2`、`canvas`、`providers`、`questions`、`generation`、`agent`、`chat-fix`、`tools`、`pipeline`、`video`、`interruptions`）全部通过。 |
-| **3. 真实生成通过** | **未执行（UNEXECUTED）** | 本机环境未配置真实付费/可用云端或本地模型凭据（OpenAI Images API Key、火山方舟 `ark-video` 具备 15 秒+参考图+口播配乐能力的可用 Endpoint/API Key、以及真实 LLM API Key）。所有供应商与流水线验证均通过本地协议 fixture 执行，真实调用项严格保持 **未执行（UNEXECUTED）**。 |
-| **4. 签名发布完成** | **未执行（UNEXECUTED）** | 发布流水线（`scripts/release.ps1` 与 `.github/workflows/release.yml`）、minisign 签名校验、`latest.json` 生成及干净数据升级保留已通过单元/集成测试与 `-DryRun` 验证（`.runtime/release-dry-run/`）。因当前环境未注入正式 `TAURI_SIGNING_PRIVATE_KEY`，生产模式按契约 fail-closed 拒绝产出未签名或假签名自动更新包，故正式签名安装包发布与干净 Windows 账户真实安装升级保持 **未执行（UNEXECUTED）**。 |
+| **1. 功能已编码** | **整分支复审中** | H01–H06 与 H15a/H15b 工程修复已通过任务独立审查及必要限定复审；旧 M1–M7 不重做。源码 `3cc5e0f` 为本轮最终检查基线，整分支总审查另行记录。 |
+| **2. 离线测试通过** | **检查通过；桌面运行待复验** | `scripts/check.ps1` 在 `3cc5e0f` 退出 0（Go 全包/vet、实际组件及编辑器、TypeScript/Vite、Rust、M1、SQL 血缘 fixture、发布 dry-run）；当前生产构建及完整 WebView 另验。保留本机 4096 系统保留端口造成的失败，不将其当作通过。 |
+| **3. 真实生成通过** | **未执行（UNEXECUTED）** | 尚无经应用人类确认卡批准的真实 LLM、图像编辑或 15 秒口播配乐生成验收记录；本地 HTTP fixture、实际 opencode 进程和合成 MP4 不替代真实模型、账单或主观质量验收。 |
+| **4. 签名发布完成** | **未执行（UNEXECUTED）** | 正式密钥配对、签名 NSIS/GitHub Release 和干净 Windows 账户安装升级均未执行。当前公开测试公钥会被生产发布保护拒绝；公开向量验签、受控安装 sink、升级 fixture 与 dry-run 仅证明各自工程边界。 |
 
 ---
 
-## 2. 总计划 §0–§15 全规格覆盖表
+## 2. M7.5 历史规格覆盖表（非当前接续验收结论）
 
 | 规格章节 | 规格要求摘要 | 状态 | 验证命令 | 实际结果 | 证据路径 | 适配与偏差说明 |
 | --- | --- | --- | --- | --- | --- | --- |
