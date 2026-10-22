@@ -35,18 +35,26 @@ function New-LauncherProcess([int]$ProcessId) {
 function Open-LauncherProcess($Record) {
     try { $process = New-LauncherProcess $Record.ProcessId }
     catch [ArgumentException] { return $null } # Already exited.
+    $processOperation = $true
     try {
         # Pin the OS handle before checking identity; Kill then cannot target a recycled PID.
         $null = $process.Handle
+        $processOperation = $false
         $current = @(Get-LauncherProcesses | Where-Object { $_.ProcessId -eq $Record.ProcessId })
+        $processOperation = $true
         if ($process.HasExited -or $current.Count -ne 1 -or -not (Test-LauncherIdentity $Record $current[0])) {
             $process.Dispose()
             return $null
         }
         return $process
     } catch {
-        $process.Dispose()
-        throw
+        $cause = $_.Exception.GetBaseException()
+        $exitRace = $cause -is [InvalidOperationException] -or
+            ($cause -is [ComponentModel.Win32Exception] -and $cause.NativeErrorCode -eq 5)
+        try {
+            if ($processOperation -and $exitRace -and $process.HasExited) { return $null }
+            throw
+        } finally { $process.Dispose() }
     }
 }
 
@@ -61,6 +69,7 @@ function Stop-LauncherProcesses([string[]]$Paths) {
     foreach ($record in $ordered) {
         $process = Open-LauncherProcess $record
         if ($null -eq $process) { continue }
+        $processOperation = $true
         try {
             if ([IO.Path]::GetFileName($record.ExecutablePath) -ieq 'moviedesign.exe') {
                 $null = $process.CloseMainWindow()
@@ -68,10 +77,18 @@ function Stop-LauncherProcesses([string[]]$Paths) {
             }
             if ($process.HasExited) { continue }
             # Recheck immediately before force; holding the handle also closes the check/kill PID race.
+            $processOperation = $false
             $current = @(Get-LauncherProcesses | Where-Object { $_.ProcessId -eq $record.ProcessId })
+            $processOperation = $true
             if ($current.Count -ne 1 -or -not (Test-LauncherIdentity $record $current[0])) { continue }
             $process.Kill()
             if (-not $process.WaitForExit(5000)) { throw "Stop timed out (PID $($record.ProcessId))." }
+        } catch {
+            $cause = $_.Exception.GetBaseException()
+            $exitRace = $cause -is [InvalidOperationException] -or
+                ($cause -is [ComponentModel.Win32Exception] -and $cause.NativeErrorCode -eq 5)
+            # Close/Wait/Kill can race normal exit. Only the pinned instance can confirm completion.
+            if (-not $processOperation -or -not $exitRace -or -not $process.HasExited) { throw }
         } finally { $process.Dispose() }
     }
 }

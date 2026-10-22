@@ -28,6 +28,8 @@ function Check([string]$Name, [scriptblock]$Body) {
     $script:stopFailure = $false
     $script:launchFailure = $false
     $script:earlyExit = $false
+    $script:exitRaceAt = ''
+    $script:liveCloseFailure = $false
     $script:pnpmExit = 0
     & $Body
     $script:checks++
@@ -47,9 +49,21 @@ function New-LauncherProcess([int]$ProcessId) {
     $script:opens++
     if (-not $script:handles.ContainsKey($ProcessId)) {
         $handle = [pscustomobject]@{ Id = $ProcessId; Handle = 1; HasExited = $false; Killed = $false; Disposed = $false; ExitCode = 5 }
-        $handle | Add-Member ScriptMethod CloseMainWindow { $script:closes += $this.Id; return $true }
+        $handle | Add-Member ScriptMethod CloseMainWindow {
+            $script:closes += $this.Id
+            if ($script:liveCloseFailure) { throw [InvalidOperationException]::new('fixture live close denied') }
+            if ($script:exitRaceAt -eq 'close') {
+                $this.HasExited = $true
+                throw [InvalidOperationException]::new('fixture process exited before close')
+            }
+            return $true
+        }
         $handle | Add-Member ScriptMethod WaitForExit {
             param($Timeout)
+            if ($this.Id -eq 11 -and $script:exitRaceAt -eq 'wait') {
+                $this.HasExited = $true
+                throw [InvalidOperationException]::new('fixture process exited before wait')
+            }
             if ($this.Killed -or $script:graceful) {
                 $this.HasExited = $true
                 if ($script:graceful) {
@@ -62,6 +76,10 @@ function New-LauncherProcess([int]$ProcessId) {
         }
         $handle | Add-Member ScriptMethod Kill {
             if ($script:stopFailure) { throw 'fixture stop denied' }
+            if ($script:exitRaceAt -eq 'kill') {
+                $this.HasExited = $true
+                throw [ComponentModel.Win32Exception]::new(5)
+            }
             $script:kills += $this.Id
             $this.Killed = $true
         }
@@ -193,6 +211,35 @@ try {
         $script:pnpmExit = 7
         Assert ((Invoke-Launcher $fixture 'dev') -eq 1) 'Failed dev reported success.'
         Assert ($script:launches.Count -eq 1) 'Failed dev launched release.'
+    }
+    Check 'confirmed pinned-process exit races succeed; live close and query errors remain failures' {
+        $modes = @('release', 'build', 'dev')
+        $boundaries = @('close', 'wait', 'kill')
+        for ($index = 0; $index -lt $boundaries.Count; $index++) {
+            $script:exitRaceAt = $boundaries[$index]
+            $script:handles.Clear()
+            $script:records = @(Record 11 $paths[0])
+            Assert ((Invoke-Launcher $fixture $modes[$index]) -eq 0) "Natural exit at $($boundaries[$index]) aborted restart."
+            Assert ($script:handles[11].Disposed -and $script:kills.Count -eq 0) 'Natural exit leaked handle or force-killed.'
+        }
+        Assert ($script:launches.Count -eq 2 -and $script:commands.Count -eq 2) 'Restart did not continue after natural exit.'
+        $script:exitRaceAt = ''
+        $script:liveCloseFailure = $true
+        $script:handles.Clear()
+        $script:records = @(Record 11 $paths[0])
+        Assert ((Invoke-Launcher $fixture 'stop') -eq 1) 'Still-live close failure was swallowed.'
+        Assert ($script:handles[11].Disposed -and -not $script:handles[11].HasExited) 'Live close failure lost pinned identity.'
+        $script:liveCloseFailure = $false
+        $script:handles.Clear()
+        $script:queries = 0
+        $script:queryHook = {
+            if ($script:queries -eq 3) {
+                $script:handles[11].HasExited = $true
+                throw [InvalidOperationException]::new('fixture query failed during exit')
+            }
+        }
+        Assert ((Invoke-Launcher $fixture 'stop') -eq 1) 'Query failure was swallowed after exit.'
+        Assert ($script:handles[11].Disposed -and $script:kills.Count -eq 0) 'Query failure leaked handle or killed.'
     }
     Check 'launch failure and immediate exit return nonzero' {
         $script:launchFailure = $true
