@@ -2,6 +2,8 @@
 
 本文档记录 `MovieDesign`（M1–M7）对照 [原始规格](spec.md)、[已确认契约](contracts.md)、[总实施计划](superpowers/plans/2026-10-15-moviedesign-complete.md) 与 [M7 分计划](superpowers/plans/2026-10-15-m7-video-release.md) 的逐项规格映射、验证命令、实际结果、证据路径与确认偏差。
 
+> **2026-10-22 接续审计校正：** 下表 PASS 是 M7.5 当时的历史结果，不能作为当前完整交付结论。交接查明 H01 原生更新仅有策略/验签辅助逻辑，真实检查、下载和安装未接线；H02–H07 工程缺口正在修复，当前代码及离线总体门槛均为待复验。H05 已通过定向测试与独立审查；H06 已通过启动器 fixture 检查与独立复审。真实模型调用、正式签名、干净账户安装升级均为 **UNEXECUTED**；本地签名测试向量和模拟进程不等于这些验收。接续证据见 [H01–H16 计划](superpowers/plans/2026-10-22-handoff-followups.md)。
+
 ---
 
 ## 1. 四阶交付门槛状态总览
@@ -91,7 +93,7 @@
 - **验证命令**：`go -C gateway test ./internal/pipeline -run TestAcceptanceSecurityBoundaries -v`、`go -C gateway test ./internal/server ./internal/mcp ./internal/workspace -v`
 - **实际结果**：
   - **Origin 与 CORS 预检防护**：启动真实 `open-design-gateway` 进程，无 `Origin`、`Origin: null`、外站 `Origin: https://evil.example` 在普通 API（`GET /api/health`, `POST /api/projects`）、`OPTIONS /api/projects` 预检请求以及 `POST /mcp` 上全部返回 `403 Forbidden`。
-  - **MCP 私有令牌校验**：携带合法 `Origin: http://tauri.localhost` 但缺少 `X-OpenDesign-MCP-Token` / `Authorization: Bearer` 私有令牌访问 `POST /mcp` 被立即拒绝（`401/403`）。
+  - **MCP 私有令牌校验**：携带合法 `Origin: http://tauri.localhost` 但缺少精确的 `Authorization: Bearer <私有令牌>` 访问 `POST /mcp` 被拒绝（`401/403`）。实现不接受旧文档中的 `X-OpenDesign-MCP-Token` 替代头。
   - **重要安全边界声明**：本机进程（如 `curl`）可自行构造 `Origin: http://tauri.localhost` 请求头，因此 `Origin` 校验**证明的是浏览器跨站请求伪造（CSRF）防护**，不声称提供本机恶意进程隔离；`/mcp` 额外由仅在原生宿主与 gateway 间内存传递的随机 Bearer Token 保护。
   - **文件系统、跨项目与能力白名单隔离**：路径穿越（`../outside.png`、`..\outside.png`）、Windows 目录联接（`mklink /J` junction 重解析点逃逸）、跨项目引用其他项目 Asset ID、以及提交能力 schema 未声明的参数（`undeclared_flag`）全部在副作用发生前被拒绝。
   - **`opencode` 工具权限隔离**：`agent/opencode.json` 与 `agent.BuildConfig` 强制 `"*": "deny"`、`"skill": "deny"`、`"external_directory": {"*": "deny"}`，仅允许 18 项 `design_design_*` 工具与 `question`；注入 `bash` 等原生工具名在配置构建阶段即报错拒绝。

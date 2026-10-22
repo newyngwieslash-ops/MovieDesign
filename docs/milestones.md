@@ -1,5 +1,7 @@
 # 里程碑验收
 
+> 2026-10-22 接续：以下 M1–M7 为历史记录。交接发现真实更新执行链未接通及 H02–H07 缺口，当前总体工程结论待修复、独立审查和回归后重评；不重做旧里程碑。真实调用、正式签名与安装升级仍为 UNEXECUTED。进度见 [接续计划](superpowers/plans/2026-10-22-handoff-followups.md)。
+
 完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)，全规格逐项映射与四阶交付门槛见[全规格验收报告](acceptance.md)。M1–M7 全部 30 个任务已通过单任务与整阶段独立工程审查。按四阶交付门槛纪律：**功能已编码（PASS）**、**离线测试通过（PASS）**、**真实生成通过（UNEXECUTED — 本机未配置真实付费/可用模型凭据）**、**签名发布完成（UNEXECUTED — 未注入正式 `TAURI_SIGNING_PRIVATE_KEY`，已通过 `-DryRun` 与签名校验测试）**。
 
 | 里程碑 | 范围 | 状态 |
@@ -289,7 +291,7 @@ M6.2 独立审查先发现I1：损坏冻结请求缺Composition仍能POST并在4
 ## M6 工程整体验收（2026-10-19）
 
 - 独立整阶段复审范围 `bb20c6f..2cbcb87`（75份文件、M6.1–M6.5全部任务）结论 **Ready to merge: Yes**，无 Critical 或 Important 问题，报告归档于 `.superpowers/sdd/m6-whole-review.md`。
-- 五张核心表（`projects`、`compositions`、`resources`、`versions`、`assets`）与迁移 `000001`–`000011` 完全未改；单调递增支撑迁移 `000012_pipeline`、`000013_creative_approvals`、`000014_prompt_contracts` 保持触发器不可变保护；零新增第三方依赖。
+- 五张核心表（`assets`、`compositions`、`resources`、`versions`、`composition_members`；`projects` 为支撑表）与迁移 `000001`–`000011` 完全未改；单调递增支撑迁移 `000012_pipeline`、`000013_creative_approvals`、`000014_prompt_contracts` 保持触发器不可变保护；零新增第三方依赖。
 - 真实凭据支持的 LLM 方法遵循、真实图像/视频供应商调用及签名发布仍为 **未执行（UNEXECUTED）**。按总计划§6快进合并 `codex/m6-storyboard-pipeline` 至 `main` 并推送，随后在 `codex/m7-video-release` 启动 M7 实施。
 
 ### M7.1 视频能力与 `ark-video` 异步适配器（2026-10-20，独立复审通过）
@@ -329,7 +331,7 @@ M6.2 独立审查先发现I1：损坏冻结请求缺Composition仍能POST并在4
 ## M7 工程整体验收（2026-10-20）
 
 - 独立整阶段复审范围 `1f13834..26a30ac`（66份文件、M7.1–M7.5全部任务）结论 **Ready to merge: Yes**，无 Critical 或 Important 问题，报告归档于 `.superpowers/sdd/m7-whole-review.md`。
-- 五张核心表（`projects`、`compositions`、`resources`、`versions`、`assets`）与迁移 `000001`–`000014` 完全未改；全量 `scripts/check.ps1`（含 `verify-lineage.ps1` 与 `release.ps1 -DryRun`）及生产 WebView2 冒烟（`m1`、`video`、`interruptions`）全部通过。
+- 五张核心表（`assets`、`compositions`、`resources`、`versions`、`composition_members`；`projects` 为支撑表）与迁移 `000001`–`000014` 完全未改；全量 `scripts/check.ps1`（含 `verify-lineage.ps1` 与 `release.ps1 -DryRun`）及生产 WebView2 冒烟（`m1`、`video`、`interruptions`）全部通过。
 - 四阶交付门槛核算：**功能已编码（PASS）**、**离线测试通过（PASS）**、**真实生成通过（UNEXECUTED — 本机未配置真实付费/可用云端或本地模型凭据）**、**签名发布完成（UNEXECUTED — 未注入正式 `TAURI_SIGNING_PRIVATE_KEY`）**。
 
 

@@ -84,7 +84,9 @@ func CacheFresh(now, fetched time.Time) bool {
 
 - [x] `manualOnlyRuleMatches`按`index-WiZKxTAT.js:2158`迁移：需要合法manual_download_url、非空受支持platforms、合法max_version_exclusive且≤min_supported_version，min若存在必须<max及min_supported_version；匹配当前平台与半开版本区间；enabled=false无强制规则。min_supported_version是阈值，不冒充实际待安装版本，实际版本取签名manifest。非法manual规则不命中，非法URL告警丢弃；完整policy解析失败才使用LKG。manual_only命中阻止自动下载/安装，手动入口到本仓库Releases；安装仍校验签名。Rust平台名显式映射到原协议win32，不拿windows字符串误判。
 - [x] Release脚本构建gateway/opencode/media工具及Tauri安装包，生成插件要求的签名和静态manifest、SHA256清单、版本/许可证说明。签名私钥从本机环境或GitHub Secrets读，公钥随应用；无签名配置明确失败，禁止发布假签名或未签名自动更新。
-- [x] 从旧测试版本安装升级至新测试版本，验证数据/版本/批准/幂等回执未丢，损坏签名不可安装、manual_only不下载、任务活动期间不重启。`go -C gateway test ./internal/updates -v`、Rust测试及Release dry-run通过，提交 `feat(M7.4): gate signed updates with cached release policy`。
+- [x] 历史离线模拟迁移验证数据/版本/批准/幂等回执保留；策略与验签辅助函数测试、`go -C gateway test ./internal/updates -v`、Rust测试及 Release dry-run 通过，提交 `feat(M7.4): gate signed updates with cached release policy`。这些检查不等于真实安装升级。
+- [ ] 真实原生检查→下载→验签→安装调用链及忙碌排他门禁（2026-10-22 交接 H01 接续中）；生产构建、实际 WebView 与独立审查通过后再勾选。
+- [ ] 在干净 Windows 账户从旧签名版本实际安装升级至新签名版本，验证数据/版本/批准/幂等回执保留，坏签名拒绝、manual_only 零下载、任务期间零安装。正式材料与环境未验证，**UNEXECUTED**。
 
 M7.4 在 `d1aa130` 通过独立规格/质量审查（见 `.superpowers/sdd/m7.4-review.md`）；`scripts/release.ps1 -DryRun` 通过（`.runtime/release-dry-run/`）；正式私钥签名构建因未注入 `TAURI_SIGNING_PRIVATE_KEY` 保持未执行。
 

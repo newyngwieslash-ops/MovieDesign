@@ -1,0 +1,86 @@
+{
+  "capturedAt": "2026-10-20T20:13:35+08:00",
+  "timezone": "Asia/Shanghai",
+  "branch": "main",
+  "head": "f9432ae6dd485f51441d7f6202e127107ef1966e",
+  "originMainTracking": "f9432ae6dd485f51441d7f6202e127107ef1966e",
+  "remoteMainVerifiedOn": "2026-10-20",
+  "remoteMainVerifiedBy": "git ls-remote --heads origin main",
+  "remoteMainVerifiedSha": "f9432ae6dd485f51441d7f6202e127107ef1966e",
+  "trackedStatusMarkerCount": 32,
+  "normalizedWorkingDiffExit": 0,
+  "stagedDiffExit": 0,
+  "trackedStatusMarkers": [
+    " M gateway/internal/delivery/canvas_test.go",
+    " M gateway/internal/delivery/service_test.go",
+    " M gateway/internal/delivery/task_outputs.go",
+    " M gateway/internal/delivery/types.go",
+    " M gateway/internal/mcp/catalog.go",
+    " M gateway/internal/mcp/native_test.go",
+    " M gateway/internal/mcp/server.go",
+    " M gateway/internal/mcp/server_test.go",
+    " M gateway/internal/server/agent.go",
+    " M gateway/internal/server/agent_test.go",
+    " M gateway/internal/server/chat.go",
+    " M gateway/internal/server/chat_test.go",
+    " M gateway/internal/server/delivery_test.go",
+    " M gateway/internal/server/events.go",
+    " M gateway/internal/server/generate_test.go",
+    " M gateway/internal/server/generation_delivery_test.go",
+    " M gateway/internal/server/masks.go",
+    " M gateway/internal/server/mcp_test.go",
+    " M gateway/internal/server/provider_fixture_test.go",
+    " M gateway/internal/server/providers.go",
+    " M gateway/internal/server/providers_test.go",
+    " M gateway/internal/server/questions_test.go",
+    " M gateway/internal/server/tasks.go",
+    " M gateway/internal/server/tasks_test.go",
+    " M gateway/internal/store/objects_test.go",
+    " M gateway/internal/store/projects.go",
+    " M gateway/internal/store/requests.go",
+    " M gateway/internal/store/requests_test.go",
+    " M gateway/internal/tasks/adoption.go",
+    " M gateway/internal/tasks/billing_test.go",
+    " M gateway/internal/tasks/service_test.go",
+    " M gateway/internal/tasks/text_test.go"
+  ],
+  "keySourceHashes": [
+    {
+      "path": "desktop/src-tauri/src/lib.rs",
+      "sha256": "5450ab5764d15269093eeddbb8e3e3b3c9a459b4fcb94cd2d4136e1f62ce6a82"
+    },
+    {
+      "path": "desktop/src-tauri/src/updates.rs",
+      "sha256": "69fa563b877c5332b67017c39963b4930edb9223b9e5ebf80453e4c4141eaa04"
+    },
+    {
+      "path": "desktop/src/features/settings/UpdateSettings.tsx",
+      "sha256": "bad903618fee1bd37d8368b1b1a05c6fa9454db7e62669d4d8a2f96fbdc6d2bc"
+    },
+    {
+      "path": "desktop/src-tauri/tauri.conf.json",
+      "sha256": "e934a8c86756f2c1b94bce5c703774f1c78b0118a3641c5aade4401597eb45d4"
+    },
+    {
+      "path": "gateway/internal/providers/video.go",
+      "sha256": "ebe5a89ff4e36ba75e9a6053c444a0515481692b5d69683d3d95d1e7c7c36370"
+    },
+    {
+      "path": "gateway/internal/updates/policy.go",
+      "sha256": "b1f961ad3760a31a912f2ee634177ae7fdb5dca540ac710773cc13fa9525f413"
+    },
+    {
+      "path": "scripts/release.ps1",
+      "sha256": "4211943f10c38d30db75a4c7bd5bb7ce96a70bb1daefde71a8a91c917226ef35"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "sha256": "d5c5097ebbe5f01b002323defbfd658d88cab9fb8caf8e99cc4c74d97e36f9a1"
+    },
+    {
+      "path": "restart.bat",
+      "sha256": "f19719666300515c04187ccb0e824aa15b27dd5fea3a98c49918aea37e14c205"
+    }
+  ],
+  "scope": "Documentation handoff only. Historical tests were read, not rerun. No secrets or user asset content included."
+}

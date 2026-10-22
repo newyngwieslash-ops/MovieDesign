@@ -39,7 +39,7 @@
    - `min_supported_version` 是最低支持版本阈值，不冒充实际待安装版本；实际待安装版本取自签名 `latest.json` manifest。
    - 命中 `manual_only` 时阻止自动下载与自动安装，UI 与原生门禁仅保留前往本仓库 GitHub Releases 的手动下载入口；手动下载的安装包同样经过签名校验。
 3. **HTTPS 拉取、重试与 24 小时原子缓存 (`update-policy-cache.json`)**：
-   - 请求超时 `3s`，最多尝试 `3` 次；仅对 `5xx` 或网络/超时错误重试，退避延迟为 `250ms * 2^(n-1)`，上限 `1000ms`（`4xx` 与 `invalid_schema` 不重试）。
+   - 请求超时 `3s`，最多尝试 `3` 次；仅对 HTTP `5xx` 重试，退避延迟为 `250ms * 2^(n-1)`，上限 `1000ms`。网络/超时、响应体读取失败、`4xx`、超大响应与 `invalid_schema` 均不重试，仍可使用匹配的 LKG 缓存。这是 MovieDesign 已确认计划对原产品网络重试范围的收窄，H05 于 2026-10-22 修复代码与文档漂移。
    - 缓存结构为 `{policy, cachedAt, metadata: {region: "global", channel: "stable", platform: "win32"}}`，使用临时文件 + `Sync` + `Rename` 原子写入。
    - `CacheFresh(now, fetched)`：`age := now.Sub(fetched); return age >= 0 && age <= 24*time.Hour`。
    - `age <= 24h` 时可直接用于启动并在后台刷新；过期或时钟回拨（`age < 0` 未来时间戳按过期处理并标记 `clockSkew: true`）时先刷新远端，刷新失败则保留并应用元数据匹配的 LKG（Last Known Good）缓存策略，同时向 UI 暴露 `stale: true` 与 `policyFallbackReason`。
