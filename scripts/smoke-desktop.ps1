@@ -1,4 +1,4 @@
-param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2', 'editor', 'editor-product', 'canvas', 'providers', 'questions', 'generation', 'agent', 'agent-prepare', 'chat', 'chat-fix', 'tools', 'skills', 'storyboard', 'pipeline', 'video', 'interruptions')][string]$Smoke = 'm1')
+param([ValidateSet('debug', 'release')][string]$Mode = 'release', [ValidateSet('m1', 'm2', 'editor', 'editor-product', 'canvas', 'providers', 'questions', 'generation', 'agent', 'agent-prepare', 'chat', 'chat-fix', 'tools', 'skills', 'storyboard', 'pipeline', 'video', 'interruptions', 'updates')][string]$Smoke = 'm1')
 $ErrorActionPreference = 'Stop'
 if ($Smoke -eq 'editor' -and $Mode -ne 'debug') { throw 'Editor Canvas harness requires -Mode debug and the existing Vite dev server.' }
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -16,6 +16,13 @@ $info.FileName = $binary
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.EnvironmentVariables['MOVIEDESIGN_DATA_DIR'] = $runDir
+if ($Smoke -eq 'updates') {
+    # Controlled policy cache only. Production's signed manifest/package endpoint
+    # stays native-owned; this smoke never installs an application update.
+    $info.EnvironmentVariables['MOVIEDESIGN_UPDATE_POLICY_URL'] = 'http://127.0.0.1:9/unavailable-policy'
+    $cache = @{ policy = @{ schema_version = 1; enabled = $true; min_supported_version = '2.0.0'; manual_download_url = 'https://github.com/newyngwieslash-ops/MovieDesign/releases/latest'; manual_only = @{ platforms = @('win32'); max_version_exclusive = '2.0.0'; reason = @{ zh = 'Controlled offline update policy'; en = 'Controlled offline update policy' } } }; cachedAt = [DateTime]::UtcNow.ToString('o'); metadata = @{ region = 'global'; channel = 'stable'; platform = 'win32' } } | ConvertTo-Json -Depth 8
+    [System.IO.File]::WriteAllText((Join-Path $runDir 'update-policy-cache.json'), $cache, (New-Object System.Text.UTF8Encoding($false)))
+}
 $profile = Join-Path $runDir 'webview-profile'
 $info.EnvironmentVariables['WEBVIEW2_USER_DATA_FOLDER'] = $profile
 $info.EnvironmentVariables['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = "--remote-debugging-port=$debugPort --remote-debugging-address=127.0.0.1"
@@ -52,7 +59,7 @@ try {
         Write-Output "Agent preparation failure isolated; gateway health/M4 reads available; no model child/contact; normal exit: $runDir"
         return
     }
-    $scriptName = if ($Smoke -eq 'interruptions') { 'smoke-interruptions.mjs' } elseif ($Smoke -eq 'video') { 'smoke-video.mjs' } elseif ($Smoke -eq 'pipeline') { 'smoke-pipeline.mjs' } elseif ($Smoke -eq 'storyboard') { 'smoke-storyboard.mjs' } elseif ($Smoke -eq 'skills') { 'smoke-skills.mjs' } elseif ($Smoke -eq 'tools') { 'smoke-tools.mjs' } elseif ($Smoke -in @('chat', 'chat-fix', 'skills', 'storyboard')) { 'smoke-chat.mjs' } elseif ($Smoke -eq 'agent') { 'smoke-agent.mjs' } elseif ($Smoke -eq 'generation') { 'smoke-generation.mjs' } elseif ($Smoke -eq 'questions') { 'smoke-questions.mjs' } elseif ($Smoke -eq 'providers') { 'smoke-providers.mjs' } elseif ($Smoke -eq 'canvas') { 'smoke-canvas.mjs' } elseif ($Smoke -in @('editor', 'editor-product')) { 'smoke-editor.mjs' } elseif ($Smoke -eq 'm2') { 'smoke-m2.mjs' } else { 'smoke-desktop.mjs' }
+    $scriptName = if ($Smoke -eq 'updates') { 'smoke-updates.mjs' } elseif ($Smoke -eq 'interruptions') { 'smoke-interruptions.mjs' } elseif ($Smoke -eq 'video') { 'smoke-video.mjs' } elseif ($Smoke -eq 'pipeline') { 'smoke-pipeline.mjs' } elseif ($Smoke -eq 'storyboard') { 'smoke-storyboard.mjs' } elseif ($Smoke -eq 'skills') { 'smoke-skills.mjs' } elseif ($Smoke -eq 'tools') { 'smoke-tools.mjs' } elseif ($Smoke -in @('chat', 'chat-fix', 'skills', 'storyboard')) { 'smoke-chat.mjs' } elseif ($Smoke -eq 'agent') { 'smoke-agent.mjs' } elseif ($Smoke -eq 'generation') { 'smoke-generation.mjs' } elseif ($Smoke -eq 'questions') { 'smoke-questions.mjs' } elseif ($Smoke -eq 'providers') { 'smoke-providers.mjs' } elseif ($Smoke -eq 'canvas') { 'smoke-canvas.mjs' } elseif ($Smoke -in @('editor', 'editor-product')) { 'smoke-editor.mjs' } elseif ($Smoke -eq 'm2') { 'smoke-m2.mjs' } else { 'smoke-desktop.mjs' }
     $phase = if ($Smoke -eq 'editor-product') { 'product' } else { 'initial' }
     & node (Join-Path $PSScriptRoot $scriptName) $debugPort $runDir $origin $phase
     if ($LASTEXITCODE -ne 0) { throw 'WebView smoke failed.' }
@@ -60,7 +67,7 @@ try {
     if (-not $browser) { throw 'Test-only WebView profile override was not observed in browser command line.' }
     $browser | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $runDir 'webview-profile.json')
     Stop-OwnedDesktop $process
-    if ($Smoke -in @('m2', 'editor-product', 'canvas', 'providers', 'questions', 'generation', 'agent', 'chat', 'chat-fix', 'tools', 'skills', 'storyboard', 'pipeline', 'video', 'interruptions')) {
+    if ($Smoke -in @('m2', 'editor-product', 'canvas', 'providers', 'questions', 'generation', 'agent', 'chat', 'chat-fix', 'tools', 'skills', 'storyboard', 'pipeline', 'video', 'interruptions', 'updates')) {
         $process.Dispose()
         $process = [System.Diagnostics.Process]::Start($info)
         $phase = if ($Smoke -eq 'editor-product') { 'product-recovery' } elseif ($Smoke -eq 'chat-fix') { 'fix' } else { 'recovery' }

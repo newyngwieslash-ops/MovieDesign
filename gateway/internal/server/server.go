@@ -56,6 +56,8 @@ type Server struct {
 	stopping               bool
 	requests               sync.WaitGroup
 	active                 atomic.Int64
+	updateToken            string
+	updateReservation      string
 	llm                    *agent.Settings
 	agentHost              *agent.Host
 	agentBootstrap         string
@@ -161,6 +163,9 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 	}
 	ev := events.NewService(db)
 	srv := &Server{db: db, events: ev, tasks: tasks.NewService(db, ev, nil), updates: updates.NewService("")}
+	srv.updateToken = os.Getenv("MOVIEDESIGN_UPDATE_TOKEN")
+	// Keep this launch secret out of any later managed child environment.
+	_ = os.Unsetenv("MOVIEDESIGN_UPDATE_TOKEN")
 	if providerService != nil {
 		srv.llm = &agent.Settings{DB: db, Secrets: providerService.Secrets}
 	}
@@ -196,18 +201,31 @@ func newHandler(origin string, db *sql.DB, files *workspace.Service, configured 
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		kind := objectKind(r.URL.Path)
+		updateControl := strings.HasPrefix(r.URL.Path, "/internal/updates/")
+		mutation := !updateControl && r.Method != "OPTIONS" && (r.Method == "POST" || fileRoute(r.URL.Path))
 		srv.mu.Lock()
 		if srv.stopping && r.URL.Path != "/api/health" {
 			srv.mu.Unlock()
 			reject(w, 503, "upstream", "Gateway is stopping")
 			return
 		}
+		if mutation && srv.updateReservation != "" {
+			srv.mu.Unlock()
+			reject(w, 409, "capacity", "Update installation has exclusive admission")
+			return
+		}
 		srv.requests.Add(1)
+		if mutation {
+			srv.active.Add(1)
+		}
 		srv.mu.Unlock()
 		defer srv.requests.Done()
-		if r.Method != "OPTIONS" && (r.Method == "POST" || fileRoute(r.URL.Path)) {
-			srv.active.Add(1)
+		if mutation {
 			defer srv.active.Add(-1)
+		}
+		if updateControl {
+			srv.serveUpdateControl(w, r)
+			return
 		}
 		if r.Method == http.MethodOptions {
 			method := r.Header.Get("Access-Control-Request-Method")

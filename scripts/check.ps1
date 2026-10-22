@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
+& powershell -NoProfile -File (Join-Path $PSScriptRoot 'check-restart.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Launcher ownership/recovery checks failed.' }
 & (Join-Path $PSScriptRoot 'build-media-tools.ps1')
 $env:MOVIEDESIGN_FFPROBE_TEST_BINARY = Join-Path $projectRoot 'desktop/src-tauri/binaries/media/ffprobe.exe'
 Push-Location (Join-Path $projectRoot 'gateway')
@@ -11,7 +13,7 @@ try {
 } finally { Pop-Location }
 & (Join-Path $PSScriptRoot 'build-gateway.ps1')
 & (Join-Path $PSScriptRoot 'build-opencode.ps1')
-& node --test (Join-Path $PSScriptRoot 'check-m2-recovery.mjs') (Join-Path $PSScriptRoot 'check-m2-ui.mjs') (Join-Path $PSScriptRoot 'check-editor-lifecycle.mjs') (Join-Path $PSScriptRoot 'check-canvas-recovery.mjs') (Join-Path $PSScriptRoot 'check-task-ui.mjs') (Join-Path $PSScriptRoot 'check-chat-ui.mjs') (Join-Path $PSScriptRoot 'check-storyboard-ui.mjs')
+& node --test (Join-Path $PSScriptRoot 'check-m2-recovery.mjs') (Join-Path $PSScriptRoot 'check-m2-ui.mjs') (Join-Path $PSScriptRoot 'check-editor-lifecycle.mjs') (Join-Path $PSScriptRoot 'check-canvas-recovery.mjs') (Join-Path $PSScriptRoot 'check-task-ui.mjs') (Join-Path $PSScriptRoot 'check-chat-ui.mjs') (Join-Path $PSScriptRoot 'check-storyboard-ui.mjs') (Join-Path $PSScriptRoot 'check-update-ui.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'M2 import recovery checks failed.' }
 Push-Location (Join-Path $projectRoot 'desktop')
 try {

@@ -3,6 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 import { APIError, api, newRequestID } from '../../gateway';
 import { subscribeEvents } from '../../events';
 import { readIntent, clearIntent, type Intent } from './pending';
+import type { ComponentProps } from 'react';
+
+export function DecisionFrame({title, children, className='confirmation-card', ...props}: ComponentProps<'section'> & {title: string}) {
+ return <section className={className} aria-label={title} {...props}><h3>{title}</h3>{children}</section>;
+}
 
 type Info = { header: string; question: string; options: {label: string; description: string}[]; multiple?: boolean; custom?: boolean };
 export type Question = { id: string; project_id: string; session_id: string; task_id?: string; kind: 'billing'|'choice'|'storyboard'|'delivery'|'project_rules'|'creative'; creativeContent?:string; creative?:{pipelineId:string;gate:'intent'|'script'|'storyboard';revision:number;documentVersionId:string;semanticHash:string}; revision: number; task_revision?: number; state: string; native_send_state?: 'pending'|'sending'|'sent'|'unknown'; questions: Info[]; provider?: string; model?: string; reason?: string; impacts?: string[]; quote?: {basis?: string; quote_id: string; currency: string; estimated_amount: number; minor_unit_scale: number; estimated_credits: number; expires_at: number; version: string; source: string} };
@@ -64,15 +69,14 @@ export function ConfirmationCard({question: q, refresh}: {question: Question; re
    <button disabled={!canDecide(q.state,expired,busy,!!intent,!!storageError,false)} onClick={() => decide(false)}>{q.creative ? q.questions[0].options[0].label : q.kind === 'billing' ? '确认生成' : '提交选择'}</button><button disabled={!canDecide(q.state,expired,busy,!!intent,!!storageError,true)} onClick={() => decide(true)}>拒绝</button>
   </fieldset>
  </>;
- return <section className={resolved ? 'confirmation-card is-resolved' : 'confirmation-card'} aria-label={`${q.kind === 'billing' ? '费用' : q.kind === 'storyboard' ? '分镜' : '选项'}确认`} data-question-id={q.id} data-state={q.state} data-compact={resolved ? 'true' : 'false'}>
-  <h3>{q.questions[0]?.header ?? '确认事项'}</h3>
+ return <DecisionFrame title={q.questions[0]?.header ?? '确认事项'} className={resolved ? 'confirmation-card is-resolved' : 'confirmation-card'} aria-label={`${q.kind === 'billing' ? '费用' : q.kind === 'storyboard' ? '分镜' : '选项'}确认`} data-question-id={q.id} data-state={q.state} data-compact={resolved ? 'true' : 'false'}>
   {resolved ? <details className="resolved-card-details"><summary>展开已处理确认详情（{q.state}）</summary>{detailsBody}</details> : detailsBody}
   {intent && (!resolved || q.state === 'approved') && <div><p>{q.state === 'approved' ? '批准回执已保存。恢复操作只会启动尚未发送的原任务。' : '存在待确认的原请求。'}</p><button disabled={busy || !!storageError} onClick={refresh}>查询确认状态</button><button disabled={busy || !!storageError} onClick={() => void send(intent)}>{q.state === 'approved' ? '恢复已批准的原任务' : '重发原确认请求'}</button></div>}
   {(expired || q.state === 'expired') && !resolved && <><p role="status">报价已过期，旧确认不可使用。</p><button disabled={busy || !!intent || !!storageError} onClick={renew}>继续并重新报价</button></>}
   {resolved && <p role="status">{q.state === 'approved' ? q.creative?'此版本已批准；尚未提交生成':'已批准，已记录一次生成意图' : q.state === 'rejected' ? '已拒绝' : q.state === 'answered' ? '已提交选择' : '旧卡片不可使用'}{q.reason ? `：${q.reason}` : ''}</p>}
   {q.native_send_state && <p role="status">原生回答投递：{{pending:'等待人工回执',sending:'正在投递已保存的人工回执',sent:'已送达',unknown:'结果未知；已保存的人工回执不会自动重发'}[q.native_send_state]}</p>}
   {message && <p role="alert">{message}</p>}{storageError && <p role="alert">无法安全保存确认：{storageError}</p>}
- </section>;
+ </DecisionFrame>;
 }
 export function ConfirmationCards({projectID,sessionID}: {projectID: string; sessionID?: string}) {
  const [cards,setCards] = useState<Question[]>([]), [error,setError] = useState('');

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,202 @@ import (
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/updates"
 )
+
+// This control plane is callable only by the owning native shell. The token is
+// launch-scoped, never sent to the WebView, OpenCode, MCP, or a question callback.
+type updateControlRequest struct {
+	RequestID         string `json:"requestId" validate:"required,max=128"`
+	CandidateID       string `json:"candidateId,omitempty"`
+	ReceiptID         string `json:"receiptId,omitempty"`
+	Version           string `json:"version,omitempty"`
+	CurrentVersion    string `json:"currentVersion,omitempty"`
+	Decision          string `json:"decision,omitempty"`
+	DecisionReceiptID string `json:"decisionReceiptId,omitempty"`
+}
+
+func (s *Server) serveUpdateControl(w http.ResponseWriter, r *http.Request) {
+	if s.updateToken == "" || len(r.Header.Values("X-MovieDesign-Update")) != 1 || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-MovieDesign-Update")), []byte(s.updateToken)) != 1 {
+		reject(w, 403, "invalid_input", "Native update control required")
+		return
+	}
+	if r.Method != http.MethodPost || r.URL.RawQuery != "" {
+		reject(w, 400, "invalid_input", "Invalid update control request")
+		return
+	}
+	if s.db == nil {
+		reject(w, 503, "upstream", "Update receipt storage unavailable")
+		return
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16384))
+	if err != nil {
+		objectError(w, err)
+		return
+	}
+	req, err := store.DecodeValue[updateControlRequest](raw)
+	if err != nil || (store.Scope{ProjectID: "_app", Operation: "updates.control", RequestID: req.RequestID}).Validate() != nil {
+		reject(w, 400, "invalid_input", "Invalid update control request")
+		return
+	}
+	action := strings.TrimPrefix(r.URL.Path, "/internal/updates/")
+	readReceipt := func(id, operation string) ([]byte, error) {
+		var b string
+		e := s.db.QueryRowContext(r.Context(), `SELECT response_json FROM write_requests WHERE project_id='_app' AND operation=? AND request_id=? AND state='completed'`, operation, id).Scan(&b)
+		return []byte(b), e
+	}
+	if action == "receipt" {
+		b, e := readReceipt(req.ReceiptID, "updates.install")
+		if errors.Is(e, sql.ErrNoRows) {
+			id := req.ReceiptID
+			if req.DecisionReceiptID != "" {
+				id = req.DecisionReceiptID
+			}
+			b, e = readReceipt(id, "updates.decision")
+		}
+		if e != nil {
+			objectError(w, e)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+		return
+	}
+	if action == "history" {
+		rows, e := s.db.QueryContext(r.Context(), `SELECT response_json FROM write_requests WHERE project_id='_app' AND operation IN ('updates.decision','updates.install') AND state='completed' ORDER BY rowid DESC LIMIT 20`)
+		if e != nil {
+			objectError(w, e)
+			return
+		}
+		defer rows.Close()
+		items := []json.RawMessage{}
+		for rows.Next() {
+			var raw string
+			if e = rows.Scan(&raw); e != nil {
+				objectError(w, e)
+				return
+			}
+			items = append(items, json.RawMessage(raw))
+		}
+		if e = rows.Err(); e != nil {
+			objectError(w, e)
+			return
+		}
+		respond(w, http.StatusOK, map[string]any{"items": items})
+		return
+	}
+	if action == "release" {
+		if _, e := readReceipt(req.ReceiptID, "updates.install"); e != nil {
+			objectError(w, e)
+			return
+		}
+		b, e := store.WriteRequest(r.Context(), s.db, store.Scope{ProjectID: "_app", Operation: "updates.release", RequestID: req.RequestID}, raw, func(tx *sql.Tx) ([]byte, error) {
+			return json.Marshal(map[string]string{"status": "released", "receiptId": req.ReceiptID})
+		})
+		if e != nil {
+			objectError(w, e)
+			return
+		}
+		s.mu.Lock()
+		if s.updateReservation == req.ReceiptID {
+			s.updateReservation = ""
+		}
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+		return
+	}
+	if action != "decision" && action != "admit" {
+		reject(w, 404, "not_found", "Unknown update control")
+		return
+	}
+	if (store.Scope{ProjectID: req.CandidateID, Operation: "candidate", RequestID: req.RequestID}).Validate() != nil || !updates.ValidSemver(req.Version) || !updates.ValidSemver(req.CurrentVersion) {
+		reject(w, 400, "invalid_input", "Invalid candidate")
+		return
+	}
+	if action == "decision" {
+		if req.Decision != "approve" && req.Decision != "reject" {
+			reject(w, 400, "invalid_input", "Explicit decision required")
+			return
+		}
+		b, e := store.WriteRequest(r.Context(), s.db, store.Scope{ProjectID: "_app", Operation: "updates.decision", RequestID: req.RequestID}, raw, func(tx *sql.Tx) ([]byte, error) {
+			var count int
+			if e := tx.QueryRowContext(r.Context(), `SELECT count(*) FROM write_requests WHERE project_id='_app' AND operation='updates.decision' AND state='completed' AND json_extract(input_json,'$.candidateId')=?`, req.CandidateID).Scan(&count); e != nil {
+				return nil, e
+			}
+			if count != 0 {
+				return nil, store.ErrRequestConflict
+			}
+			return json.Marshal(map[string]string{"status": req.Decision, "requestId": req.RequestID, "candidateId": req.CandidateID, "version": req.Version, "currentVersion": req.CurrentVersion})
+		})
+		if e != nil {
+			objectError(w, e)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+		return
+	}
+	// Reserve before consulting SQL or policy: all business HTTP/MCP activity
+	// registers under this same mutex. Never hold it across storage or network I/O.
+	s.mu.Lock()
+	if s.stopping || s.updateReservation != "" || s.active.Load() != 0 {
+		s.mu.Unlock()
+		reject(w, 409, "capacity", "Application is busy")
+		return
+	}
+	s.updateReservation = req.RequestID
+	s.mu.Unlock()
+	admitted := false
+	defer func() {
+		if !admitted {
+			s.mu.Lock()
+			if s.updateReservation == req.RequestID {
+				s.updateReservation = ""
+			}
+			s.mu.Unlock()
+		}
+	}()
+	if _, e := readReceipt(req.RequestID, "updates.install"); e == nil {
+		objectError(w, store.ErrRequestConflict)
+		return
+	} else if !errors.Is(e, sql.ErrNoRows) {
+		objectError(w, e)
+		return
+	}
+	b, e := readReceipt(req.ReceiptID, "updates.decision")
+	if e != nil {
+		objectError(w, e)
+		return
+	}
+	var decision map[string]string
+	if json.Unmarshal(b, &decision) != nil || decision["status"] != "approve" || decision["candidateId"] != req.CandidateID || decision["version"] != req.Version || decision["currentVersion"] != req.CurrentVersion {
+		objectError(w, store.ErrRequestConflict)
+		return
+	}
+	safe, reason := s.updateSafetyState(false)
+	snap := s.updates.Evaluate(r.Context(), updates.EvalOptions{CurrentVersion: req.CurrentVersion, Platform: "win32", Locale: "zh-CN", PreferCache: true, SafeToInstall: safe, BusyReason: reason})
+	if !safe || snap.Status != "ready" || !snap.AutoUpdateAllowed || snap.Resolved.ManualOnly {
+		reject(w, 409, "waiting_user", "Policy or activity prevents installation")
+		return
+	}
+	b, e = store.WriteRequest(r.Context(), s.db, store.Scope{ProjectID: "_app", Operation: "updates.install", RequestID: req.RequestID}, raw, func(tx *sql.Tx) ([]byte, error) {
+		// A receipt can authorize at most one install, including after process restart.
+		var count int
+		if e := tx.QueryRowContext(r.Context(), `SELECT count(*) FROM write_requests WHERE project_id='_app' AND operation='updates.install' AND state='completed' AND json_extract(input_json,'$.receiptId')=?`, req.ReceiptID).Scan(&count); e != nil {
+			return nil, e
+		}
+		if count != 0 {
+			return nil, store.ErrRequestConflict
+		}
+		return json.Marshal(map[string]string{"status": "install_started", "requestId": req.RequestID, "candidateId": req.CandidateID, "receiptId": req.ReceiptID, "version": req.Version})
+	})
+	if e != nil {
+		objectError(w, e)
+		return
+	}
+	admitted = true
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
+}
 
 func updateRoute(path string) bool {
 	return path == "/api/updates/policy" || path == "/api/updates/check"

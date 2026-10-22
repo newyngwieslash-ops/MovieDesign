@@ -10,6 +10,33 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub fn private_update_token() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    #[cfg(windows)]
+    {
+        #[link(name = "bcrypt")]
+        extern "system" {
+            fn BCryptGenRandom(
+                handle: *mut std::ffi::c_void,
+                buffer: *mut u8,
+                len: u32,
+                flags: u32,
+            ) -> i32;
+        }
+        if unsafe { BCryptGenRandom(std::ptr::null_mut(), bytes.as_mut_ptr(), 32, 2) } != 0 {
+            return Err("无法生成私有更新令牌".into());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use std::io::Read;
+        fs::File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut bytes))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 #[derive(Clone, Serialize)]
 pub struct Connection {
     pub port: Option<u16>,
@@ -17,6 +44,7 @@ pub struct Connection {
 }
 
 pub struct Gateway {
+    update_token: String,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     responses: Receiver<String>,
@@ -28,6 +56,7 @@ impl Gateway {
     pub fn start(data_dir: &Path) -> Self {
         let (sender, responses) = mpsc::channel();
         let mut gateway = Self {
+            update_token: String::new(),
             child: None,
             stdin: None,
             responses,
@@ -55,6 +84,8 @@ impl Gateway {
                 "http://tauri.localhost"
             };
             let mut command = Command::new(sidecar);
+            gateway.update_token = private_update_token()?;
+            command.env("MOVIEDESIGN_UPDATE_TOKEN", &gateway.update_token);
             // These are private launch-state inputs, never inherited from the shell.
             command.env_remove("MOVIEDESIGN_AGENT_BOOTSTRAP");
             command.env_remove("MOVIEDESIGN_AGENT_PREPARE_FAILED");
@@ -168,6 +199,22 @@ impl Gateway {
         self.connection.clone()
     }
 
+    pub fn update_connection(&mut self) -> Result<(u16, String, &'static str), String> {
+        let conn = self.connection();
+        let port = conn
+            .port
+            .ok_or_else(|| conn.error.unwrap_or_else(|| "本地服务尚未就绪".into()))?;
+        Ok((
+            port,
+            self.update_token.clone(),
+            if cfg!(debug_assertions) {
+                "http://localhost:1420"
+            } else {
+                "http://tauri.localhost"
+            },
+        ))
+    }
+
     pub fn shutdown(&mut self) {
         // Stop the owned model runtime before draining the gateway. No PID/port-wide termination.
         if let Some(mut agent) = self.agent.take() {
@@ -245,6 +292,7 @@ mod tests {
     fn shutdown_operates_only_on_owned_handles_and_is_idempotent() {
         let (_tx, rx) = mpsc::channel();
         let mut gw = Gateway {
+            update_token: String::new(),
             child: None,
             stdin: None,
             responses: rx,

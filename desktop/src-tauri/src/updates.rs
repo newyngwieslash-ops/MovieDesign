@@ -7,8 +7,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::str::FromStr;
 use std::time::Duration;
-use tauri::{AppHandle, Runtime};
-use tauri_plugin_updater::{RemoteRelease, UpdaterExt};
+use tauri_plugin_updater::RemoteRelease;
 
 pub const DEFAULT_POLICY_URL: &str =
     "https://raw.githubusercontent.com/newyngwieslash-ops/MovieDesign/main/updates/stable/policy.json";
@@ -34,18 +33,23 @@ pub fn current_policy_platform() -> &'static str {
 }
 
 pub fn allowed_release_asset_url(url: &str, allow_loopback: bool) -> bool {
-    let trimmed = url.trim();
-    if trimmed.starts_with("https://github.com/newyngwieslash-ops/MovieDesign/releases/")
-        || trimmed.starts_with("https://objects.githubusercontent.com/")
-    {
-        return true;
+    let Ok(url) = tauri::Url::parse(url) else {
+        return false;
+    };
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
+        return false;
     }
-    if allow_loopback
-        && (trimmed.starts_with("http://127.0.0.1:") || trimmed.starts_with("http://localhost:"))
-    {
-        return true;
-    }
-    false
+    (url.scheme() == "https"
+        && url.host_str() == Some("github.com")
+        && url.port().is_none()
+        && url
+            .path()
+            .starts_with("/newyngwieslash-ops/MovieDesign/releases/download/")
+        && !url.path().contains("%"))
+        || (cfg!(test)
+            && allow_loopback
+            && url.scheme() == "http"
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost")))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -63,6 +67,8 @@ pub struct ResolvedPolicyWire {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayPolicySnapshot {
+    #[serde(flatten)]
+    pub metadata: serde_json::Map<String, Value>,
     pub status: String,
     pub source: String,
     pub stale: bool,
@@ -84,6 +90,10 @@ pub struct GatewayPolicySnapshot {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeUpdaterGateReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<GatewayPolicySnapshot>,
     pub platform: String,
     pub current_version: String,
     pub manifest_url: String,
@@ -120,6 +130,8 @@ pub fn evaluate_policy_gate(snap: &GatewayPolicySnapshot) -> NativeUpdaterGateRe
 
     if snap.status != "ready" {
         return NativeUpdaterGateReport {
+            candidate_id: None,
+            policy: Some(snap.clone()),
             platform,
             current_version: snap.current_version.clone(),
             manifest_url,
@@ -142,6 +154,8 @@ pub fn evaluate_policy_gate(snap: &GatewayPolicySnapshot) -> NativeUpdaterGateRe
 
     if snap.resolved.manual_only {
         return NativeUpdaterGateReport {
+            candidate_id: None,
+            policy: Some(snap.clone()),
             platform,
             current_version: snap.current_version.clone(),
             manifest_url,
@@ -164,6 +178,8 @@ pub fn evaluate_policy_gate(snap: &GatewayPolicySnapshot) -> NativeUpdaterGateRe
 
     if snap.busy || !snap.auto_update_allowed {
         return NativeUpdaterGateReport {
+            candidate_id: None,
+            policy: Some(snap.clone()),
             platform,
             current_version: snap.current_version.clone(),
             manifest_url,
@@ -183,6 +199,8 @@ pub fn evaluate_policy_gate(snap: &GatewayPolicySnapshot) -> NativeUpdaterGateRe
     }
 
     NativeUpdaterGateReport {
+        candidate_id: None,
+        policy: Some(snap.clone()),
         platform,
         current_version: snap.current_version.clone(),
         manifest_url,
@@ -212,11 +230,9 @@ fn verify_minisign_and_version(
     announced_version: &Version,
 ) -> Result<(), String> {
     let pubkey_str = decode_base64_utf8(pubkey_base64)?;
-    let public_key =
-        PublicKey::decode(&pubkey_str).map_err(|e| format!("无效的更新公钥: {e}"))?;
+    let public_key = PublicKey::decode(&pubkey_str).map_err(|e| format!("无效的更新公钥: {e}"))?;
     let sig_str = decode_base64_utf8(release_signature_base64)?;
-    let signature =
-        Signature::decode(&sig_str).map_err(|e| format!("安装包签名格式损坏: {e}"))?;
+    let signature = Signature::decode(&sig_str).map_err(|e| format!("安装包签名格式损坏: {e}"))?;
 
     public_key
         .verify(package_bytes, &signature, true)
@@ -282,71 +298,75 @@ pub fn verify_gated_manifest_and_package(
     Ok(report)
 }
 
-/// Ensures `tauri-plugin-updater` builder is configured with the policy gate at runtime.
-pub fn configure_runtime_updater<R: Runtime>(
-    app: &AppHandle<R>,
-    snap: &GatewayPolicySnapshot,
-) -> Result<NativeUpdaterGateReport, String> {
-    let report = evaluate_policy_gate(snap);
-    if !report.auto_install_allowed {
-        return Ok(report);
+// HTTP/1.0 plus Connection: close avoids chunked framing on this private loopback
+// channel. No bearer token is ever returned to the WebView or persisted to disk.
+pub fn gateway_request(
+    port: u16,
+    origin: &str,
+    token: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> Result<Value, String> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream =
+        TcpStream::connect_timeout(&addr, Duration::from_secs(3)).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(40)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .map_err(|e| e.to_string())?;
+    let payload = body.map(Value::to_string).unwrap_or_default();
+    let method = if body.is_some() { "POST" } else { "GET" };
+    let req = format!("{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nOrigin: {origin}\r\nX-MovieDesign-Update: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}", payload.len());
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut raw = String::new();
+    stream
+        .take(1024 * 1024)
+        .read_to_string(&mut raw)
+        .map_err(|e| e.to_string())?;
+    let (headers, body) = raw.split_once("\r\n\r\n").ok_or("本地更新控制响应不完整")?;
+    let data: Value =
+        serde_json::from_str(body).map_err(|e| format!("本地更新响应格式错误: {e}"))?;
+    if headers
+        .lines()
+        .next()
+        .and_then(|s| s.split_whitespace().nth(1))
+        != Some("200")
+    {
+        return Err(data["error"]["message"]
+            .as_str()
+            .unwrap_or("本地更新控制拒绝请求")
+            .into());
     }
-    let _updater = app
-        .updater_builder()
-        .build()
-        .map_err(|e| format!("初始化 tauri-plugin-updater 失败: {e}"))?;
-    Ok(report)
+    Ok(data)
 }
 
 pub fn fetch_gateway_policy_snapshot(
     port: u16,
+    origin: &str,
     current_version: &str,
 ) -> Result<GatewayPolicySnapshot, String> {
-    let platform = current_policy_platform();
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))
-        .map_err(|e| format!("无法连接本地服务策略端点: {e}"))?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
-
+    let version = Version::parse(current_version).map_err(|e| e.to_string())?;
     let path = format!(
-        "/api/updates/policy?version={}&platform={}&locale=zh-CN",
-        current_version.trim(),
-        platform
+        "/api/updates/policy?version={version}&platform={}&locale=zh-CN",
+        current_policy_platform()
     );
-    let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://tauri.localhost\r\nConnection: close\r\n\r\n"
-    );
-    stream
-        .write_all(req.as_bytes())
-        .map_err(|e| format!("发送策略查询失败: {e}"))?;
-
-    let mut raw = String::new();
-    stream
-        .read_to_string(&mut raw)
-        .map_err(|e| format!("读取策略响应失败: {e}"))?;
-
-    let (headers, body) = raw
-        .split_once("\r\n\r\n")
-        .ok_or_else(|| "本地服务返回了不完整的 HTTP 响应".to_string())?;
-    let status_line = headers.lines().next().unwrap_or_default();
-    if !status_line.contains(" 200 ") {
-        return Err(format!("本地服务策略查询返回非 200 状态: {status_line}"));
-    }
-
-    serde_json::from_str::<GatewayPolicySnapshot>(body.trim())
-        .map_err(|e| format!("解析本地策略快照失败: {e}"))
+    serde_json::from_value(gateway_request(port, origin, "", &path, None)?)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
 
     // Public key and signed payload vector (`version:2.0.0`, payload `b"test"`)
     // matching tauri-plugin-updater's public minisign format. Never contains a private key.
-    const PUBLIC_KEY_RAW: &str = "untrusted comment: minisign public key: A49EF4746FA6E6D7\nRWTX5qZvdPSepDGWg2bz8n6ArQnBMwgQK1geVosorcbLzcunD+KJ+cYe";
-    const SIGNATURE_RAW: &str = "untrusted comment: signature from tauri secret key\nRUTX5qZvdPSepPF2zsjvP/L/TQtBLRnWRvaq+4omK1UEugtQp/USrGiI1v762sDy3id3aor7bRC9ETyeot6lMHHrWoZ5hjUM1Qc=\ntrusted comment: timestamp:1791649051\tfile:payload\tversion:2.0.0\nDDq2CLOEl5cQmC2eJRHlnZPVViOZsu1CjpPKQoei4A/XBfkDqGO0B+QMrcrHgEQ5qV3mne75tdFWhJpqUXh9AA==";
+    pub(crate) const PUBLIC_KEY_RAW: &str = "untrusted comment: minisign public key: A49EF4746FA6E6D7\nRWTX5qZvdPSepDGWg2bz8n6ArQnBMwgQK1geVosorcbLzcunD+KJ+cYe";
+    pub(crate) const SIGNATURE_RAW: &str = "untrusted comment: signature from tauri secret key\nRUTX5qZvdPSepPF2zsjvP/L/TQtBLRnWRvaq+4omK1UEugtQp/USrGiI1v762sDy3id3aor7bRC9ETyeot6lMHHrWoZ5hjUM1Qc=\ntrusted comment: timestamp:1791649051\tfile:payload\tversion:2.0.0\nDDq2CLOEl5cQmC2eJRHlnZPVViOZsu1CjpPKQoei4A/XBfkDqGO0B+QMrcrHgEQ5qV3mne75tdFWhJpqUXh9AA==";
 
     fn encode_b64(raw: &str) -> String {
         base64::engine::general_purpose::STANDARD.encode(raw)
@@ -354,6 +374,7 @@ mod tests {
 
     fn sample_snapshot() -> GatewayPolicySnapshot {
         GatewayPolicySnapshot {
+            metadata: serde_json::Map::new(),
             status: "ready".into(),
             source: "cache".into(),
             stale: false,
@@ -485,17 +506,15 @@ mod tests {
                 }
             }
         });
-        assert!(
-            verify_gated_manifest_and_package(
-                &snap,
-                &pubkey_b64,
-                "windows-x86_64",
-                bad_sig_manifest,
-                b"test",
-                false,
-            )
-            .is_err()
-        );
+        assert!(verify_gated_manifest_and_package(
+            &snap,
+            &pubkey_b64,
+            "windows-x86_64",
+            bad_sig_manifest,
+            b"test",
+            false,
+        )
+        .is_err());
 
         // Announced version mismatch against signed trusted comment version must fail.
         let version_mismatch_manifest = json!({
@@ -543,16 +562,14 @@ mod tests {
         let mut busy_snap = sample_snapshot();
         busy_snap.busy = true;
         busy_snap.auto_update_allowed = false;
-        assert!(
-            verify_gated_manifest_and_package(
-                &busy_snap,
-                &pubkey_b64,
-                "windows-x86_64",
-                valid_manifest,
-                b"test",
-                false,
-            )
-            .is_err()
-        );
+        assert!(verify_gated_manifest_and_package(
+            &busy_snap,
+            &pubkey_b64,
+            "windows-x86_64",
+            valid_manifest,
+            b"test",
+            false,
+        )
+        .is_err());
     }
 }
