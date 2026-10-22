@@ -1,6 +1,7 @@
 package updates
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -261,44 +262,66 @@ func ParseCDNPolicy(raw []byte) (*CDNPolicy, []string, error) {
 }
 
 type semverParts struct {
-	major int
-	minor int
-	patch int
-	pre   string
+	core []string
+	pre  []string
+}
+
+func validSemverIdentifiers(raw string, build bool) bool {
+	for _, id := range strings.Split(raw, ".") {
+		if id == "" || strings.Trim(id, "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-") != "" {
+			return false
+		}
+		if !build && len(id) > 1 && id[0] == '0' && strings.Trim(id, "0123456789") == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func parseSemver(raw string) (semverParts, bool) {
 	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "v"))
-	if s == "" {
+	s, build, hasBuild := strings.Cut(s, "+")
+	if hasBuild && !validSemverIdentifiers(build, true) {
 		return semverParts{}, false
 	}
-	if idx := strings.IndexByte(s, '+'); idx >= 0 {
-		s = s[:idx]
+	s, pre, hasPre := strings.Cut(s, "-")
+	parts := semverParts{core: strings.Split(s, ".")}
+	if len(parts.core) != 3 {
+		return semverParts{}, false
 	}
-	var pre string
-	if idx := strings.IndexByte(s, '-'); idx >= 0 {
-		pre = s[idx+1:]
-		s = s[:idx]
-		if pre == "" {
+	for _, id := range parts.core {
+		if id == "" || strings.Trim(id, "0123456789") != "" || len(id) > 1 && id[0] == '0' {
 			return semverParts{}, false
 		}
 	}
-	segs := strings.Split(s, ".")
-	if len(segs) != 3 {
-		return semverParts{}, false
+	if hasPre {
+		if !validSemverIdentifiers(pre, false) {
+			return semverParts{}, false
+		}
+		parts.pre = strings.Split(pre, ".")
 	}
-	maj, err1 := strconv.Atoi(segs[0])
-	min, err2 := strconv.Atoi(segs[1])
-	pat, err3 := strconv.Atoi(segs[2])
-	if err1 != nil || err2 != nil || err3 != nil || maj < 0 || min < 0 || pat < 0 {
-		return semverParts{}, false
-	}
-	return semverParts{major: maj, minor: min, patch: pat, pre: pre}, true
+	return parts, true
 }
 
 func ValidSemver(raw string) bool {
 	_, ok := parseSemver(raw)
 	return ok
+}
+
+func compareSemverIdentifier(a, b string) int {
+	numericA := strings.Trim(a, "0123456789") == ""
+	numericB := strings.Trim(b, "0123456789") == ""
+	if numericA != numericB {
+		if numericA {
+			return -1
+		}
+		return 1
+	}
+	// Valid numeric identifiers have no leading zeroes, so length orders them without overflow.
+	if numericA && len(a) != len(b) {
+		return cmp.Compare(len(a), len(b))
+	}
+	return strings.Compare(a, b)
 }
 
 func CompareSemver(a, b string) (int, bool) {
@@ -307,37 +330,16 @@ func CompareSemver(a, b string) (int, bool) {
 	if !okA || !okB {
 		return 0, false
 	}
-	if va.major != vb.major {
-		if va.major < vb.major {
-			return -1, true
-		}
+	if order := slices.CompareFunc(va.core, vb.core, compareSemverIdentifier); order != 0 {
+		return order, true
+	}
+	if len(va.pre) == 0 && len(vb.pre) > 0 {
 		return 1, true
 	}
-	if va.minor != vb.minor {
-		if va.minor < vb.minor {
-			return -1, true
-		}
-		return 1, true
-	}
-	if va.patch != vb.patch {
-		if va.patch < vb.patch {
-			return -1, true
-		}
-		return 1, true
-	}
-	if va.pre == vb.pre {
-		return 0, true
-	}
-	if va.pre == "" {
-		return 1, true
-	}
-	if vb.pre == "" {
+	if len(vb.pre) == 0 && len(va.pre) > 0 {
 		return -1, true
 	}
-	if va.pre < vb.pre {
-		return -1, true
-	}
-	return 1, true
+	return slices.CompareFunc(va.pre, vb.pre, compareSemverIdentifier), true
 }
 
 // ManualOnlyRuleMatches ports manualOnlyRuleMatches from extracted/out/main/chunks/index-WiZKxTAT.js:2158.
