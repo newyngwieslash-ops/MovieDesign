@@ -69,7 +69,7 @@ test('existing confirmation cards reread native delivery state after chat comple
  const hooks=[],effects=[];let cursor=0,listener,reads=0;
  const react={useState(v){const i=cursor++;hooks[i]??=typeof v==='function'?v():v;return [hooks[i],v=>hooks[i]=v];},useRef(v){return hooks[cursor++]??={current:v};},useEffect(fn){const i=cursor++;if(!(i in hooks)){hooks[i]=true;effects.push(fn);}}};
  const jsx=(type,props)=>({type,props});
- const {ConfirmationCards,ConfirmationCard}=load('features/questions/ConfirmationCard.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':{useQueryClient:()=>({invalidateQueries(){}})},'../../gateway':{api:async()=>{reads++;return {items:[{id:'q',project_id:'p',session_id:'s',kind:'choice',state:'answered',revision:1,questions:[],native_send_state:reads===1?'pending':'sent'}]};}},'../../events':{subscribeEvents:(_p,cb)=>{listener=cb;return()=>{};}}},{setInterval:()=>1,clearInterval(){}});
+ const {ConfirmationCards,ConfirmationCard}=load('features/questions/ConfirmationCard.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':{useQueryClient:()=>({cancelQueries(){},invalidateQueries(){}})},'../../gateway':{api:async()=>{reads++;return {items:[{id:'q',project_id:'p',session_id:'s',kind:'choice',state:'answered',revision:1,questions:[],native_send_state:reads===1?'pending':'sent'}]};}},'../../events':{subscribeEvents:(_p,cb)=>{listener=cb;return()=>{};}}},{setInterval:()=>1,clearInterval(){}});
  const render=()=>{cursor=0;return ConfirmationCards({projectID:'p'});};render();for(const f of effects)f();await tick();assert.equal(find(render(),n=>n.type===ConfirmationCard).props.question.native_send_state,'pending');listener({type:'chat_done',project_id:'p',session_id:'s',id:2,payload:{}});await tick();assert.equal(find(render(),n=>n.type===ConfirmationCard).props.question.native_send_state,'sent');
 });
 const queued={id:'m',session_id:'s',requestId:'queued-key',role:'user',content:{requestId:'queued-key',document:{type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'queued'}]}]},text:'queued',references:[],annotations:[]},state:'queued',created_at:1};
@@ -106,7 +106,7 @@ function confirmationHarness({question=approvedBilling,map=new Map(),client=new 
  const storage={getItem:k=>{if(denied)throw Error('storage denied');return map.get(k)??null},setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)};
  const react={useState(init){const i=cursor++;if(!(i in hooks))hooks[i]=typeof init==='function'?init():init;return[hooks[i],v=>hooks[i]=typeof v==='function'?v(hooks[i]):v]},useRef(init){return hooks[cursor++]??={current:init}},useEffect(fn,deps){const i=cursor++,old=hooks[i];if(!old||deps.some((v,j)=>v!==old.deps[j])){hooks[i]={deps};effects.push(()=>{old?.cleanup?.();hooks[i].cleanup=fn()})}}};
  const query={useQueryClient:()=>client,useQuery(options){const i=cursor++;if(!hooks[i]){const observer=new QueryObserver(client,options);hooks[i]=observer;observers.push(observer.subscribe(()=>{}))}else hooks[i].setOptions(options);return hooks[i].getCurrentResult()}};
- const gateway=load('gateway.ts',{}, {URL,Headers,fetch:(url,init)=>new Promise((resolve,reject)=>requests.push({url,method:init.method??'GET',body:init.body,resolve:data=>resolve({ok:true,json:async()=>data}),reject}))});
+ const gateway=load('gateway.ts',{}, {URL,Headers,fetch:(url,init)=>new Promise((resolve,reject)=>requests.push({url,method:init.method??'GET',body:init.body,signal:init.signal,resolve:data=>resolve({ok:true,json:async()=>data}),reject}))});
  const pending=load('features/questions/pending.ts'),tasks=load('features/tasks/tasks.ts');
  const jsx=(type,props)=>({type,props});
  const {ConfirmationCard}=load('features/questions/ConfirmationCard.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':query,'../../gateway':gateway,'./pending':pending,'../tasks/tasks':tasks},{localStorage:storage,Date,setInterval:()=>0,clearInterval(){}});
@@ -163,4 +163,23 @@ test('H15a approved confirmation recovery follows authoritative task state witho
   listener({type:'task_changed',project_id:'p',task_id:'t'});await h.settle();assert.equal(h.requests.length,3);h.requests[2].resolve({id:'t',status:'completed',revision:4});await h.settle();await other.settle();
   assert.equal(h.button('恢复已批准的原任务'),undefined);assert.equal(h.map.has(h.key),false);assert.equal(other.requests.length,1);assert.equal(other.map.get(other.key),billingIntent);assert.equal(h.requests.filter(r=>r.method==='POST').length,0);cleanups.forEach(fn=>fn?.());h.unmount();other.unmount();
  });
+});
+
+test('H15a I1 task_changed during first GET discards the old snapshot and requires a newer GET before recovery',async()=>{
+ for(const status of ['running','completed']){
+  const h=confirmationHarness(),other=confirmationHarness({client:h.client,question:{...approvedBilling,project_id:'other'}});
+  let cursor=0,listener;const hooks=[],effects=[],react={useState(init){const i=cursor++;hooks[i]??=init;return[hooks[i],v=>hooks[i]=v]},useRef(init){return hooks[cursor++]??={current:init}},useEffect(fn){const i=cursor++;if(!(i in hooks)){hooks[i]=true;effects.push(fn)}}},jsx=(type,props)=>({type,props});
+  const {ConfirmationCards}=load('features/questions/ConfirmationCard.tsx',{'react':react,'react/jsx-runtime':{jsx,jsxs:jsx},'@tanstack/react-query':{useQueryClient:()=>h.client},'../../gateway':{api:async()=>({items:[approvedBilling]})},'../../events':{subscribeEvents:(_p,cb)=>{listener=cb;return()=>{}}}},{setInterval:()=>0,clearInterval(){}});
+  ConfirmationCards({projectID:'p'});const cleanups=effects.map(fn=>fn());
+  listener({type:'task_changed',project_id:'p',task_id:'t'});await h.settle();
+  assert(h.requests.length>=2,'an event during the first GET must start a newer GET');
+  const stale=h.requests.slice(0,-1),fresh=h.requests.at(-1);
+  for(const request of stale)request.resolve({id:'t',status:'accepted',revision:2,attempt_state:'approved',billing:{charge_status:'not_submitted'}});
+  await h.settle();assert.equal(h.button('恢复已批准的原任务'),undefined,'late unsent snapshots cannot satisfy a newer event');assert.equal(h.map.get(h.key),billingIntent);
+  listener({type:'task_changed',project_id:'p',task_id:'t'});await h.settle();const latest=h.requests.at(-1);assert.notEqual(latest,fresh,'another in-flight event must also retain its newer observation');
+  fresh.resolve({id:'t',status:'accepted',revision:2,attempt_state:'approved',billing:{charge_status:'not_submitted'}});await h.settle();assert.equal(h.button('恢复已批准的原任务'),undefined);
+  latest.resolve({id:'t',status,revision:4,attempt_state:status,billing:{charge_status:status==='completed'?'completed':'submitted'}});await h.settle();
+  assert.equal(h.button('恢复已批准的原任务'),undefined);assert.equal(h.map.get(h.key),status==='completed'?undefined:billingIntent);assert.equal(h.requests.filter(r=>r.method==='POST').length,0);assert.equal(other.requests.length,1);assert.equal(other.map.get(other.key),billingIntent);assert(JSON.stringify(h.render()).includes('saved quote'));
+  cleanups.forEach(fn=>fn?.());h.unmount();other.unmount();
+ }
 });

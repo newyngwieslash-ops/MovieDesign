@@ -92,7 +92,12 @@ export function ConfirmationCards({projectID,sessionID}: {projectID: string; ses
  useEffect(()=>{if(!waitingNative)return;let remaining=15;const timer=setInterval(()=>{load.current();if(--remaining===0)clearInterval(timer);},1000);return()=>clearInterval(timer);},[waitingNative,projectID,sessionID]);
  useEffect(() => {
   let alive = true, serial = 0;
-  const refresh = () => { void client.invalidateQueries({queryKey:['project',projectID,'tasks']},{cancelRefetch:false}); const request = ++serial; void api<{items:Question[]}>(projectID,`/api/question${sessionID === undefined ? '' : `?session_id=${encodeURIComponent(sessionID)}`}`).then(result => {if(alive && request===serial){setCards(result.items.filter(q=>q.project_id===projectID&&(sessionID===undefined||q.session_id===sessionID)));setError('');}}).catch(e=>{if(alive)setError(e.message)}); };
+  const refresh = () => {
+   // Cancel even the first GET: a snapshot begun before this event cannot satisfy it.
+   void client.cancelQueries({queryKey:['project',projectID,'tasks']});
+   void client.invalidateQueries({queryKey:['project',projectID,'tasks']});
+   const request = ++serial; void api<{items:Question[]}>(projectID,`/api/question${sessionID === undefined ? '' : `?session_id=${encodeURIComponent(sessionID)}`}`).then(result => {if(alive && request===serial){setCards(result.items.filter(q=>q.project_id===projectID&&(sessionID===undefined||q.session_id===sessionID)));setError('');}}).catch(e=>{if(alive)setError(e.message)});
+  };
   load.current = refresh;
   let unsubscribe = () => {};
   try { unsubscribe = subscribeEvents(projectID, event => {if(event.type.startsWith('question_')||event.type==='task_changed'||event.type==='chat_message'||event.type==='chat_done')refresh();},refresh,sessionID); } catch { setError('无法保存重连游标，请刷新确认状态。'); }
