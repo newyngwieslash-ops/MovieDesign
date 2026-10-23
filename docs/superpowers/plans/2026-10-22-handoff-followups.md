@@ -98,13 +98,16 @@ assert_eq!(install_calls.load(std::sync::atomic::Ordering::SeqCst), 0); // busy/
 
 H08 独立调用链审查发现普通聊天首轮无费用卡。用户已明确批准扩展既有 `/api/question`：billing 可绑定 `chat_message_id` 或 `task_id`（互斥），聊天批准绑定冻结模型、本轮调用次数和总估算；没有人工回执不发 LLM 请求。不把普通 choice 转换为 billing，不伪造生成 task/output。
 
-- [ ] 最小新增聊天支撑绑定，复用现有 questions/receipts/quotes；旧迁移及五核心表不改，新支撑变更从000016编号。
-- [ ] Chat.Send 幂等创建原消息和计费意图；worker 和 Relay 两处校验原人工回执，Relay 原子限制请求次数及上下文/输出预算；保留 unknown 防重发和原生40工具上限。
-- [ ] 实际 ConfirmationCard 区分聊天/生成目标，正确续报价、拒绝与原请求恢复；原生成费用批准行为保持。
-- [ ] 真实服务/Relay与实际组件 RED/GREEN，固定 opencode + 本地合成上游的已批准首轮/工具后续验证；独立审查、最终全量/构建/桌面回归后提交推送。
+- [x] 最小新增聊天支撑绑定，复用现有 questions/receipts/quotes；旧迁移及五核心表不改，新支撑变更从000016编号。
+- [x] Chat.Send 幂等创建原消息和计费意图；worker 和 Relay 两处校验原人工回执，Relay 原子限制请求次数及上下文/输出预算；保留 unknown 防重发和原生40工具上限。
+- [x] 实际 ConfirmationCard 区分聊天/生成目标，正确续报价、拒绝与原请求恢复；原生成费用批准行为保持。
+- [x] 真实服务/Relay与实际组件 RED/GREEN，固定 opencode + 本地合成上游的已批准首轮/工具后续验证；限定独立复审、最终全量和构建通过，七种桌面模式均有完整通过记录。已提交并推送`896168c`，实际远端SHA相符、main未动。首次skills重启超时根因未明，原样复跑通过不能作为已修复证明；[证据](../../handoffs/2026-10-23-chat-billing.md)。
+- [ ] 可靠性接续：首次skills restart已批准消息持续排队、供应商0请求，缺少当时agent完整状态；不猜测修补或自动重发。若再现，保存同一时刻dispatch/turn/epoch/host/工具/worker证据；此前单次关闭超时也仍原因未知。
 - [ ] 用户在应用聊天费用卡上批准后再进行真实 H08；图像、视频、真实项目血缘、正式签名安装和物理设备仍按 H09–H14 分别取证。
 
 H20 单一实现 worker 负责必要 Go/确认卡及回归；父级独占文档/Git和真实应用。当前常规用户应用有 H09 待批准图像任务，不得由 worker 操作其数据或占用生产8001/4096。实现要求和状态保存在本计划 workspace 的 `h20-chat-billing-brief.md`/报告/账本。既有自定义供应商、BYOK、无钱包范围不变。
+
+H20整合记录（11:35）：原真实图像卡仍未批准且已过期，父级核对权威状态后正常关闭旧应用，1319ms退出，无强杀或真实供应商请求。核心20文件与六个聊天smoke的适配已冻结，首审Spec FAIL / Quality CHANGES REQUIRED：Responses工具output图片数组绕过、空user内容未拒绝，以及重启测试未保证首条实际提交的前置竞态，共三项Important，正在原worker统一fix1。首个全量日志退出1保留；定向旧测试重复通过不能替代最终回归。完成限定复审和最终检查前不勾本项交付。smoke适配仅针对自有合成供应商和显式新Send的费用卡，不自动批准真实用户任务。
 
 ### H17：4096 阻塞与桌面恢复接续（22:14）
 

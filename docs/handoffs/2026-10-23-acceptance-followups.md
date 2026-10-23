@@ -1,5 +1,7 @@
 # MovieDesign 真实验收接续
 
+> 13:12接续结论：H20已提交`896168c`，通过限定独立复审、当前全量/构建，七种桌面模式各有完整通过记录；首次skills重启排队超时原因未明，原样复跑通过不作为已修复。最新正常用户应用13:10已重开，图像原卡仍过期、无批准；图像18317当前可连，LLM7863最近复查仍拒绝。真实生成/签名安装仍UNEXECUTED。下文保留H19与H20首审当时事实，当前详细证据见[H20验收](2026-10-23-chat-billing.md)。
+
 时间：2026-10-23，Asia/Shanghai。接续基线 `eb4f2c3`，分支 `codex/h01-signed-update-runtime`；不重做 M1–M7。此前恢复验收见 [桌面恢复记录](2026-10-23-recovery.md)。
 
 ## 默认用户目录的只读核对（10:05）
@@ -58,3 +60,15 @@
 10:53只读查询权威任务仍为 `waiting_user/billing/awaiting_approval`，费用卡已 `expired`，没有生成验收通过记录；证据 `image-status-latest.json`。不会自动续报价、批准或重试。用户可以在原卡点击“继续并重新报价”，核对后本人批准。
 
 真实应用保留打开供用户操作，因此10:36的“隔离进程/端口为空”不是此后当前状态。应用PID51760，受管exec会话48059，启动记录为 `real-app-launch.json`；不得为了下一轮构建测试强杀正在使用的真实任务。后续先核对权威任务/人工回执，安全收尾后再关闭或重启；不自动重试或代点批准。
+
+11:00仅核对已保存端点的 origin 和本机监听：LLM 为 `http://127.0.0.1:7863`，图像为 `http://localhost:18317`，两个端口当时均无监听。已明确提示用户在应用内启动或更正连接并核对模型/报价，未索取密钥或试探真实生成。旧图像任务冻结了旧连接，连接修正后须取消未批准的原意图、显式准备新卡；不能把旧任务或 unknown 自动换模型重试。
+
+11:19再次只读核对原图像任务仍为 `waiting_user/billing`、原卡 `expired`，证据 `pre-build-real-status.json`。11:21按启动记录核对 PID、路径及启动时刻后请求正常关闭，1319ms退出、受管exec退出0，8001/4096无监听；无强杀、无费用批准或供应商请求，证据 `pre-build-close.json`。应用关闭用于构建/隔离回归，不表示真实生成通过。
+
+12:31用户指出两连接应正常，父级在真实宿主可见范围重新检查，排除仅依赖沙箱监听枚举：图像18317当前有监听，IPv4/IPv6 TCP可连，`GET http://localhost:18317/`首页返回200；此前图像“无监听”不再代表当前状态。LLM7863仍未发现监听，`GET http://127.0.0.1:7863/`被拒绝。证据`.runtime/h20-actual-provider-port-recheck.json`/`h20-actual-provider-http-recheck.json`仅记录端口及无认证首页响应头状态，未读取密钥/响应正文或发推理请求。首页可用尚不证明图像API路径、模型能力或真实生成已验收。
+
+## H20 首审与整合回归（进行中）
+
+新增聊天门禁已形成冻结实现及迁移000016；Go定向四包、实际React 27项检查及固定opencode的合成普通question续接有通过记录，不能覆盖其后的失败。六个确实发送聊天的桌面smoke已适配明确报价和本次消息绑定的合成费用卡，另有30个无网络检查；实际桌面验收尚未执行。
+
+首个父级全量检查 `.runtime/h20-full-check.log` 退出1：`TestRestartReconcilesWithoutResendingUnknownAndQueuedWithdrawal` 未通过，断言没有输出实际请求数，也未确保第一条已经发出便关闭worker；目前不能据此认定产品重复发送unknown消息。独立首审另外在真实Relay与合成供应商边界复现了Responses工具`output`图片数组、`user content:null`均产生1个POST的问题。结论为Spec FAIL / Quality CHANGES REQUIRED，已进入三项统一修复，原失败与首审历史保留。修复、限定复审、最终全量和生产桌面验证完成前，H20不记交付、不提交推送。
