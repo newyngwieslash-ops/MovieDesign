@@ -113,7 +113,7 @@ try{
    const beforeReload=writes().length;
    await evaluate(`(()=>{const e=document.querySelector('#project');e.value='';e.dispatchEvent(new Event('change',{bubbles:true}));})()`);await wait(`!document.querySelector('.chat-panel')`);
    await evaluate(`(()=>{const e=document.querySelector('#project');e.value=${JSON.stringify(p)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);await wait(`document.body.innerText.includes('恢复原发送请求')`);assert.equal(writes().length,beforeReload);assert.equal(await evaluate(`localStorage.getItem('moviedesign.chat.send.v1.${p}')`),expected.pending);
-   await call('Page.reload');await wait(`document.body.innerText.includes('恢复原发送请求')`);assert.equal(writes().length,beforeReload);
+   await call('Page.reload');await wait(`document.body?.innerText.includes('恢复原发送请求')`);assert.equal(writes().length,beforeReload);
    await call('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:-1,uploadThroughput:-1});await new Promise(r=>setTimeout(r,650));await call('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});await new Promise(r=>setTimeout(r,1500));assert.equal(writes().length,beforeReload);assert(requests.filter(r=>r.url.includes('/api/events')).some(r=>r.headers['Last-Event-ID']||r.headers['last-event-id']));
    await click('恢复原发送请求');await wait(`!localStorage.getItem('moviedesign.chat.send.v1.${p}')`);assert.equal(writes().filter(r=>r.url.includes('/messages')).at(-1).postData,expected.original);
    // Persist a second true lost response for physical process restart proof.

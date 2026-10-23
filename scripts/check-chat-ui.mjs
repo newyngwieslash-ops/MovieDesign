@@ -8,6 +8,14 @@ import {setImmediate as tick} from 'node:timers/promises';
 const require=createRequire(import.meta.url),ts=require('../desktop/node_modules/typescript'),React=require('../desktop/node_modules/react'),{renderToStaticMarkup}=require('../desktop/node_modules/react-dom/server');
 const {QueryClient,QueryObserver}=require('../desktop/node_modules/@tanstack/react-query');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+test('chat smoke reload readiness tolerates an absent body and requires the recovery prompt',()=>{
+ const source=readFileSync(new URL('./smoke-chat.mjs',import.meta.url),'utf8');
+ const expression=source.match(/await call\('Page\.reload'\);await wait\(`([^`]+)`\)/)?.[1];
+ assert(expression,'chat smoke must wait for saved send recovery after reload');
+ for(const [body,ready] of [[null,false],[{innerText:'本地服务已连接'},false],[{innerText:'恢复原发送请求'},true]]){
+  assert.equal(Boolean(vm.runInNewContext(expression,{document:{body}})),ready);
+ }
+});
 function load(file,dependencies={},globals={}) {const module={exports:{}};vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../desktop/src/'+file,import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{module,exports:module.exports,console,crypto,TextEncoder,JSON,Error,setTimeout,clearTimeout,AbortController,structuredClone,...globals,require:n=>dependencies[n]??(n==='react'?React:n==='react/jsx-runtime'?require('../desktop/node_modules/react/jsx-runtime'): {})});return module.exports;}
 test('actual assistant and tool output render hostile strings literally',()=>{
  const {AssistantMessage}=load('features/chat/AssistantMessage.tsx');
