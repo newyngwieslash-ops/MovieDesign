@@ -1,6 +1,6 @@
 # 里程碑验收
 
-> 2026-10-22 接续：以下 M1–M7 为历史记录。H01–H07、H15/H16、H17 诊断与后台启动隔离通过独立审查。当前工程源码 `e0400aa` 的整仓检查和生产构建退出 0，当前生产 WebView 初始安全检查通过；系统实际拒绝绑定 4096，完整恢复仍受阻，待 WinNAT 临时中断授权及管理员操作。未改系统服务。真实调用、正式签名与安装升级仍为 UNEXECUTED。进度见 [接续记录](handoffs/2026-10-22-followups.md)，不重做旧里程碑。
+> 2026-10-23接续：以下M1–M7为历史记录。H01–H17工程审查通过，H18修复测试重载等待条件并审查通过。当前4096可绑定，同一生产制品的标准updates initial/recovery与chat initial/recovery/restart、0c05dd5源码最终全量回归均通过，WinNAT未停止或更改。先前单次10秒关闭超时仍未解释；真实调用、正式签名与安装升级仍UNEXECUTED。见 [当前恢复验收](handoffs/2026-10-23-recovery.md)，不重做旧里程碑。
 
 完整后续计划见[总计划与六份分计划](superpowers/plans/2026-10-15-moviedesign-complete.md)，全规格逐项映射与四阶交付门槛见[全规格验收报告](acceptance.md)。M1–M7 全部 30 个任务已通过单任务与整阶段独立工程审查。按四阶交付门槛纪律：**功能已编码（PASS）**、**离线测试通过（PASS）**、**真实生成通过（UNEXECUTED — 本机未配置真实付费/可用模型凭据）**、**签名发布完成（UNEXECUTED — 未注入正式 `TAURI_SIGNING_PRIVATE_KEY`，已通过 `-DryRun` 与签名校验测试）**。
 

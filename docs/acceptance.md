@@ -2,7 +2,7 @@
 
 本文档记录 `MovieDesign`（M1–M7）对照 [原始规格](spec.md)、[已确认契约](contracts.md)、[总实施计划](superpowers/plans/2026-10-15-moviedesign-complete.md) 与 [M7 分计划](superpowers/plans/2026-10-15-m7-video-release.md) 的逐项规格映射、验证命令、实际结果、证据路径与确认偏差。
 
-> **2026-10-22 22:14 接续审计校正：** 下方 M7.5 的 PASS 是历史结果，不能作为当前完整交付结论。H01–H07、H15/H16 以及 H17 端口诊断与共享客户端启动隔离通过独立审查。当前工程源码 `e0400aa` 的整仓检查和生产构建通过。当前生产 WebView 初始安全检查通过，实际系统绑定拒绝已准确记录；完整恢复仍因 Windows 保留端口 4096 受阻。WinNAT 中断授权待回复，未改系统服务。真实模型调用、正式签名、干净账户安装升级均为 **UNEXECUTED**；本地签名测试向量和模拟进程不等于这些验收。当前证据见 [接续记录](handoffs/2026-10-22-followups.md)。
+> **2026-10-23 08:23 接续审计校正：** 下方M7.5的PASS为历史结果。H17诊断/启动隔离与H18测试等待条件修复通过独立审查。4096当前实际可绑定，未停止WinNAT或更改网络配置；完整标准生产更新initial/recovery、聊天initial/recovery/restart及当前源码最终全量检查均通过。一次较早的10秒正常退出超时仍未解释，不声称已修复。真实模型调用、正式签名与干净账户安装升级均为 **UNEXECUTED**。当前证据见 [恢复验收](handoffs/2026-10-23-recovery.md)。
 
 ---
 
@@ -12,8 +12,8 @@
 
 | 交付门槛维度 | 当前状态 | 核验结论与阻塞边界说明 |
 | --- | --- | --- |
-| **1. 功能已编码** | **本轮工程修复审查通过** | H01–H07 与 H15/H16 原发现已关闭。H17 在 `b992eee` 区分端口绑定错误；首审发现配置后台绕过失败检查，在 `e0400aa` 用共享私有客户端门禁修复，限定复审 Spec PASS / Quality PASS，无遗留发现。旧 M1–M7 不重做，外部验收仍另列。 |
-| **2. 离线测试通过** | **全量与构建通过；完整桌面恢复 BLOCKED** | `scripts/check.ps1` 在 `e0400aa` 退出 0，当前 `desktop:build` 退出 0。当前生产 WebView 初始检查通过（原生版本/manual_only/私有接口 403/原请求恢复/零安装）；实际错误标记为 port_permission_denied，DPAPI 交换已删除。标准冒烟仍因 4096 被系统保留、缺少自有 opencode 退出 1，完整重启恢复 UNEXECUTED。WinNAT 授权待回复、当前令牌非管理员，未改服务。测试 profile 和端口无残留已核实。 |
+| **1. 功能已编码** | **本轮工程修复审查通过** | H01–H07与H15/H16原发现已关闭；H17 `b992eee/e0400aa`诊断与共享启动门禁审查通过。H18 `0c05dd5`仅修复chat Page.reload后的空body等待并补实际表达式回归，Spec PASS / Quality PASS；应用生命周期和二进制未改，不虚称已修复间歇退出问题。 |
+| **2. 离线测试通过** | **当前标准桌面恢复与最终全量PASS** | `0c05dd5`的`scripts/check.ps1`退出0；H17生产制品哈希核对一致。当前4096可绑定，原标准updates initial/recovery退出0，chat initial/recovery/restart退出0，原10秒退出和自有sidecar/端口回收断言保留；无真实模型/安装调用。WinNAT始终Running且未变更，准确profile/PID无残留。首次正常退出超时仍原因未定，当前绿灯不证明已根治。 |
 | **3. 真实生成通过** | **未执行（UNEXECUTED）** | 尚无经应用人类确认卡批准的真实 LLM、图像编辑或 15 秒口播配乐生成验收记录；本地 HTTP fixture、实际 opencode 进程和合成 MP4 不替代真实模型、账单或主观质量验收。 |
 | **4. 签名发布完成** | **未执行（UNEXECUTED）** | 正式密钥配对、签名 NSIS/GitHub Release 和干净 Windows 账户安装升级均未执行。当前公开测试公钥会被生产发布保护拒绝；公开向量验签、受控安装 sink、升级 fixture 与 dry-run 仅证明各自工程边界。 |
 

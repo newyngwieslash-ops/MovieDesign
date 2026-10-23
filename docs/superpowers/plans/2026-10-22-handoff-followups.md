@@ -73,7 +73,7 @@ assert_eq!(install_calls.load(std::sync::atomic::Ordering::SeqCst), 0); // busy/
 - [ ] H14：物理 DPI/IME/焦点验收仍 UNEXECUTED。
 - [x] H15 离线工程：`18a8710`、`9bc10b9` 修复权威恢复提示；`a5fdaa1`、`da2599d`、`3cc5e0f` 实现安全流式及恢复/凭据边界，任务审查问题全部关闭。真实模型首 token 体验仍 UNEXECUTED；现有 Vite 包警告待测量启动成本后再决定，不先做框架重构。
 - [x] H16 工程审查/回归：整分支首审 1 Important、1 Minor，在 `1d0923b` 同波修复后唯一限定复审全部 ADDRESSED，Spec PASS / Quality Approved；34 项针对性 UI、15 项 Rust（1 既有忽略）、最终整仓检查与生产构建通过。已达到目标版本可明确结束本地更新恢复提示，原安装审计保留；纯文本流不再反复取消任务 GET。
-- [ ] H16 完整生产运行门槛：当前 WebView 初始安全检查通过，标准恢复冒烟仍因 Windows 保留 4096 退出 1；完整物理重启恢复 UNEXECUTED。真实生成、正式签名安装升级不以工程通过替代。提交/推送证据见接续记录，未完成项目不虚勾。
+- [x] H16所选生产恢复门槛：2026-10-23实际4096可用，原标准updates initial/recovery、chat initial/recovery/restart通过；WinNAT未改。保留此前单次正常退出超时原因未定的限制，不称根治。真实模型和签名安装升级仍另列UNEXECUTED；当前证据见[恢复验收](../../handoffs/2026-10-23-recovery.md)。
 
 ### H15 离线接续边界（2026-10-22）
 
@@ -86,6 +86,6 @@ assert_eq!(install_calls.load(std::sync::atomic::Ordering::SeqCst), 0); // busy/
 
 - [x] 从 f8b19ff 增量接续，实际复现无监听但4096受系统4042–4141保留、bind10013；不换端口或修改系统配置。b992eee 区分真实绑定错误，e0400aa 修复独立审查发现的配置后台探测缺口，限定复审通过；当前全量检查与生产构建退出0。
 - [x] 当前生产运行确认 port_permission_denied、DPAPI临时交换已删除、无启动成功证据；初始更新安全检查通过。保留标准恢复冒烟退出1和自有进程清理证据，不标整体PASS。
-- [ ] 明确授权后，以管理员权限临时处理中断 WinNAT 的系统验证并恢复原服务状态；当前 Docker 正在运行，授权待回复、未执行系统操作。4096可绑定后再完成现有 updates/chat 真实桌面重启恢复。
+- [x] 2026-10-23用户明确授权临时中断WinNAT；复核时4096已可绑定，所以未停止服务或发起UAC。标准updates/chat实际桌面恢复已通过，详见当天证据。原待授权/阻塞是历史状态，未执行的系统中断不虚勾为已做。
 
 详细文件责任、测试和系统动作边界见 [H17计划](2026-10-22-port-recovery.md)，结果见 [接续记录](../../handoffs/2026-10-22-followups.md)。真实调用、正式签名与安装升级仍 UNEXECUTED。

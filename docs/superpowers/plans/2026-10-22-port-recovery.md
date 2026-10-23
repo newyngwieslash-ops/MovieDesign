@@ -33,12 +33,19 @@
 **Parent ownership:** `.runtime/h17-port-diagnosis/`, existing smoke scripts unchanged, docs/acceptance.md, docs/handoffs/2026-10-22-followups.md and this plan.
 
 - [x] Reproduce before state: no 4096 listener; IPv4 and IPv6 active exclusion 4042–4141; bind4096 and4095 return10013;4142 binds. DynamicTCP1024/13977, WinNAT/HNS running, Docker backend active. Save before.json; do not infer which process originally changed the range.
-- [ ] Obtain explicit permission for service interruption because active Docker/WSL network can be affected; pending new question is not a repeat of a confirmed product choice. No changing TCP range, exclusions, firewall or services before answer.
-- [ ] If authorized, use bounded service stop/start with a finally block restoring original WinNAT running state. Check current owners before binding; never stop Docker/WSL/HNS/VMs. If stopping fails, restoration fails or4096 stays denied, preserve exact failure and stop dependent actions. No automatic escalation to broader machine changes.
-- [ ] Only when production4096 actually binds, run existing `scripts/smoke-desktop.ps1 -Mode release -Smoke updates` and applicable chat restart on current built source/isolated data. Native human test cards use local fixtures only, real installs/calls zero. Preserve phase JSON, SQL and actual process cleanup.
-- [ ] Update four-stage acceptance with actual results, not initial safety UI alone. Build/source/evidence hashes and current remote SHA; independent review, full regression, commit and push existing branch without force/main merge. If environment remains blocked, explicitly retain BLOCKED, not a test bypass.
+- [x] 2026-10-23 用户明确允许短暂停止 WinNAT 并立即恢复；当前先重新检查环境，4096 已能绑定、保留范围移至7179以上，因此无需停止服务或发起UAC。旧待答复记录保留为历史事实；未进行系统网络/服务修改。
+- [x] 授权后先复查端口：当前4096能绑定，无需执行服务stop/start；WinNAT始终Running，未改Docker/WSL/HNS/动态端口/保留项/防火墙。受控系统中断脚本未执行，不将此写成“已通过停服务修复端口”。
+- [x] 2026-10-23原标准updates退出0（initial/recovery），chat等待空body修正后退出0（initial/recovery/restart）；真实生产进程、隔离数据、本地合成上游，实际安装/真实模型调用0。准确phase与清理证据见当天恢复记录。
+- [x] 当前完整updates/chat恢复通过，0c05dd5最终全量回归退出0，独立审查Spec PASS / Quality PASS；四阶验收及源码/生产制品对应另存10月23日记录，未解释首次退出超时和外部UNEXECUTED仍保留。提交/远端SHA由交付终检记录，不强推/不合入main。
 
 Official context: [Microsoft WSAEACCES 10013](https://learn.microsoft.com/en-us/troubleshoot/windows-server/networking/error-10013-wsaeacces-is-returned), [TCP ephemeral range](https://learn.microsoft.com/en-us/troubleshoot/windows-client/networking/tcp-ip-port-exhaustion-troubleshooting). These support the diagnostic distinction; they do not prove which component reserved this host's range.
+
+### H18 actual lifecycle follow-up (2026-10-23)
+
+- [x] 核实19826c6源码无规范化差异、原生产制品哈希吻合；当前4096可绑定、WinNAT保持Running。记录 `.runtime/h17-recovery-20261023/before.json`。
+- [x] 原标准生产updates冒烟复现新实际失败：initial安全检查通过，但Stop-OwnedDesktop等待10秒后主程序未正常退出，完整恢复未到达；记录 `.runtime/h17-recovery-20261023/updates.log` 与隔离运行27dbc1e8f3e7433e8026df8c5d5c0147。finally清理后无自有进程/监听残留。
+- [x] 已追踪关闭链与同10秒断言的带时间实际复现：初始/恢复关闭1829ms/3310ms通过；后续原标准updates正常退出通过。未建立首次超时确定根因，没有猜测性应用修复或放宽超时；原失败留存为间歇不确定项。若复发继续采集原生事件/持有句柄时序，不宣称根治。
+- [x] `0c05dd5`仅修正smoke-chat的Page.reload空body等待并补实际表达式RED/GREEN。独立审查Spec PASS / Quality PASS，当前标准updates完整恢复与chat三阶段通过，最终scripts/check.ps1退出0；生产二进制/原生命周期/原断言哈希未变，未重复构建同一制品。真实供应商/正式签名安装仍UNEXECUTED。
 
 ## H17 independent review fix round 1
 

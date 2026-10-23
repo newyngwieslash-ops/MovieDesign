@@ -1,5 +1,7 @@
 # MovieDesign 接续记录（2026-10-22，Asia/Shanghai）
 
+> **后续检查点：** [2026-10-23恢复验收](2026-10-23-recovery.md) 已实际确认4096可用，标准更新及聊天完整恢复通过；WinNAT未改。下方“授权待回复/端口阻塞”是10月22日的历史状态，不能代替新证据。保留首次未解释的正常退出超时；真实调用和签名安装仍UNEXECUTED。
+
 基线：`f9432ae6dd485f51441d7f6202e127107ef1966e`；分支：`codex/h01-signed-update-runtime`。遵循 [交接要求](2026-10-20_200842+0800/next-session-prompt.md) 与 [H01–H16 计划](../superpowers/plans/2026-10-22-handoff-followups.md)。保留交接前工作区修改，原应用目录只读，未重做 M1–M7。
 
 ## 已实施与验证
