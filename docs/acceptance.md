@@ -2,6 +2,8 @@
 
 本文档记录 `MovieDesign`（M1–M7）对照 [原始规格](spec.md)、[已确认契约](contracts.md)、[总实施计划](superpowers/plans/2026-10-15-moviedesign-complete.md) 与 [M7 分计划](superpowers/plans/2026-10-15-m7-video-release.md) 的逐项规格映射、验证命令、实际结果、证据路径与确认偏差。
 
+> **2026-10-23 H19/H20接续：** `80b3a23` 补齐关闭取证，首审两项Important经fix1限定复审通过；最终全量检查和生产updates initial/recovery退出0。原应用关闭超时未复现、根因仍未知。默认用户应用已准备真实图像任务，10:53核对仍待人工费用批准，旧报价已过期，真实生成仍 **UNEXECUTED**。用户已批准新增聊天billing目标绑定，H20正在实现，尚不属于已交付/已回归范围。详见[真实验收接续](handoffs/2026-10-23-acceptance-followups.md)。
+
 > **2026-10-23 08:23 接续审计校正：** 下方M7.5的PASS为历史结果。H17诊断/启动隔离与H18测试等待条件修复通过独立审查。4096当前实际可绑定，未停止WinNAT或更改网络配置；完整标准生产更新initial/recovery、聊天initial/recovery/restart及当前源码最终全量检查均通过。一次较早的10秒正常退出超时仍未解释，不声称已修复。真实模型调用、正式签名与干净账户安装升级均为 **UNEXECUTED**。当前证据见 [恢复验收](handoffs/2026-10-23-recovery.md)。
 
 ---
@@ -12,8 +14,8 @@
 
 | 交付门槛维度 | 当前状态 | 核验结论与阻塞边界说明 |
 | --- | --- | --- |
-| **1. 功能已编码** | **本轮工程修复审查通过** | H01–H07与H15/H16原发现已关闭；H17 `b992eee/e0400aa`诊断与共享启动门禁审查通过。H18 `0c05dd5`仅修复chat Page.reload后的空body等待并补实际表达式回归，Spec PASS / Quality PASS；应用生命周期和二进制未改，不虚称已修复间歇退出问题。 |
-| **2. 离线测试通过** | **当前标准桌面恢复与最终全量PASS** | `0c05dd5`的`scripts/check.ps1`退出0；H17生产制品哈希核对一致。当前4096可绑定，原标准updates initial/recovery退出0，chat initial/recovery/restart退出0，原10秒退出和自有sidecar/端口回收断言保留；无真实模型/安装调用。WinNAT始终Running且未变更，准确profile/PID无残留。首次正常退出超时仍原因未定，当前绿灯不证明已根治。 |
+| **1. 功能已编码** | **工程交付至H19；H20实现中** | H01–H18已审查范围保留。`80b3a23`仅补关闭取证与其回归，首审CLIXML fixture及释放异常覆盖原错误两项Important均经限定复审关闭，Spec PASS / Quality PASS。用户新增要求的首轮聊天计费门禁H20尚未交付，不能以H19结果替代其验收。 |
+| **2. 离线测试通过** | **H19最终源码全量/桌面PASS；H20待回归** | `80b3a23`最终三脚本对应`.runtime/h19-fix1-full-check.log`退出0；生产updates initial/recovery退出0，关闭1293/1347ms，原10秒和自有进程/端口断言保留。应用制品与H17哈希相同，历史H18 chat三阶段结果保留。10:36隔离收尾进程/监听为空、WinNAT未改；之后真实用户应用有意保留打开等费用决定。原关闭超时根因未知，不称根治；运行中的H20代码尚未使用上述结果冒充通过。 |
 | **3. 真实生成通过** | **未执行（UNEXECUTED）** | 尚无经应用人类确认卡批准的真实 LLM、图像编辑或 15 秒口播配乐生成验收记录；本地 HTTP fixture、实际 opencode 进程和合成 MP4 不替代真实模型、账单或主观质量验收。 |
 | **4. 签名发布完成** | **未执行（UNEXECUTED）** | 正式密钥配对、签名 NSIS/GitHub Release 和干净 Windows 账户安装升级均未执行。当前公开测试公钥会被生产发布保护拒绝；公开向量验签、受控安装 sink、升级 fixture 与 dry-run 仅证明各自工程边界。 |
 

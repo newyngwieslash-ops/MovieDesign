@@ -768,3 +768,12 @@ Admission reserves under the same mutex as business HTTP/MCP activity registrati
      3. `真实生成通过` (Live credential-backed cloud/local LLM, image, and 15s narrated video generation): **UNEXECUTED** when live provider credentials/endpoints are not configured; local protocol fixtures never masquerade as live provider acceptance.
      4. `签名发布完成` (Production minisign-signed NSIS installer & clean Windows account upgrade): **UNEXECUTED** when `TAURI_SIGNING_PRIVATE_KEY` is not injected; `scripts/release.ps1` fails closed in production mode and verifies build/packaging readiness in `-DryRun` mode.
 
+## H20 chat billing extension — approved, implementation in progress (2026-10-23)
+
+The user explicitly approved a new MovieDesign adaptation after a focused audit found that ordinary chat inference starts before a fee card. This section records the approved target boundary, not completed runtime support; H20 must pass its own independent review and current regression before real chat acceptance.
+
+- Reuse `/api/question` and `kind:billing`. A billing intent targets either `task_id` or `chat_message_id`, never both or neither. Ordinary/native `choice` remains unable to authorize billing. No fake generation task, output resource, new endpoint or MCP tool represents a conversation.
+- A chat billing decision binds the original project/session/message and adopted skill, actual running frozen LLM configuration and credential version (never its key), declared quote, context/output envelope and a finite inference budget. The new message-turn ceiling is 41 supplier LLM POSTs, independently enforced from the existing 40 unique tool-call cap. Cards disclose the count and conservative total estimate; these are not wallet reservations or verified supplier invoices.
+- Both the chat worker and actual supplier relay must verify the original human receipt. Relay admission atomically enforces the budget and preserves fingerprint/unknown/no-automatic-retry rules. Approval and first supplier admission must occur before quote expiry; an already-started authorized turn retains its finite frozen envelope through human/tool waits. Saved next-launch settings must not silently replace the active frozen model or price.
+- Existing generation-task billing and its revision/quote checks remain intact. Exact chat renewal/recovery wire shapes and persistent support fields will be recorded with the implemented, reviewed H20 change; old migrations and the five core tables remain immutable.
+
