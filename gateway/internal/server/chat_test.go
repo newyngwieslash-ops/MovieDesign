@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/agent"
+	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/providers"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
 	"net/http/httptest"
 	"path/filepath"
@@ -74,6 +76,21 @@ func TestChatHTTPPaginationRejectsUnknownWireAndOrigin(t *testing.T) {
 		if call("POST", path, body, origin).Code != 403 {
 			t.Fatal("chat Origin bypass")
 		}
+	}
+	if unavailable := call("POST", path, body, "http://tauri.localhost"); unavailable.Code != 409 {
+		t.Fatal("unconfigured chat must not create unbound dispatch", unavailable.Code)
+	}
+	secrets, e := providers.OpenSecrets(filepath.Join(t.TempDir(), "secrets"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	settings := &agent.Settings{DB: db, Secrets: secrets}
+	if _, e = settings.Execute(context.Background(), []byte(`{"requestId":"fixture-settings","action":"save","config":{"protocol":"openai-compatible","base_url":"http://127.0.0.1:12345","model_id":"fixture","context":32000,"output":4096,"pricing":{"currency":"USD","unit":"token","unit_amount":0,"minor_unit_scale":2,"credit_numerator":1,"credit_denominator":1,"source":"synthetic","version":"v1","effective_at":0}}}`)); e != nil {
+		t.Fatal(e)
+	}
+	h.chat.Host, e = agent.NewHost(settings, filepath.Join(t.TempDir(), "launch"), agent.MCPConnection{URL: "http://127.0.0.1:8001/mcp", Origin: "http://tauri.localhost", Token: "fixture-private"})
+	if e != nil {
+		t.Fatal(e)
 	}
 	first := call("POST", path, body, "http://tauri.localhost")
 	if first.Code != 202 {

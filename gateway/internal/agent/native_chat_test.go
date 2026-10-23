@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -29,11 +28,12 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 		t.Skip("set verified project native binary; synthetic owned supplier only")
 	}
 	trace := map[string]any{"version": "1.19.0", "real_inference": "UNEXECUTED"}
-	for _, mode := range []string{"500", "redirect", "disconnect", "question", "stream-question", "stream-disconnect", "stream-retry"} {
+	for _, mode := range []string{"500", "redirect", "disconnect", "question", "question-reject", "stream-question", "stream-disconnect", "stream-retry"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			dir := t.TempDir()
+			t.Logf("isolated native fixture: %s", dir)
 			db, e := store.Open(filepath.Join(dir, "db"))
 			if e != nil {
 				t.Fatal(e)
@@ -50,7 +50,10 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirects.Add(1) }))
 			defer target.Close()
 			supplier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				io.Copy(io.Discard, r.Body)
+				var request map[string]any
+				if json.NewDecoder(r.Body).Decode(&request) != nil || request["max_tokens"] != float64(4096) {
+					t.Error("native output cap not normalized before supplier")
+				}
 				r.Body.Close()
 				n := suppliers.Add(1)
 				if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer supplier-private" {
@@ -101,7 +104,7 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 				fmt.Fprint(w, "data: [DONE]\n\n")
 			}))
 			defer supplier.Close()
-			c := LLMConfig{Protocol: "openai-compatible", BaseURL: supplier.URL + "/v1", ModelID: "fixture", Context: 32000, Output: 4096}
+			c := chatFixtureConfig(LLMConfig{Protocol: "openai-compatible", BaseURL: supplier.URL + "/v1", ModelID: "fixture", Context: 32000, Output: 4096})
 			relay, e := newRelay(db, c, "supplier-private", "http://tauri.localhost")
 			if e != nil {
 				t.Fatal(e)
@@ -152,7 +155,7 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 					t.Log(logs.String())
 				}
 			}()
-			h := &Host{base: "http://127.0.0.1:" + port, password: "fixture-private", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}, Relay: relay}
+			h := &Host{base: "http://127.0.0.1:" + port, password: "fixture-private", client: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}, Relay: relay, active: View{Config: &c}}
 			for !h.Ready(ctx) {
 				select {
 				case <-ctx.Done():
@@ -192,14 +195,19 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 			chat := NewChat(db, turns, ev, qs)
 			chat.Host = h
 			defer chat.Close()
-			if strings.HasPrefix(mode, "stream-") {
-				if _, e = db.Exec("INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at)VALUES('fixture-local',?,'fixture-key','user','{}',1)", scope.SessionID); e != nil {
-					t.Fatal(e)
-				}
-				if _, e = db.Exec("INSERT INTO chat_dispatch(message_id,native_message_id,turn_id,state,created_at)VALUES('fixture-local','msg_fixture1234567890',?,'accepted',1)", scope.TurnID); e != nil {
-					t.Fatal(e)
-				}
+			chat.Grace = time.Millisecond
+			message, e := chat.Send(ctx, p.ID, scope.SessionID, []byte(`{"requestId":"fixture-key","document":{"type":"doc"},"text":"Run the owned fixture.","references":[],"annotations":[]}`))
+			if e != nil {
+				t.Fatal(e)
 			}
+			if suppliers.Load() != 0 {
+				t.Fatal("supplier before human approval")
+			}
+			approveChatFixture(t, chat, p.ID, scope.SessionID, message.BillingQuestionID, false)
+			if _, e = db.Exec("UPDATE chat_dispatch SET native_message_id='msg_fixture1234567890',turn_id=?,state='accepted' WHERE message_id=?", scope.TurnID, message.ID); e != nil {
+				t.Fatal(e)
+			}
+
 			acceptance := make(chan error, 1)
 			go func() {
 				_, err := h.request(ctx, "POST", "/session/"+session.ID+"/prompt_async", map[string]any{"messageID": "msg_fixture1234567890", "agent": "build", "parts": []any{map[string]string{"type": "text", "text": "Run the owned fixture."}}})
@@ -209,7 +217,7 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 				observed := false
 				var latest []nativeMessage
 				for !observed {
-					if _, e = chat.readSnapshotEvents(ctx, scope, "fixture-local", "msg_fixture1234567890", false); e != nil {
+					if _, e = chat.readSnapshotEvents(ctx, scope, message.ID, "msg_fixture1234567890", false); e != nil {
 						t.Fatal(e)
 					}
 					snapshot, err := h.snapshot(ctx, session.ID)
@@ -251,6 +259,8 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 				streamGate <- struct{}{}
 			}
 			answered := false
+			var rejectedCard questions.Question
+			var rejectReply questions.HumanReply
 			terminal := false
 			var snapshot []nativeMessage
 			for !terminal {
@@ -261,12 +271,27 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
+				nativeCards := cards[:0]
+				for _, card := range cards {
+					if card.Kind == "choice" {
+						nativeCards = append(nativeCards, card)
+					}
+				}
+				cards = nativeCards
 				if len(cards) > 0 && !answered {
-					if mode != "question" && mode != "stream-question" {
+					if mode != "question" && mode != "question-reject" && mode != "stream-question" {
 						t.Fatal("unexpected question")
 					}
 					card := cards[0]
-					_, e = qs.Reply(ctx, p.ID, card.ID, questions.HumanReply{RequestID: "human", SessionID: scope.SessionID, ExpectedRevision: card.Revision, Answers: [][]string{{"Yes"}}})
+					answers := [][]string{{"Yes"}}
+					if mode == "question-reject" {
+						answers = [][]string{}
+					}
+					reply := questions.HumanReply{RequestID: "human", SessionID: scope.SessionID, ExpectedRevision: card.Revision, Answers: answers, Reject: mode == "question-reject"}
+					_, e = qs.Reply(ctx, p.ID, card.ID, reply)
+					if mode == "question-reject" {
+						rejectedCard, rejectReply = card, reply
+					}
 					if e != nil {
 						t.Fatal(e)
 					}
@@ -276,9 +301,21 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 				if e != nil {
 					t.Fatalf("snapshot %v supplier=%d previous=%+v", e, suppliers.Load(), snapshot)
 				}
-				for _, message := range snapshot {
-					if message.Info.Role == "assistant" && (len(message.Info.Error) > 0 || message.Info.Time.Completed > 0 && message.Info.Finish != "tool-calls") {
-						terminal = true
+				if mode == "question-reject" {
+					terminal, e = chat.snapshotEvents(ctx, scope, message.ID, "msg_fixture1234567890")
+					if e != nil {
+						t.Fatal(e)
+					}
+					for _, item := range snapshot {
+						if item.Info.ParentID == "msg_fixture1234567890" && item.Info.Time.Completed > 0 && item.Info.Finish == "tool-calls" && !terminal {
+							t.Fatalf("human rejection finished native but chat did not terminate: supplier=%d snapshot=%+v", suppliers.Load(), item)
+						}
+					}
+				} else {
+					for _, message := range snapshot {
+						if message.Info.Role == "assistant" && (len(message.Info.Error) > 0 || message.Info.Time.Completed > 0 && message.Info.Finish != "tool-calls") {
+							terminal = true
+						}
 					}
 				}
 				if !terminal {
@@ -294,6 +331,46 @@ func TestPinnedNativeGuardedInferenceFaultsAndHumanQuestion(t *testing.T) {
 			}
 			if e = <-acceptance; e != nil {
 				t.Fatal("native prompt acceptance", e)
+			}
+			if mode == "question-reject" {
+				var state string
+				if e = db.QueryRow("SELECT state FROM chat_dispatch WHERE message_id=?", message.ID).Scan(&state); e != nil || state != "cancelled" {
+					t.Fatal("rejection terminal", state, e)
+				}
+				if _, e = qs.Reply(ctx, p.ID, rejectedCard.ID, rejectReply); e != nil {
+					t.Fatal(e)
+				}
+				if e = chat.syncQuestions(ctx, scope); e != nil {
+					t.Fatal(e)
+				}
+				if _, e = chat.snapshotEvents(ctx, scope, message.ID, "msg_fixture1234567890"); e != nil {
+					t.Fatal(e)
+				}
+				var count int
+				if e = db.QueryRow("SELECT count(*) FROM events WHERE type='chat_done' AND json_extract(payload_json,'$.message_id')=?", message.ID).Scan(&count); e != nil || count != 1 {
+					t.Fatal("rejection terminal count", count, e)
+				}
+				next, e := chat.Send(ctx, p.ID, scope.SessionID, []byte(`{"requestId":"after-reject","document":{"type":"doc"},"text":"Next owned intent.","references":[],"annotations":[]}`))
+				if e != nil {
+					t.Fatal(e)
+				}
+				approveChatFixture(t, chat, p.ID, scope.SessionID, next.BillingQuestionID, false)
+				if _, e = turns.Begin(ctx, p.ID, scope.SessionID, session.ID); e != ErrTurnBusy {
+					t.Fatal("terminal skipped cleanup barrier", e)
+				}
+				// This fixture has no MCP transport; exercise the real turn barrier with
+				// native idle and an empty fixture transport close. Production end is
+				// separately covered by TestCleanupFailureRetainsAndRecoversEpoch.
+				if e = turns.End(ctx, scope, func(ctx context.Context) error { return h.WaitIdle(ctx, session.ID) }, func(context.Context) error { return nil }); e != nil {
+					t.Fatal(e)
+				}
+				if _, e = turns.Begin(ctx, p.ID, scope.SessionID, session.ID); e != nil {
+					t.Fatal("next queue cannot acquire after idle/drain/epoch", e)
+				}
+				if suppliers.Load() != 1 || relayAttempts.Load() != 1 {
+					t.Fatalf("rejection/replay submitted inference supplier=%d relay=%d", suppliers.Load(), relayAttempts.Load())
+				}
+				t.Log("human reject: cancelled once, native idle, duplicate receipt no resend, next approved queue eligible after cleanup")
 			}
 			want := int32(1)
 			if mode == "question" || mode == "stream-question" {

@@ -32,16 +32,17 @@ type ChatInput struct {
 	Annotations []json.RawMessage `json:"annotations"`
 }
 type Message struct {
-	SkillDisabled bool            `json:"skill_disabled,omitempty"`
-	Skill         *Skill          `json:"skill,omitempty"`
-	ID            string          `json:"id"`
-	SessionID     string          `json:"session_id"`
-	RequestID     string          `json:"requestId"`
-	Role          string          `json:"role"`
-	Content       json.RawMessage `json:"content"`
-	State         string          `json:"state"`
-	Error         string          `json:"error,omitempty"`
-	CreatedAt     int64           `json:"created_at"`
+	BillingQuestionID string          `json:"billing_question_id,omitempty"`
+	SkillDisabled     bool            `json:"skill_disabled,omitempty"`
+	Skill             *Skill          `json:"skill,omitempty"`
+	ID                string          `json:"id"`
+	SessionID         string          `json:"session_id"`
+	RequestID         string          `json:"requestId"`
+	Role              string          `json:"role"`
+	Content           json.RawMessage `json:"content"`
+	State             string          `json:"state"`
+	Error             string          `json:"error,omitempty"`
+	CreatedAt         int64           `json:"created_at"`
 }
 
 type Chat struct {
@@ -63,7 +64,11 @@ type Chat struct {
 
 func NewChat(db *sql.DB, t *Turns, ev *events.Service, q *questions.Service) *Chat {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Chat{DB: db, Turns: t, Events: ev, Questions: q, Grace: 10 * time.Second, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
+	c := &Chat{DB: db, Turns: t, Events: ev, Questions: q, Grace: 10 * time.Second, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1)}
+	if q != nil {
+		q.ChatRenew, q.ChatDecide, q.ChatNotify = c.renewChatBilling, c.decideChatBilling, c.Notify
+	}
+	return c
 }
 func (c *Chat) Close() { c.cancel(); c.wg.Wait() }
 func (c *Chat) Stop()  { c.cancel() }
@@ -167,7 +172,7 @@ func (c *Chat) Messages(ctx context.Context, p, session string, offset, limit in
 	if e := c.owned(ctx, p, session); e != nil {
 		return nil, e
 	}
-	rows, e := c.DB.QueryContext(ctx, "SELECT m.id,m.session_id,m.request_id,m.role,m.content_json,coalesce(d.state,'completed'),coalesce(d.error,''),m.created_at,coalesce(json_extract(w.response_json,'$.skill'),'null') FROM chat_messages m LEFT JOIN chat_dispatch d ON d.message_id=m.id LEFT JOIN write_requests w ON w.project_id=? AND w.operation='chat.send.'||m.session_id AND w.request_id=m.request_id AND m.role='user' WHERE m.session_id=? ORDER BY m.created_at,m.rowid LIMIT ? OFFSET ?", p, session, limit, offset)
+	rows, e := c.DB.QueryContext(ctx, "SELECT m.id,m.session_id,m.request_id,m.role,m.content_json,coalesce(d.state,'completed'),coalesce(d.error,''),m.created_at,coalesce(json_extract(w.response_json,'$.skill'),'null'),coalesce(d.billing_question_id,'') FROM chat_messages m LEFT JOIN chat_dispatch d ON d.message_id=m.id LEFT JOIN write_requests w ON w.project_id=? AND w.operation='chat.send.'||m.session_id AND w.request_id=m.request_id AND m.role='user' WHERE m.session_id=? ORDER BY m.created_at,m.rowid LIMIT ? OFFSET ?", p, session, limit, offset)
 	if e != nil {
 		return nil, e
 	}
@@ -176,7 +181,7 @@ func (c *Chat) Messages(ctx context.Context, p, session string, offset, limit in
 	for rows.Next() {
 		var m Message
 		var raw, skill string
-		if e = rows.Scan(&m.ID, &m.SessionID, &m.RequestID, &m.Role, &raw, &m.State, &m.Error, &m.CreatedAt, &skill); e != nil {
+		if e = rows.Scan(&m.ID, &m.SessionID, &m.RequestID, &m.Role, &raw, &m.State, &m.Error, &m.CreatedAt, &skill, &m.BillingQuestionID); e != nil {
 			return nil, e
 		}
 		m.Content = json.RawMessage(raw)
@@ -240,6 +245,11 @@ func (c *Chat) Send(ctx context.Context, p, session string, raw []byte) (Message
 		if _, e := tx.ExecContext(ctx, "INSERT INTO chat_dispatch(message_id,native_message_id,state,created_at)VALUES(?,?,'queued',?)", m.ID, "msg_"+strings.ReplaceAll(uuid.NewString(), "-", ""), m.CreatedAt); e != nil {
 			return nil, e
 		}
+		q, e := c.createChatBilling(ctx, tx, p, m)
+		if e != nil {
+			return nil, e
+		}
+		m.BillingQuestionID = q.ID
 		return json.Marshal(m)
 	})
 	if e != nil {
@@ -250,6 +260,7 @@ func (c *Chat) Send(ctx context.Context, p, session string, raw []byte) (Message
 		return m, e
 	}
 	c.Notify()
+	c.Events.Notify()
 	timer := time.NewTimer(c.Grace)
 	defer timer.Stop()
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -295,12 +306,30 @@ func (c *Chat) run() {
 				break
 			}
 			var id, p, session, native, nativeMessage, raw, state string
-			e := c.DB.QueryRow("SELECT d.message_id,s.project_id,s.id,coalesce(s.native_session_id,''),d.native_message_id,m.content_json,s.state FROM chat_dispatch d JOIN chat_messages m ON m.id=d.message_id JOIN chat_sessions s ON s.id=m.session_id WHERE d.state='queued' ORDER BY d.created_at,d.rowid LIMIT 1").Scan(&id, &p, &session, &native, &nativeMessage, &raw, &state)
+			e := c.DB.QueryRow("SELECT d.message_id,s.project_id,s.id,coalesce(s.native_session_id,''),d.native_message_id,m.content_json,s.state FROM chat_dispatch d JOIN chat_messages m ON m.id=d.message_id JOIN chat_sessions s ON s.id=m.session_id JOIN questions q ON q.id=d.billing_question_id WHERE d.state='queued' AND d.turn_id IS NULL AND q.state='approved' AND json_extract(q.question_json,'$.quote.expires_at')>unixepoch('subsec')*1000 ORDER BY d.created_at,d.rowid LIMIT 1").Scan(&id, &p, &session, &native, &nativeMessage, &raw, &state)
 			if e != nil {
 				break
 			}
 			if c.Host == nil || c.Host.Relay == nil {
 				break
+			}
+			tx, err := c.DB.BeginTx(c.ctx, nil)
+			if err != nil {
+				break
+			}
+			err = approvedChat(c.ctx, tx, p, session, id, c.Host.Relay.config, c.Host.credentialVersion)
+			_ = tx.Rollback()
+			if err != nil {
+				var invalid *store.DomainError
+				if !errors.As(err, &invalid) && !errors.Is(err, ErrScope) {
+					break
+				}
+				// A stale running configuration cannot hold later approved messages
+				// at the queue head. The original remains withdrawable, never resent.
+				if _, e = c.DB.Exec("UPDATE questions SET state='stale',revision=revision+1,question_json=json_set(question_json,'$.state','stale','$.revision',revision+1,'$.reason','聊天授权已失效，请撤回原消息后重新发送') WHERE id=(SELECT billing_question_id FROM chat_dispatch WHERE message_id=?) AND state='approved' AND json_extract(question_json,'$.quote.expires_at')>unixepoch('subsec')*1000", id); e != nil {
+					break
+				}
+				continue
 			}
 			if native == "" {
 				if state != "new" {
@@ -333,7 +362,7 @@ func (c *Chat) run() {
 			if e != nil {
 				break
 			}
-			result, e := c.DB.Exec("UPDATE chat_dispatch SET state='submitting',turn_id=? WHERE message_id=? AND state='queued'", scope.TurnID, id)
+			result, e := c.DB.Exec("UPDATE chat_dispatch SET state='submitting',turn_id=? WHERE message_id=? AND state='queued' AND turn_id IS NULL", scope.TurnID, id)
 			if e != nil {
 				if !c.failUnsent(scope, id) {
 					return
@@ -386,6 +415,20 @@ func (c *Chat) run() {
 				parts = append(parts, map[string]string{"type": "text", "text": string(data)})
 			}
 			acceptance := make(chan error, 1)
+			// Recheck after native setup, before prompt submission. The relay repeats
+			// this check in its journal transaction at the actual paid boundary.
+			tx, err = c.DB.BeginTx(c.ctx, nil)
+			if err != nil {
+				return
+			}
+			err = approvedChat(c.ctx, tx, p, session, id, c.Host.Relay.config, c.Host.credentialVersion)
+			_ = tx.Rollback()
+			if err != nil {
+				if !c.failUnsent(scope, id) {
+					return
+				}
+				continue
+			}
 			c.wg.Add(1)
 			go func() {
 				defer c.wg.Done()
@@ -520,6 +563,9 @@ func (c *Chat) Cancel(ctx context.Context, p, session string, raw []byte) (map[s
 			return nil, e
 		}
 		for _, id := range ids {
+			if _, e = tx.ExecContext(ctx, "UPDATE questions SET state='superseded',revision=revision+1,question_json=json_set(question_json,'$.state','superseded','$.revision',revision+1,'$.reason','原聊天消息已撤回') WHERE id=(SELECT billing_question_id FROM chat_dispatch WHERE message_id=?) AND state IN ('pending','approved')", id); e != nil {
+				return nil, e
+			}
 			payload, _ := json.Marshal(ChatDonePayload{SessionID: session, MessageID: id, Done: true, Status: "cancelled"})
 			if e = events.Append(ctx, tx, p, session, "", "chat_done", payload); e != nil {
 				return nil, e

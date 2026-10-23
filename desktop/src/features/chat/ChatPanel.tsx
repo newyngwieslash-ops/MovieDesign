@@ -37,13 +37,16 @@ export function ChatPanel({projectID,annotationSource}:{projectID:string;annotat
  });
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
  useEffect(()=>{
-  let disposed=false,reading=false,dirty=false;const controller=new AbortController();
+  let disposed=false,reading=false,dirty=false,unfinished=false;let timer:ReturnType<typeof setTimeout>|undefined;const controller=new AbortController();
   const load=async()=>{
-   if(reading){dirty=true;return;}reading=true;
+   if(disposed)return;if(reading){dirty=true;return;}clearTimeout(timer);timer=undefined;reading=true;
    do {dirty=false;try{const list=await chatPages<Session>(projectID,'/api/chat/sessions',controller.signal);if(disposed)return;setSessions(list);if(!session&&list.length){setSession(list[0].id);return;}
-    if(session){const messages=await chatPages<Message>(projectID,`/api/chat/sessions/${session}/messages`,controller.signal);if(disposed)return;setState(historyState(projectID,session,messages));}setError('');
+    if(session){const messages=await chatPages<Message>(projectID,`/api/chat/sessions/${session}/messages`,controller.signal);if(disposed)return;unfinished=messages.some(m=>m.session_id===session&&m.role==='user'&&['queued','submitting','accepted','running','cancelling'].includes(m.state));setState(historyState(projectID,session,messages));}setError('');
    }catch(e){if(!disposed)setError((e as Error).message);}}while(dirty&&!disposed);
    reading=false;
+   // ponytail: Refresh unfinished history serially at 1s; replace only if a
+   // versioned status event is defined (content events cannot signal acceptance).
+   if(!disposed&&unfinished)timer=setTimeout(()=>void load(),1000);
   };
   refresh.current=()=>void load();setState(historyState(projectID,session,[]));
   let unsubscribe=()=>{};
@@ -54,7 +57,7 @@ export function ChatPanel({projectID,annotationSource}:{projectID:string;annotat
    if(!reading&&(event.payload as {type?:string})?.type!=='content_delta')setState(previous=>reduceEvent(previous,event));
    void load();
   },()=>void load(),session||undefined);}catch(e){setError(`事件连接不可用：${(e as Error).message}`);}
-  void load();return()=>{disposed=true;controller.abort();unsubscribe();};
+  void load();return()=>{disposed=true;clearTimeout(timer);controller.abort();unsubscribe();};
  },[projectID,session]);
  function persist(original:Pending,next:Pending|null,previous:Pending|null=original){
   try{updatePending(localStorage,pendingKey(projectID,original.kind),previous,next);setPending(v=>({...v,[original.kind]:next}));return true;}catch(e){setStorageError((e as Error).message);return false;}

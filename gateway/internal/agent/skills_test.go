@@ -175,6 +175,7 @@ func TestSkillFrozenChatReplayContinuationAndRestart(t *testing.T) {
 	}
 	defer s.Close()
 	c := NewChat(f.chat.DB, f.chat.Turns, f.chat.Events, f.chat.Questions)
+	c.Host = f.chat.Host
 	c.Skills = s
 	c.Grace = time.Millisecond
 	defer c.Close()
@@ -194,6 +195,7 @@ func TestSkillFrozenChatReplayContinuationAndRestart(t *testing.T) {
 		t.Fatal("replay reread files", e)
 	}
 	next := NewChat(c.DB, c.Turns, c.Events, c.Questions)
+	next.Host = c.Host
 	next.Skills = s
 	next.Grace = time.Millisecond
 	defer next.Close()
@@ -239,6 +241,7 @@ func TestSkillAutomaticAdoptionAfterOrdinaryMessageAndDurableDisable(t *testing.
 	}
 	defer s.Close()
 	c := NewChat(f.chat.DB, f.chat.Turns, f.chat.Events, f.chat.Questions)
+	c.Host = f.chat.Host
 	c.Skills = s
 	c.Grace = time.Millisecond
 	defer c.Close()

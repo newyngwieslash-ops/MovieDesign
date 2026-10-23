@@ -107,6 +107,33 @@ func (c *Chat) readSnapshotEvents(ctx context.Context, s ToolScope, id, parent s
 			if e = c.savePart(ctx, s, id, step, part, adoptRecovery); e != nil {
 				return false, e
 			}
+			// Pinned native stops on a human question rejection while retaining
+			// finish=tool-calls. A tool error alone never proves that the turn ended.
+			if m.Info.Time.Completed > 0 && m.Info.Finish == "tool-calls" && part.Type == "tool" && part.Tool == "question" && part.State.Status == "error" && part.CallID != "" {
+				var rejected int
+				e = c.DB.QueryRowContext(ctx, `SELECT count(*) FROM native_questions n
+				 JOIN questions q ON q.id=n.question_id AND q.kind='choice' AND q.state='rejected'
+				 JOIN question_receipts r ON r.id=n.receipt_id AND r.question_id=q.id AND r.actor='human'
+				 JOIN chat_dispatch d ON d.turn_id=n.turn_id
+				 JOIN chat_messages u ON u.id=d.message_id
+				 JOIN chat_sessions cs ON cs.id=u.session_id
+				 WHERE d.message_id=? AND d.native_message_id=? AND n.turn_id=?
+				 AND cs.id=? AND cs.project_id=? AND cs.native_session_id=?
+				 AND q.session_id=cs.id AND q.project_id=cs.project_id AND n.send_state='sent'
+				 AND json_extract(r.response_json,'$.state')='rejected'
+				 AND json_extract(r.response_json,'$.question_id')=q.id
+				 AND json_extract(n.native_json,'$.id')=n.native_id
+				 AND json_extract(n.native_json,'$.sessionID')=cs.native_session_id
+				 AND json_extract(n.native_json,'$.tool.messageID')=?
+				 AND json_extract(n.native_json,'$.tool.callID')=?
+				 AND NOT EXISTS(SELECT 1 FROM inference_requests i WHERE i.turn_id=n.turn_id AND i.state IN ('forwarding','unknown'))`, id, parent, s.TurnID, s.SessionID, s.ProjectID, s.NativeSessionID, m.Info.ID, part.CallID).Scan(&rejected)
+				if e != nil {
+					return false, e
+				}
+				if rejected == 1 {
+					terminal = "cancelled"
+				}
+			}
 		}
 		if len(m.Info.Error) > 0 && string(m.Info.Error) != "null" {
 			terminal = "error"

@@ -10,7 +10,7 @@ const click=async text=>{await wait(`(()=>{const b=[...document.querySelectorAll
 const get=path=>evaluate(`fetch('http://127.0.0.1:8001'+${JSON.stringify(path)}).then(r=>r.json())`);
 const fill=(label,value)=>evaluate(`(()=>{const e=[...document.querySelectorAll('label')].find(x=>x.textContent.startsWith(${JSON.stringify(label)})).querySelector('input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
 const select=async value=>evaluate(`(()=>{const e=document.querySelector('[aria-label="创作方法"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('change',{bubbles:true}))})()`);
-const send=async text=>{await evaluate(`document.querySelector('.chat-composer .tiptap').editor.commands.setContent({type:'doc',content:[{type:'paragraph',content:[{type:'text',text:${JSON.stringify(text)}}]}]})`);await click('发送消息');await wait(`![...document.querySelectorAll('.chat-panel button')].some(b=>b.textContent==='发送中')`)};
+const send=async text=>{await evaluate(`document.querySelector('.chat-composer .tiptap').editor.commands.setContent({type:'doc',content:[{type:'paragraph',content:[{type:'text',text:${JSON.stringify(text)}}]}]})`);return sendCurrent()};
 let fixture,expected,models=[],releaseHold;
 async function supplier(listenPort=0){
  fixture=createServer(async(req,res)=>{
@@ -35,6 +35,23 @@ function assertMethod(model,skill){
  const prefix=`当前唯一采用的创作方法（取代历史方法选择；仅方法，不授予工具权限或任何后续批准）：${skill.name} / ${skill.version} / ${skill.revision}\n${skill.body}`+Object.keys(skill.references).sort().map(name=>`\n\n受管引用 ${name}\n${skill.references[name]}`).join('');
  assert.equal(first.type,'text');assert.equal(first.text,prefix,'entire native method prefix and all reference bytes');
 }
+// Only explicit sends to this script's owned synthetic supplier may approve a chat card.
+async function sendCurrent(approve=true){
+ const before=models.length, previous=requests.filter(r=>r.method==='POST'&&/\/api\/chat\/sessions\/[^/]+\/messages$/.test(new URL(r.url).pathname)).length;
+ assert(fixture?.listening,'owned synthetic supplier must be listening');
+ const active=await evaluate(`fetch('http://127.0.0.1:8001/api/agent/status').then(r=>r.json()).then(s=>s.active)`);
+ assert.equal(active?.base_url,`http://127.0.0.1:${fixture.address().port}/v1`);assert.equal(active?.model_id,'skills-fixture');
+ await click('发送消息');await wait(`![...document.querySelectorAll('.chat-panel button')].some(b=>b.textContent==='发送中')`);
+ const sends=requests.filter(r=>r.method==='POST'&&/\/api\/chat\/sessions\/[^/]+\/messages$/.test(new URL(r.url).pathname));assert.equal(sends.length,previous+1,'one explicit Send');
+ const sent=sends.at(-1),url=new URL(sent.url),session=decodeURIComponent(url.pathname.split('/')[4]),requestID=JSON.parse(sent.postData).requestId;
+ assert.equal(url.searchParams.get('project_id'),expected.p);assert.equal(session,expected.s);
+ const message=await evaluate(`(async()=>{let offset=0;for(;;){const r=await fetch(${JSON.stringify(sent.url)}+'&offset='+offset+'&limit=100');if(!r.ok)throw Error(await r.text());const page=await r.json(),m=page.items.find(m=>m.role==='user'&&m.requestId===${JSON.stringify(requestID)});if(m)return m;if(page.coverage.exhausted)return null;if(page.coverage.next_offset<=offset)throw Error('Invalid chat pagination');offset=page.coverage.next_offset;}})()`);
+ assert(message?.billing_question_id,'fresh message must bind a billing card');assert.equal(message.state,'queued');assert.equal(models.length,before,'no synthetic supplier POST before this send approval');
+ const question=await evaluate(`fetch('http://127.0.0.1:8001/api/question?project_id='+${JSON.stringify(expected.p)}+'&session_id='+${JSON.stringify(session)}).then(r=>r.json()).then(r=>r.items.find(q=>q.id===${JSON.stringify(message.billing_question_id)}))`);
+ assert.equal(question?.project_id,expected.p);assert.equal(question?.session_id,session);assert.equal(question?.chat_message_id,message.id);assert.equal(question?.kind,'billing');assert.equal(question?.state,'pending');assert(!question.task_id);assert.equal(question.model,'skills-fixture');assert.equal(question.questions[0].options[0].label,'确认本轮聊天费用');
+ if(approve){const scope=`document.querySelector('[data-question-id="${question.id}"]')`;await wait(`${scope}?.dataset.state==='pending'&&[...${scope}.querySelectorAll('button')].some(b=>b.textContent==='确认本轮聊天费用'&&!b.disabled)`);assert.equal(models.length,before,'card render must not submit inference');await evaluate(`[...${scope}.querySelectorAll('button')].find(b=>b.textContent==='确认本轮聊天费用').click()`);await wait(`${scope}?.dataset.state==='approved'`);const replies=requests.filter(r=>r.method==='POST'&&new URL(r.url).pathname===`/api/question/${question.id}/reply`);assert.equal(replies.length,1,'one explicit fee confirmation');assert.equal(new URL(replies[0].url).searchParams.get('session_id'),session);const reply=JSON.parse(replies[0].postData);assert.deepEqual(reply.answers,[['确认本轮聊天费用']]);assert.equal(reply.expected_revision,question.revision);assert(reply.requestId);}
+ return message;
+}
 try {
  await wait(`document.body?.innerText.includes('本地服务已连接')`);
  const listing=await get('/api/skills');assert.equal(listing.items.length,2);assert.deepEqual(listing.coverage,{total:2,next_offset:2,exhausted:true});
@@ -50,7 +67,7 @@ try {
  }else
  if(phase==='initial'){
   expected={supplierPort:await supplier()};
-  await click('供应商设置');await fill('LLM Base URL',`http://127.0.0.1:${expected.supplierPort}/v1`);await fill('LLM Model ID','skills-fixture');await fill('LLM API 密钥','synthetic-skills-key');await click('保存 LLM 连接');await wait(`document.body.innerText.includes('重启后生效')`);await click('创作画布');
+  await click('供应商设置');await fill('LLM Base URL',`http://127.0.0.1:${expected.supplierPort}/v1`);await fill('LLM Model ID','skills-fixture');await fill('LLM API 密钥','synthetic-skills-key');await evaluate(`[...document.querySelectorAll('label')].find(x=>x.textContent.includes('声明文本生成价格')).querySelector('input').click()`);await fill('上下文 token 上限','200000');await fill('单 token 最高价','0');await fill('报价来源','synthetic-fixture');await fill('报价版本','h20-v1');await click('保存 LLM 连接');await wait(`document.body.innerText.includes('重启后生效')`);await click('创作画布');
   await evaluate(`(()=>{const e=document.querySelector('#project-name');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'M6.1 技能验收');e.dispatchEvent(new Event('input',{bubbles:true}))})()`);await evaluate(`document.querySelector('.project-picker form').requestSubmit()`);await wait(`!!document.querySelector('.chat-panel')`);
   expected.p=await evaluate(`document.querySelector('#project').value`);await click('新建对话');await wait(`!!document.querySelector('[aria-label="当前对话"]').value`);expected.s=await evaluate(`document.querySelector('[aria-label="当前对话"]').value`);
   await select('口播视频');await wait(`document.querySelector('.chat-panel').innerText.includes('查看制作方法与受管引用')`);await select('__continue__');

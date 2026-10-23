@@ -95,6 +95,7 @@ func TestRelayBlocksUncertainAndDuplicateRequestsButAllowsCompletedToolStep(t *t
 				t.Fatal(e)
 			}
 			relay.Turns = turns
+			authorizeRelayFixture(t, relay, turns.Current())
 			send := func(body, token, origin string) *httptest.ResponseRecorder {
 				r := httptest.NewRequest("POST", inferencePath+"/chat/completions", strings.NewReader(body))
 				r.Header.Set("Authorization", "Bearer "+token)
@@ -225,6 +226,7 @@ func TestResponsesAndAnthropicRelayOperationsCredentialsAndNextStep(t *testing.T
 				t.Fatal(e)
 			}
 			relay.Turns = turns
+			authorizeRelayFixture(t, relay, turns.Current())
 			send := func(body string) int {
 				r := httptest.NewRequest("POST", inferencePath+"/"+operation, strings.NewReader(body))
 				r.Header.Set("Origin", relay.origin)

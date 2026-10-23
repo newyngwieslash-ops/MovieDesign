@@ -31,6 +31,7 @@ type Info struct {
 	Custom   bool     `json:"custom,omitempty"`
 }
 type Question struct {
+	ChatMessageID   string            `json:"chat_message_id,omitempty"`
 	CreativeContent string            `json:"creativeContent,omitempty"`
 	Creative        *pipeline.Binding `json:"creative,omitempty"`
 	Rules           *RulesChange      `json:"rules,omitempty"`
@@ -74,21 +75,35 @@ func (i *HumanReply) UnmarshalJSON(b []byte) error {
 }
 
 type Receipt struct {
-	ID         string     `json:"id"`
-	QuestionID string     `json:"question_id"`
-	RequestID  string     `json:"requestId"`
-	State      string     `json:"state"`
-	Answers    [][]string `json:"answers"`
-	Revision   int64      `json:"revision"`
-	TaskID     string     `json:"task_id,omitempty"`
+	ChatMessageID string     `json:"chat_message_id,omitempty"`
+	ID            string     `json:"id"`
+	QuestionID    string     `json:"question_id"`
+	RequestID     string     `json:"requestId"`
+	State         string     `json:"state"`
+	Answers       [][]string `json:"answers"`
+	Revision      int64      `json:"revision"`
+	TaskID        string     `json:"task_id,omitempty"`
 }
 type Service struct {
-	DB     *sql.DB
-	Tasks  *tasks.Service
-	Events *events.Service
+	ChatRenew  func(context.Context, *sql.Tx, string, Question) (Question, error)
+	ChatDecide func(context.Context, *sql.Tx, string, Question, bool) error
+	ChatNotify func()
+	DB         *sql.DB
+	Tasks      *tasks.Service
+	Events     *events.Service
 }
 
-func NewService(db *sql.DB, t *tasks.Service, e *events.Service) *Service { return &Service{db, t, e} }
+func NewService(db *sql.DB, t *tasks.Service, e *events.Service) *Service {
+	return &Service{DB: db, Tasks: t, Events: e}
+}
+
+// ChatBilling is a trusted supplied-Tx hook, never a public ordinary question.
+func (s *Service) ChatBilling(ctx context.Context, tx *sql.Tx, p string, q Question) (Question, error) {
+	if q.Kind != "billing" || q.ChatMessageID == "" || q.TaskID != "" || q.Quote == nil {
+		return Question{}, fail(400, "Invalid chat billing binding")
+	}
+	return s.insert(ctx, tx, p, q)
+}
 
 // LateResult is a worker SQL hook. Public Ask cannot forge a delivery-kind card.
 func (s *Service) LateResult(ctx context.Context, tx *sql.Tx, p string, v tasks.TaskView, attempt int, session string) error {
@@ -248,6 +263,9 @@ func validate(q Question) error {
 // to an existing waiting task. Billing content/price is always generated here.
 func (s *Service) Ask(ctx context.Context, p string, q Question) (Question, error) {
 	var result Question
+	if q.ChatMessageID != "" && (q.Kind != "billing" || q.TaskID != "" || q.Creative != nil || q.Rules != nil) {
+		return result, fail(400, "Chat target requires exclusive billing authorization")
+	}
 	if q.Creative != nil {
 		if q.Kind != "creative" || q.TaskID != "" || len(q.Questions) != 0 || q.Rules != nil || q.Quote != nil {
 			return result, fail(400, "Creative proposal accepts binding only")
@@ -263,6 +281,19 @@ func (s *Service) Ask(ctx context.Context, p string, q Question) (Question, erro
 	raw, _ := json.Marshal(q)
 	out, e := store.WriteRequest(ctx, s.DB, store.Scope{ProjectID: p, Operation: "question.ask", RequestID: q.RequestID}, raw, func(tx *sql.Tx) ([]byte, error) {
 		if q.Kind == "billing" {
+			if (q.TaskID == "") == (q.ChatMessageID == "") {
+				return nil, fail(400, "Billing requires exactly one target")
+			}
+			if q.ChatMessageID != "" {
+				if s.ChatRenew == nil || q.ID == "" || q.Revision < 1 || q.TaskRevision != 0 || len(q.Questions) != 0 || q.Quote != nil {
+					return nil, fail(400, "Chat billing renewal requires message/session/revision only")
+				}
+				fresh, err := s.ChatRenew(ctx, tx, p, q)
+				if err != nil {
+					return nil, err
+				}
+				return json.Marshal(fresh)
+			}
 			if q.TaskID == "" || q.TaskRevision < 1 || len(q.Questions) != 0 || q.Quote != nil {
 				return nil, fail(400, "Billing renewal requires task/session/revision only")
 			}
@@ -430,7 +461,15 @@ func (s *Service) Reply(ctx context.Context, p, id string, i HumanReply) (Receip
 		if e = validateAnswers(q, i); e != nil {
 			return nil, e
 		}
-		if q.Kind == "billing" && !i.Reject {
+		if q.Kind == "billing" && q.ChatMessageID != "" {
+			if q.TaskID != "" || s.ChatDecide == nil {
+				return nil, fail(409, "Invalid chat billing binding")
+			}
+			if e = s.ChatDecide(ctx, tx, p, q, i.Reject); e != nil {
+				return nil, e
+			}
+		}
+		if q.Kind == "billing" && q.ChatMessageID == "" && !i.Reject {
 			input, e := s.Tasks.BillingInput(ctx, tx, p, q.SessionID, q.TaskID, q.TaskRevision)
 			if e != nil {
 				return nil, e
@@ -475,7 +514,7 @@ func (s *Service) Reply(ctx context.Context, p, id string, i HumanReply) (Receip
 		if _, e = tx.ExecContext(ctx, "UPDATE questions SET state=?,revision=?,question_json=? WHERE id=?", q.State, q.Revision, string(saved), id); e != nil {
 			return nil, e
 		}
-		receipt = Receipt{ID: uuid.NewString(), QuestionID: id, RequestID: i.RequestID, State: q.State, Answers: i.Answers, Revision: q.Revision, TaskID: q.TaskID}
+		receipt = Receipt{ID: uuid.NewString(), QuestionID: id, RequestID: i.RequestID, State: q.State, Answers: i.Answers, Revision: q.Revision, TaskID: q.TaskID, ChatMessageID: q.ChatMessageID}
 		if q.Kind == "project_rules" && !i.Reject {
 			if q.Rules == nil {
 				return nil, fail(409, "Rule proposal missing")
@@ -507,6 +546,9 @@ func (s *Service) Reply(ctx context.Context, p, id string, i HumanReply) (Receip
 	if e == nil {
 		e = json.Unmarshal(out, &receipt)
 		s.Events.Notify()
+		if e == nil && receipt.ChatMessageID != "" && s.ChatNotify != nil {
+			s.ChatNotify()
+		}
 		if e == nil && receipt.State == "approved" && receipt.TaskID != "" {
 			_ = s.Tasks.Dispatch(p, receipt.TaskID)
 		}

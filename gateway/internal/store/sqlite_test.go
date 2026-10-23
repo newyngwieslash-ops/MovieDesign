@@ -39,11 +39,18 @@ func TestMigrationsAndPersistence(t *testing.T) {
 	}
 	var version int
 	var dirty bool
-	if err = db.QueryRow("SELECT version,dirty FROM schema_migrations").Scan(&version, &dirty); err != nil || version != 15 || dirty {
+	if err = db.QueryRow("SELECT version,dirty FROM schema_migrations").Scan(&version, &dirty); err != nil || version != 16 || dirty {
 		t.Fatalf("migration state %d/%v: %v", version, dirty, err)
 	}
 	// Exercise the actual support DDL down/up and migration of an existing v14
 	// database, preserving its business rows.
+	down16, err := migrations.Files.ReadFile("000016_chat_billing.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(string(down16)); err != nil {
+		t.Fatal(err)
+	}
 	down, err := migrations.Files.ReadFile("000015_inference_stream.down.sql")
 	if err != nil {
 		t.Fatal(err)

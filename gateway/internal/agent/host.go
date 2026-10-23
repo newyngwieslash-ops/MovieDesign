@@ -106,6 +106,7 @@ func NewHost(s *Settings, dir string, connections ...MCPConnection) (*Host, erro
 		if err != nil {
 			return nil, err
 		}
+		relay.credentialVersion = version
 		var value map[string]any
 		if err = json.Unmarshal(config, &value); err != nil {
 			return nil, err

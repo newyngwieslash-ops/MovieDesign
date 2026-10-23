@@ -29,6 +29,7 @@ type streamFixture struct {
 	scope   ToolScope
 	gateway *httptest.Server
 	calls   atomic.Int32
+	message Message
 }
 
 func newStreamFixture(t *testing.T, protocol string, serve http.HandlerFunc) *streamFixture {
@@ -60,6 +61,7 @@ func newStreamFixture(t *testing.T, protocol string, serve http.HandlerFunc) *st
 		t.Fatal(err)
 	}
 	f.relay.Turns = turns
+	f.message = authorizeRelayFixture(t, f.relay, scope)
 	f.gateway = httptest.NewServer(f.relay)
 	t.Cleanup(f.gateway.Close)
 	return f
@@ -193,7 +195,7 @@ func TestRelayUnknownAndMixedFramesStopPrefixWithoutRewriting(t *testing.T) {
 				}
 				fmt.Fprint(w, terminal)
 			})
-			response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[]}`)
+			response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 			b := make([]byte, len(first))
 			io.ReadFull(response.Body, b)
 			var count int
@@ -216,11 +218,8 @@ func TestRelayInterruptedPartialReopensOriginalUnknownWithoutResend(t *testing.T
 			prefix := "data: {\"choices\":[{\"delta\":{\"content\":\"哈哈 full prefix\"}}]}\n\n"
 			tool := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call\",\"function\":{\"name\":\"owned\",\"arguments\":\"{\\\"value\\\":\"}}]}}]}\n\n"
 			f := newStreamFixture(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, prefix+tool) })
-			_, err := f.db.Exec("INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at)VALUES('original',?,'original-key','user','{}',1)", f.scope.SessionID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = f.db.Exec("INSERT INTO chat_dispatch(message_id,native_message_id,turn_id,state,created_at)VALUES('original','native-parent',?,'accepted',1)", f.scope.TurnID)
+			var err error
+			_, err = f.db.Exec("UPDATE chat_dispatch SET native_message_id='native-parent' WHERE message_id=?", f.message.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -229,11 +228,11 @@ func TestRelayInterruptedPartialReopensOriginalUnknownWithoutResend(t *testing.T
 				part := nativePart{ID: "text-part", SessionID: f.scope.NativeSessionID, MessageID: "native-assistant", Type: "text", Text: existing}
 				// savePart's Notify is harmless through the real event service.
 				chat.Events = events.NewService(f.db)
-				if err = chat.savePart(context.Background(), f.scope, "original", 1, part); err != nil {
+				if err = chat.savePart(context.Background(), f.scope, f.message.ID, 1, part); err != nil {
 					t.Fatal(err)
 				}
 			}
-			response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[]}`)
+			response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 			b, readErr := io.ReadAll(response.Body)
 			if readErr == nil || string(b) != prefix {
 				t.Fatal("incomplete stream escaped as success/tool", string(b), readErr)
@@ -243,7 +242,7 @@ func TestRelayInterruptedPartialReopensOriginalUnknownWithoutResend(t *testing.T
 			if state != "unknown" {
 				t.Fatal(state)
 			}
-			if _, err = f.db.Exec("UPDATE chat_dispatch SET state='unknown' WHERE message_id='original'"); err != nil {
+			if _, err = f.db.Exec("UPDATE chat_dispatch SET state='unknown' WHERE message_id=?", f.message.ID); err != nil {
 				t.Fatal(err)
 			}
 			path := ""
@@ -272,7 +271,7 @@ func TestRelayInterruptedPartialReopensOriginalUnknownWithoutResend(t *testing.T
 			var text strings.Builder
 			for _, message := range messages {
 				if message.Role == "user" {
-					if message.ID != "original" || message.RequestID != "original-key" || message.State != "unknown" {
+					if message.ID != f.message.ID || message.RequestID != "original-key" || message.State != "unknown" {
 						t.Fatal(message)
 					}
 					continue
@@ -302,7 +301,7 @@ func TestRelayInterruptedPartialReopensOriginalUnknownWithoutResend(t *testing.T
 			}
 			// A new Relay instance after physical SQLite reopen still refuses both
 			// the original body and a changed fake tool-result follow-up.
-			for _, body := range []string{`{"model":"fixture","stream":true,"messages":[]}`, `{"model":"fixture","stream":true,"messages":[{"role":"tool","tool_call_id":"call","content":"fake"}]}`} {
+			for _, body := range []string{`{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`, `{"model":"fixture","stream":true,"messages":[{"role":"tool","tool_call_id":"call","content":"fake"}]}`} {
 				replay := f.request(t, "chat/completions", body)
 				io.Copy(io.Discard, replay.Body)
 				replay.Body.Close()
@@ -340,7 +339,7 @@ func TestRelayStreamFaultsKeepSingleAdmission(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			body := `{"model":"fixture","stream":true,"messages":[]}`
+			body := `{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`
 			if mode == "write" {
 				req := httptest.NewRequest("POST", inferencePath+"/chat/completions", strings.NewReader(body))
 				req.Header.Set("Origin", f.relay.origin)
@@ -402,7 +401,7 @@ func TestRelayJournalOmitsReflectedCredential(t *testing.T) {
 	second := "data: {\"choices\":[{\"delta\":{\"content\":\"private\"}}]}\n\n"
 	terminal := "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
 	f := newStreamFixture(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, first+second+terminal) })
-	response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[]}`)
+	response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	b, err := io.ReadAll(response.Body)
 	if err == nil || string(b) != first {
 		t.Fatal("known credential escaped in completed suffix", string(b), err)
@@ -429,7 +428,11 @@ func TestRelayRejectsKnownCredentialAcrossBufferedTextDeltas(t *testing.T) {
 			f := newStreamFixture(t, tc.protocol, func(w http.ResponseWriter, r *http.Request) {
 				fmt.Fprint(w, first+"data: {\"vendor_metadata\":true}\n\n"+"data: "+tc.second+"\n\n"+tc.terminal)
 			})
-			response := f.request(t, tc.operation, `{"model":"fixture","stream":true,"messages":[]}`)
+			body := `{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+			if tc.operation == "responses" {
+				body = strings.Replace(body, "messages", "input", 1)
+			}
+			response := f.request(t, tc.operation, body)
 			b, err := io.ReadAll(response.Body)
 			if err == nil || string(b) != first {
 				t.Fatal("buffered secret suffix exposed", len(b), err)
@@ -461,7 +464,7 @@ func TestRelayRejectsEscapedCredentialMetadataBeforeJournalAndSuffix(t *testing.
 				terminal := "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
 				f := newStreamFixture(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, prefix+between+metadata+terminal) })
 				f.relay.key = secret
-				response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[]}`)
+				response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 				b, err := io.ReadAll(response.Body)
 				if err == nil || string(b) != prefix {
 					t.Errorf("escaped credential metadata released: bytes=%d read_error=%v", len(b), err)
@@ -501,7 +504,7 @@ func TestRelayCredentialScanHandlesLargeJSONNumbers(t *testing.T) {
 				body := prefix + between + metadata + terminal
 				f := newStreamFixture(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) })
 				f.relay.key = secret
-				response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[]}`)
+				response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 				b, err := io.ReadAll(response.Body)
 				var state string
 				var count int
@@ -531,13 +534,10 @@ func TestRelayCredentialScanHandlesLargeJSONNumbers(t *testing.T) {
 func TestChatStartupRecoveryAdoptsRetainedNativeTextWithoutDuplicate(t *testing.T) {
 	prefix := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
 	f := newStreamFixture(t, "openai-compatible", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, prefix) })
-	if _, err := f.db.Exec("INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at)VALUES('original',?,'original-key','user','{}',1)", f.scope.SessionID); err != nil {
+	if _, err := f.db.Exec("UPDATE chat_dispatch SET native_message_id='parent' WHERE message_id=?", f.message.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.db.Exec("INSERT INTO chat_dispatch(message_id,native_message_id,turn_id,state,created_at)VALUES('original','parent',?,'accepted',1)", f.scope.TurnID); err != nil {
-		t.Fatal(err)
-	}
-	response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[]}`)
+	response := f.request(t, "chat/completions", `{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	if _, err := io.ReadAll(response.Body); err == nil {
 		t.Fatal("fixture must end as incomplete")
 	}
@@ -595,7 +595,7 @@ func TestChatStartupRecoveryAdoptsRetainedNativeTextWithoutDuplicate(t *testing.
 	var original bool
 	for _, message := range messages {
 		if message.Role == "user" {
-			original = message.ID == "original" && message.RequestID == "original-key" && message.State == "unknown"
+			original = message.ID == f.message.ID && message.RequestID == "original-key" && message.State == "unknown"
 			continue
 		}
 		var content struct {
@@ -642,10 +642,7 @@ func TestChatStartupRecoveryAdoptsRetainedNativeTextWithoutDuplicate(t *testing.
 
 func TestChatJournalPrefixUsesNativeIdentityScopeAndStepWithoutReplay(t *testing.T) {
 	f := newStreamFixture(t, "openai-compatible", func(http.ResponseWriter, *http.Request) { t.Error("snapshot test must not infer") })
-	if _, err := f.db.Exec("INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at)VALUES('original',?,'original-key','user','{}',1)", f.scope.SessionID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.db.Exec("INSERT INTO chat_dispatch(message_id,native_message_id,turn_id,state,created_at)VALUES('original','parent',?,'accepted',1)", f.scope.TurnID); err != nil {
+	if _, err := f.db.Exec("UPDATE chat_dispatch SET native_message_id='parent' WHERE message_id=?", f.message.ID); err != nil {
 		t.Fatal(err)
 	}
 	appendText := func(step, seq int, text, project, session string) {
@@ -681,7 +678,7 @@ func TestChatJournalPrefixUsesNativeIdentityScopeAndStepWithoutReplay(t *testing
 	chat := &Chat{DB: f.db, Events: ev, Host: &Host{base: native.URL, client: native.Client()}}
 	read := func(parent string) {
 		t.Helper()
-		if _, err := chat.readSnapshotEvents(context.Background(), f.scope, "original", parent, false); err != nil {
+		if _, err := chat.readSnapshotEvents(context.Background(), f.scope, f.message.ID, parent, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -774,7 +771,7 @@ func TestRelayPhysicalProcessRestartRetainsReadableUnknown(t *testing.T) {
 	first := start("first")
 	send := func(ready streamProcessReady) *http.Response {
 		t.Helper()
-		req, _ := http.NewRequest("POST", ready.URL+inferencePath+"/chat/completions", strings.NewReader(`{"model":"fixture","stream":true,"messages":[]}`))
+		req, _ := http.NewRequest("POST", ready.URL+inferencePath+"/chat/completions", strings.NewReader(`{"model":"fixture","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
 		req.Header.Set("Authorization", "Bearer "+ready.Token)
 		req.Header.Set("Origin", "http://tauri.localhost")
 		req.Header.Set("X-Opencode-Session-Id", ready.Scope.NativeSessionID)
@@ -811,7 +808,7 @@ func TestRelayPhysicalProcessRestartRetainsReadableUnknown(t *testing.T) {
 	var user, partial bool
 	for _, message := range messages {
 		if message.Role == "user" {
-			user = message.ID == "original" && message.RequestID == "original-key" && message.State == "unknown"
+			user = message.ID == restarted.MessageID && message.RequestID == "original-key" && message.State == "unknown"
 		}
 		if message.Role == "assistant" {
 			partial = strings.Contains(string(message.Content), `"content":"physical partial"`) && strings.Contains(string(message.Content), `"state":"unknown"`)
@@ -834,6 +831,7 @@ func TestRelayPhysicalProcessRestartRetainsReadableUnknown(t *testing.T) {
 }
 
 type streamProcessReady struct {
+	MessageID  string
 	URL, Token string
 	Scope      ToolScope
 	process    *os.Process
@@ -861,12 +859,6 @@ func TestRelayStreamProcessHelper(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if _, err = db.Exec("INSERT INTO chat_messages(id,session_id,request_id,role,content_json,created_at)VALUES('original',?,'original-key','user','{}',1)", ready.Scope.SessionID); err != nil {
-			t.Fatal(err)
-		}
-		if _, err = db.Exec("INSERT INTO chat_dispatch(message_id,native_message_id,turn_id,state,created_at)VALUES('original','native-parent',?,'accepted',1)", ready.Scope.TurnID); err != nil {
-			t.Fatal(err)
-		}
 	} else {
 		b, e := os.ReadFile(filepath.Join(dir, "first.json"))
 		if e != nil || json.Unmarshal(b, &ready) != nil {
@@ -884,6 +876,13 @@ func TestRelayStreamProcessHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	relay.Turns = turns
+	if phase == "first" {
+		m := authorizeRelayFixture(t, relay, ready.Scope)
+		ready.MessageID = m.ID
+		if _, err = db.Exec("UPDATE chat_dispatch SET native_message_id='native-parent' WHERE message_id=?", m.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	mux := http.NewServeMux()
 	mux.Handle(inferencePath+"/", relay)
 	mux.HandleFunc("/history", func(w http.ResponseWriter, r *http.Request) {
@@ -940,6 +939,7 @@ func TestRelaySafeTextBeforeSupplierCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	relay.Turns = turns
+	authorizeRelayFixture(t, relay, scope)
 	gateway := httptest.NewServer(relay)
 	defer gateway.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

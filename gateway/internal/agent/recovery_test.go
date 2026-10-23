@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/questions"
 	"github.com/newyngwieslash-ops/MovieDesign/gateway/internal/store"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -78,7 +80,14 @@ func TestRestartQuestionPublishedBeforeLink(t *testing.T) {
 			defer next.Close()
 			waitChat(t, func() bool {
 				cards, e := next.Questions.List(context.Background(), f.project, f.session)
-				return e == nil && len(cards) == 1 && cards[0].NativeSendState == "unknown" && cards[0].State != "pending"
+				if e == nil {
+					for _, candidate := range cards {
+						if candidate.ID == card.ID {
+							return candidate.NativeSendState == "unknown" && candidate.State != "pending"
+						}
+					}
+				}
+				return false
 			})
 			next.Close()
 			if e = next.DB.QueryRow("SELECT question_id FROM native_questions WHERE native_id=?", native.ID).Scan(&link); e != nil || link.String != card.ID {
@@ -406,9 +415,13 @@ func TestRestartMissingQuestionInvalidatesCardWithoutSending(t *testing.T) {
 			var card questions.Question
 			waitChat(t, func() bool {
 				cards, e := f.chat.Questions.List(context.Background(), f.project, f.session)
-				if e == nil && len(cards) == 1 {
-					card = cards[0]
-					return true
+				if e == nil {
+					for _, candidate := range cards {
+						if candidate.Kind == "choice" {
+							card = candidate
+							return true
+						}
+					}
 				}
 				return false
 			})
@@ -438,7 +451,14 @@ func TestRestartMissingQuestionInvalidatesCardWithoutSending(t *testing.T) {
 			}
 			waitChat(t, func() bool {
 				cards, e := next.Questions.List(context.Background(), f.project, f.session)
-				return e == nil && len(cards) == 1 && cards[0].NativeSendState == "unknown" && cards[0].State != "pending"
+				if e == nil {
+					for _, candidate := range cards {
+						if candidate.ID == card.ID {
+							return candidate.NativeSendState == "unknown" && candidate.State != "pending"
+						}
+					}
+				}
+				return false
 			})
 			late := reply
 			late.RequestID = "late"
@@ -459,6 +479,142 @@ func TestRestartMissingQuestionInvalidatesCardWithoutSending(t *testing.T) {
 			}
 			if count != want || f.replies.Load() != 0 || f.prompts.Load() != 1 {
 				t.Fatal("restart sent or fabricated receipt", count, f.replies.Load(), f.prompts.Load())
+			}
+		})
+	}
+}
+
+func TestRejectedNativeQuestionSnapshotRequiresExactHumanEvidence(t *testing.T) {
+	for _, mode := range []string{"exact", "restart", "parent", "call", "message", "turn", "unsent", "unknown_delivery", "no_receipt", "answered", "incomplete", "ordinary_tool", "tool_running", "uncertain_inference"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			f := newChatFixture(t, 0, false)
+			f.autoApprove.Store(false)
+			f.chat.Close()
+			chat := NewChat(f.chat.DB, f.chat.Turns, f.chat.Events, f.chat.Questions)
+			defer chat.Close()
+			chat.Host = f.chat.Host
+			chat.Grace = time.Millisecond
+			if _, e := chat.DB.Exec("UPDATE chat_sessions SET native_session_id='ses_native',state='ready' WHERE id=?", f.session); e != nil {
+				t.Fatal(e)
+			}
+			scope, e := chat.Turns.Begin(ctx, f.project, f.session, "ses_native")
+			if e != nil {
+				t.Fatal(e)
+			}
+			message, e := chat.Send(ctx, f.project, f.session, f.input("rejected"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			approveChatFixture(t, chat, f.project, f.session, message.BillingQuestionID, false)
+			if _, e = chat.DB.Exec("UPDATE chat_dispatch SET native_message_id='parent',turn_id=?,state='accepted' WHERE message_id=?", scope.TurnID, message.ID); e != nil {
+				t.Fatal(e)
+			}
+			var native NativeQuestion
+			_ = json.Unmarshal([]byte(`{"id":"que_rejected","sessionID":"ses_native","questions":[{"header":"Choose","question":"Continue?","options":[{"label":"Yes"}]}],"tool":{"messageID":"assistant","callID":"call"}}`), &native)
+			card, e := chat.Turns.GateQuestion(ctx, scope, native, chat.Questions, chat.Host.RejectQuestion)
+			if e != nil {
+				t.Fatal(e)
+			}
+			reply := questions.HumanReply{RequestID: "human-reject", SessionID: f.session, ExpectedRevision: card.Revision, Reject: mode != "answered", Answers: [][]string{}}
+			if mode == "answered" {
+				reply.Answers = [][]string{{"Yes"}}
+			}
+			receipt, e := chat.Questions.Reply(ctx, f.project, card.ID, reply)
+			if e != nil {
+				t.Fatal(e)
+			}
+			raw, _ := json.Marshal(native)
+			if _, e = chat.DB.Exec("INSERT INTO native_questions(native_id,question_id,turn_id,native_json,send_state,receipt_id) VALUES(?,?,?,?,'sent',?)", native.ID, card.ID, scope.TurnID, string(raw), receipt.ID); e != nil {
+				t.Fatal(e)
+			}
+			var snap nativeMessage
+			_ = json.Unmarshal([]byte(`{"info":{"id":"assistant","sessionID":"ses_native","parentID":"parent","role":"assistant","finish":"tool-calls","time":{"completed":1}},"parts":[{"id":"part","sessionID":"ses_native","messageID":"assistant","type":"tool","tool":"question","callID":"call","state":{"status":"error"}}]}`), &snap)
+			switch mode {
+			case "parent":
+				snap.Info.ParentID = "foreign"
+			case "call":
+				snap.Parts[0].CallID = "foreign"
+			case "message":
+				snap.Info.ID = "foreign"
+				snap.Parts[0].MessageID = "foreign"
+			case "turn":
+				scope.TurnID = "foreign"
+			case "unsent":
+				_, e = chat.DB.Exec("UPDATE native_questions SET send_state='pending'")
+			case "unknown_delivery":
+				_, e = chat.DB.Exec("UPDATE native_questions SET send_state='unknown'")
+			case "no_receipt":
+				_, e = chat.DB.Exec("UPDATE native_questions SET receipt_id=NULL")
+			case "incomplete":
+				snap.Info.Time.Completed = 0
+			case "ordinary_tool":
+				snap.Parts[0].Tool = "ordinary"
+			case "tool_running":
+				snap.Parts[0].State.Status = "running"
+			case "uncertain_inference":
+				_, e = chat.DB.Exec("INSERT INTO inference_requests(turn_id,step,fingerprint,state,created_at)VALUES(?,1,'unknown','unknown',1)", scope.TurnID)
+			}
+			if e != nil {
+				t.Fatal(e)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" {
+					t.Error("snapshot recovery wrote to native")
+				}
+				json.NewEncoder(w).Encode([]nativeMessage{snap})
+			}))
+			defer server.Close()
+			chat.Host = &Host{base: server.URL, client: server.Client()}
+			if mode == "restart" {
+				if e = chat.Turns.Recover(ctx); e != nil {
+					t.Fatal(e)
+				}
+				_, e = chat.DB.Exec("UPDATE chat_dispatch SET state='unknown' WHERE message_id=?", message.ID)
+				if e != nil {
+					t.Fatal(e)
+				}
+				chat.reconcileInterrupted()
+			} else {
+				_, e = chat.snapshotEvents(ctx, scope, message.ID, "parent")
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+			var state string
+			var terminal int
+			if e = chat.DB.QueryRow("SELECT state,terminal FROM chat_dispatch WHERE message_id=?", message.ID).Scan(&state, &terminal); e != nil {
+				t.Fatal(e)
+			}
+			positive := mode == "exact" || mode == "restart"
+			if positive {
+				if state != "cancelled" || terminal != 1 {
+					t.Fatalf("finished rejected native remained state=%s terminal=%d", state, terminal)
+				}
+			} else if terminal != 0 {
+				t.Fatalf("foreign/incomplete evidence terminated state=%s", state)
+			}
+			if _, e = chat.Questions.Reply(ctx, f.project, card.ID, reply); e != nil {
+				t.Fatal(e)
+			}
+			if mode == "restart" {
+				chat.reconcileInterrupted()
+			} else {
+				_, e = chat.snapshotEvents(ctx, scope, message.ID, "parent")
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+			var count int
+			if e = chat.DB.QueryRow("SELECT count(*) FROM events WHERE type='chat_done' AND json_extract(payload_json,'$.message_id')=?", message.ID).Scan(&count); e != nil {
+				t.Fatal(e)
+			}
+			want := 0
+			if positive {
+				want = 1
+			}
+			if count != want || f.prompts.Load() != 0 {
+				t.Fatalf("terminal events=%d want=%d native POSTs=%d", count, want, f.prompts.Load())
 			}
 		})
 	}

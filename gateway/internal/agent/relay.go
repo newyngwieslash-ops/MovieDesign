@@ -27,6 +27,7 @@ const inferenceLimit = 32 << 20
 // Relay owns a frozen configuration and supplier credential. Native only receives
 // the short-lived relay token, never the supplier key or destination.
 type Relay struct {
+	credentialVersion  string
 	DB                 *sql.DB
 	Turns              *Turns
 	config             LLMConfig
@@ -124,6 +125,18 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if e != nil {
 		fail()
 		return
+	}
+	if textID == "" {
+		raw, e = chatRequest(canonical, operation, r.config)
+		if e != nil {
+			fail()
+			return
+		}
+		canonical, e = store.CanonicalJSON(raw)
+		if e != nil {
+			fail()
+			return
+		}
 	}
 	var body map[string]json.RawMessage
 	_ = json.Unmarshal(canonical, &body)
@@ -266,6 +279,15 @@ func (r *Relay) admit(ctx context.Context, s ToolScope, fingerprint string, resu
 		return 0, e
 	}
 	defer tx.Rollback()
+	if s.Epoch != "text" {
+		var id string
+		if e = tx.QueryRowContext(ctx, `SELECT d.message_id FROM chat_dispatch d JOIN chat_messages m ON m.id=d.message_id JOIN chat_sessions c ON c.id=m.session_id JOIN chat_turns t ON t.id=d.turn_id WHERE d.turn_id=? AND c.id=? AND c.project_id=? AND c.native_session_id=? AND t.epoch=? AND t.state='active' AND d.state IN ('submitting','accepted','running') AND d.terminal=0`, s.TurnID, s.SessionID, s.ProjectID, s.NativeSessionID, s.Epoch).Scan(&id); e != nil {
+			return 0, e
+		}
+		if e = approvedChat(ctx, tx, s.ProjectID, s.SessionID, id, r.config, r.credentialVersion); e != nil {
+			return 0, e
+		}
+	}
 	var step int
 	var state, allowed, used string
 	e = tx.QueryRowContext(ctx, "SELECT step,state,tool_ids_json,result_ids_json FROM "+inferenceTable(s)+" WHERE turn_id=? ORDER BY step DESC LIMIT 1", s.TurnID).Scan(&step, &state, &allowed, &used)
@@ -298,6 +320,9 @@ func (r *Relay) admit(ctx context.Context, s ToolScope, fingerprint string, resu
 		return 0, e
 	}
 	step++
+	if s.Epoch != "text" && step > chatMaxCalls {
+		return 0, ErrScope
+	}
 	encoded, _ := json.Marshal(results)
 	if _, e = tx.ExecContext(ctx, "INSERT INTO "+inferenceTable(s)+"(turn_id,step,fingerprint,state,result_ids_json,created_at)VALUES(?,?,?,'forwarding',?,?)", s.TurnID, step, fingerprint, string(encoded), time.Now().UnixMilli()); e != nil {
 		return 0, e

@@ -20,6 +20,7 @@ import (
 
 type chatFixture struct {
 	chat             *Chat
+	autoApprove      atomic.Bool
 	project, session string
 	prompts, aborts  atomic.Int32
 	mu               sync.Mutex
@@ -167,7 +168,8 @@ func newChatFixture(t *testing.T, delay time.Duration, reject bool) *chatFixture
 		}
 	}))
 	t.Cleanup(native.Close)
-	h := &Host{base: native.URL, password: "private", client: native.Client(), Relay: &Relay{}}
+	config := chatFixtureConfig(LLMConfig{Protocol: "openai-compatible", BaseURL: "http://127.0.0.1:12345", ModelID: "fixture"})
+	h := &Host{base: native.URL, password: "private", client: native.Client(), active: View{Config: &config}, Relay: &Relay{DB: db, config: config}}
 	if e = c.Start(h, func(string) error { return nil }); e != nil {
 		t.Fatal(e)
 	}
@@ -177,6 +179,41 @@ func newChatFixture(t *testing.T, delay time.Duration, reject bool) *chatFixture
 		t.Fatal(e)
 	}
 	f.session = s.ID
+	f.autoApprove.Store(true)
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	t.Cleanup(func() { close(done); <-stopped })
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if !f.autoApprove.Load() {
+					continue
+				}
+				rows, err := db.Query("SELECT question_json FROM questions WHERE kind='billing' AND state='pending'")
+				if err != nil {
+					continue
+				}
+				var cards []questions.Question
+				for rows.Next() {
+					var raw string
+					var card questions.Question
+					if rows.Scan(&raw) == nil && json.Unmarshal([]byte(raw), &card) == nil {
+						cards = append(cards, card)
+					}
+				}
+				rows.Close()
+				for _, card := range cards {
+					_, _ = q.Reply(context.Background(), card.ProjectID, card.ID, questions.HumanReply{RequestID: "fixture-human-" + card.ID, SessionID: card.SessionID, ExpectedRevision: card.Revision, Answers: [][]string{{chatApprove}}})
+				}
+			}
+		}
+	}()
 	return f
 }
 
@@ -219,6 +256,7 @@ func TestSupplierUncertaintySurvivesNativeError(t *testing.T) {
 		t.Fatal(e)
 	}
 	waitChat(t, func() bool { return f.chat.Turns.Current().TurnID != "" })
+	waitChat(t, func() bool { return f.prompts.Load() == 1 })
 	s := f.chat.Turns.Current()
 	_, e = f.chat.DB.Exec("INSERT INTO inference_requests(turn_id,step,fingerprint,state,created_at)VALUES(?,1,'fixture','unknown',1)", s.TurnID)
 	if e != nil {
@@ -360,6 +398,7 @@ func TestChatCancelledQueueEmitsTerminalAndDoesNotSubmit(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	waitChat(t, func() bool { return f.prompts.Load() == 1 })
 	second, e := f.chat.Send(context.Background(), f.project, f.session, f.input("second"))
 	if e != nil {
 		t.Fatal(e)
@@ -461,9 +500,13 @@ func TestNativeQuestionHumanReceiptUnknownNeverResends(t *testing.T) {
 	var card questions.Question
 	waitChat(t, func() bool {
 		cards, e := f.chat.Questions.List(context.Background(), f.project, f.session)
-		if e == nil && len(cards) == 1 {
-			card = cards[0]
-			return true
+		if e == nil {
+			for _, candidate := range cards {
+				if candidate.Kind == "choice" {
+					card = candidate
+					return true
+				}
+			}
 		}
 		return false
 	})
@@ -505,10 +548,19 @@ func TestProjectWithChatReturnsReferencedConflict(t *testing.T) {
 
 func TestRestartReconcilesWithoutResendingUnknownAndQueuedWithdrawal(t *testing.T) {
 	f := newChatFixture(t, 0, false)
+	f.autoApprove.Store(false)
 	first, e := f.chat.Send(context.Background(), f.project, f.session, f.input("first"))
 	if e != nil {
 		t.Fatal(e)
 	}
+	approveChatFixture(t, f.chat, f.project, f.session, first.BillingQuestionID, false)
+	var beforeState string
+	waitChat(t, func() bool {
+		_ = f.chat.DB.QueryRow("SELECT state FROM chat_dispatch WHERE message_id=?", first.ID).Scan(&beforeState)
+		return f.prompts.Load() == 1 && beforeState == "accepted"
+	})
+	before := f.prompts.Load()
+	t.Logf("before restart: POSTs=%d state=%s", before, beforeState)
 	second, e := f.chat.Send(context.Background(), f.project, f.session, f.input("second"))
 	if e != nil {
 		t.Fatal(e)
@@ -522,6 +574,7 @@ func TestRestartReconcilesWithoutResendingUnknownAndQueuedWithdrawal(t *testing.
 	}
 	old := f.chat
 	old.Close()
+	f.snapshotReads = make(chan string, 16)
 	turns := NewTurns(old.DB)
 	if e = turns.Recover(context.Background()); e != nil {
 		t.Fatal(e)
@@ -536,9 +589,18 @@ func TestRestartReconcilesWithoutResendingUnknownAndQueuedWithdrawal(t *testing.
 	if e != nil {
 		t.Fatal(e)
 	}
-	time.Sleep(300 * time.Millisecond)
-	if f.prompts.Load() != 1 {
-		t.Fatal("restart resent unknown prompt")
+	select {
+	case <-f.snapshotReads:
+	case <-time.After(3 * time.Second):
+		t.Fatal("restart did not reconcile native snapshot")
+	}
+	var afterState string
+	if e = old.DB.QueryRow("SELECT state FROM chat_dispatch WHERE message_id=?", first.ID).Scan(&afterState); e != nil {
+		t.Fatal(e)
+	}
+	t.Logf("after restart: POSTs=%d state=%s", f.prompts.Load(), afterState)
+	if f.prompts.Load() != before || afterState != "unknown" {
+		t.Fatalf("restart changed uncertain dispatch: before POSTs=%d state=%s; after POSTs=%d state=%s", before, beforeState, f.prompts.Load(), afterState)
 	}
 	f.mu.Lock()
 	f.text = "recovered"
@@ -549,7 +611,7 @@ func TestRestartReconcilesWithoutResendingUnknownAndQueuedWithdrawal(t *testing.
 		_ = old.DB.QueryRow("SELECT terminal FROM chat_dispatch WHERE message_id=?", first.ID).Scan(&terminal)
 		return terminal == 1
 	})
-	if f.prompts.Load() != 1 {
-		t.Fatal("reconciliation submitted new user message")
+	if f.prompts.Load() != before {
+		t.Fatalf("reconciliation submitted new user message: before POSTs=%d state=%s; after POSTs=%d prior state=%s", before, beforeState, f.prompts.Load(), afterState)
 	}
 }
